@@ -24,4 +24,5 @@ const (
 	MonitorNodeVersion   = "0.0.3"
 	DNSNodeVersion       = "0.2.0"
 	ReportNodeVersion    = "0.1.0"
+	Tag                  = "plus"
 )
