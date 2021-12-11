@@ -172,13 +172,12 @@ func (this *ServerService) dumpServerHTTPStats() error {
 			}
 
 			// 按小时统计
-			err = stats.SharedServerHTTPFirewallHourlyStatDAO.IncreaseHourlyCount(nil, types.Int64(pieces[0]), types.Int64(pieces[1]), pieces[2], pieces[3] + timeutil.Format("H"), count)
+			err = stats.SharedServerHTTPFirewallHourlyStatDAO.IncreaseHourlyCount(nil, types.Int64(pieces[0]), types.Int64(pieces[1]), pieces[2], pieces[3]+timeutil.Format("H"), count)
 			if err != nil {
 				return err
 			}
 		}
 	}
-
 
 	return nil
 }

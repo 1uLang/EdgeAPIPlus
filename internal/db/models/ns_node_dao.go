@@ -2,12 +2,12 @@ package models
 
 import (
 	"encoding/json"
+	"github.com/1uLang/EdgeCommon/pkg/configutils"
+	"github.com/1uLang/EdgeCommon/pkg/dnsconfigs"
+	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
+	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
-	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
-	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
-	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
-	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"

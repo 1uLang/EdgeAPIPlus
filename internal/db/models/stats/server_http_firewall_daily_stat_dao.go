@@ -133,4 +133,3 @@ func (this *ServerHTTPFirewallDailyStatDAO) Clean(tx *dbs.Tx, days int) error {
 		Delete()
 	return err
 }
-

@@ -3,9 +3,9 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	pb2 "github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	pb "github.com/TeaOSLab/EdgeAPI/internal/tests/helloworld"
-	pb2 "github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"

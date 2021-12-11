@@ -4,9 +4,9 @@ package nameservers
 
 import (
 	"context"
+	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/nameservers"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
-	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // NSKeyService NS密钥相关服务

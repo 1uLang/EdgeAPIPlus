@@ -4,9 +4,9 @@ package reporters
 
 import (
 	"context"
+	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
-	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // ReportNodeGroupService 监控节点分组

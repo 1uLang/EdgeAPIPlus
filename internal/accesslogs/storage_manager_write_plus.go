@@ -6,8 +6,8 @@
 package accesslogs
 
 import (
+	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
-	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // 写入日志

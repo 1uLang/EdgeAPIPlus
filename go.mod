@@ -2,13 +2,11 @@ module github.com/TeaOSLab/EdgeAPI
 
 go 1.15
 
-replace github.com/TeaOSLab/EdgeCommon => ../EdgeCommon
-
 replace github.com/TeaOSLab/EdgePlus => ../EdgePlus
 
 require (
+	github.com/1uLang/EdgeCommon v0.3.7-0.20211211093131-5dc8d9345752
 	github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d // indirect
-	github.com/TeaOSLab/EdgeCommon v0.0.0-00010101000000-000000000000
 	github.com/TeaOSLab/EdgePlus v0.0.0-00010101000000-000000000000
 	github.com/aliyun/alibaba-cloud-sdk-go v1.61.1183
 	github.com/andybalholm/brotli v1.0.4

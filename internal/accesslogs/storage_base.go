@@ -5,8 +5,8 @@ package accesslogs
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
-	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/1uLang/EdgeCommon/pkg/configutils"
+	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"strconv"
 	"time"
 )

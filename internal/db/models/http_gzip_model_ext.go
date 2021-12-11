@@ -2,7 +2,7 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
 )
 
 // 解析最小长度

@@ -2,8 +2,8 @@ package models
 
 import (
 	"encoding/json"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
-	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 )
 
 // DecodeGroupIds 解析服务所属分组ID

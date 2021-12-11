@@ -2,10 +2,10 @@ package services
 
 import (
 	"context"
+	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/accesslogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
-	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // HTTPAccessLogService 访问日志相关服务
@@ -133,7 +133,7 @@ func (this *HTTPAccessLogService) ListHTTPAccessLogs(ctx context.Context, req *p
 }
 
 // SearchAccessLogs 列出单页访问日志
-func (this *HTTPAccessLogService) SearchAccessLogs(ctx context.Context, req *pb.SearchHTTPAccessLogsRequest) (*pb.SearchHTTPAccessLogsResponse, error) {
+func (this *HTTPAccessLogService) SearchHTTPAccessLogs(ctx context.Context, req *pb.SearchHTTPAccessLogsRequest) (*pb.SearchHTTPAccessLogsResponse, error) {
 	// 校验请求
 	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
 	if err != nil {

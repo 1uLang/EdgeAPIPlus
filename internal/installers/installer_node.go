@@ -3,8 +3,8 @@ package installers
 import (
 	"bytes"
 	"errors"
+	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
-	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"path/filepath"
 	"regexp"
 )

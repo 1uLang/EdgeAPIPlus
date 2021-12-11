@@ -4,9 +4,9 @@ package services
 
 import (
 	"context"
+	"github.com/1uLang/EdgeCommon/pkg/configutils"
+	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
-	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
-	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/types"
 	"net"
 	"sync"

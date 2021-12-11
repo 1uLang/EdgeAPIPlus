@@ -1,6 +1,6 @@
 package models
 
-import "github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+import "github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 
 var (
 	// 所有功能列表，注意千万不能在运行时进行修改

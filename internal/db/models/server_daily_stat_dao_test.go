@@ -1,7 +1,7 @@
 package models
 
 import (
-	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/logs"
@@ -68,7 +68,7 @@ func TestServerDailyStatDAO_SumMinutelyRequests(t *testing.T) {
 	dbs.NotifyReady()
 	var tx *dbs.Tx
 
-	stat, err := NewServerDailyStatDAO().SumMinutelyStat(tx, 23, timeutil.Format("Ymd") + "1435")
+	stat, err := NewServerDailyStatDAO().SumMinutelyStat(tx, 23, timeutil.Format("Ymd")+"1435")
 	if err != nil {
 		t.Fatal(err)
 	}
