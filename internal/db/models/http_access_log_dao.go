@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
@@ -458,4 +459,161 @@ func (this *HTTPAccessLogDAO) FindAccessLogWithRequestId(tx *dbs.Tx, requestId s
 	}
 	wg.Wait()
 	return result, nil
+}
+
+// SearchAccessLogs 根据请求ID获取访问日志
+func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
+	ip, domain string, startAt, endAt uint64, userId int64, limit int64) (result []*HTTPAccessLog, nextRequestId string, err error) {
+
+	if len(day) != 8 {
+		return
+	}
+
+	// 限制能查询的最大条数，防止占用内存过多
+	if limit > 100 {
+		limit = 100
+	}
+
+	serverIds := []int64{}
+	if userId > 0 {
+		serverIds, err = SharedServerDAO.FindAllEnabledServerIdsWithUserId(tx, userId)
+		if err != nil {
+			return
+		}
+		if len(serverIds) == 0 {
+			return
+		}
+	}
+
+	accessLogLocker.RLock()
+	daoList := []*HTTPAccessLogDAOWrapper{}
+	for _, daoWrapper := range httpAccessLogDAOMapping {
+		daoList = append(daoList, daoWrapper)
+	}
+	accessLogLocker.RUnlock()
+
+	if len(daoList) == 0 {
+		daoList = []*HTTPAccessLogDAOWrapper{{
+			DAO:    SharedHTTPAccessLogDAO,
+			NodeId: 0,
+		}}
+	}
+
+	locker := sync.Mutex{}
+
+	count := len(daoList)
+	wg := &sync.WaitGroup{}
+	wg.Add(count)
+	for _, daoWrapper := range daoList {
+		go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+			defer wg.Done()
+
+			dao := daoWrapper.DAO
+
+			tableName, hasRemoteAddrField, hasDomainField, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
+			if !exists {
+				// 表格不存在则跳过
+				return
+			}
+			if err != nil {
+				logs.Println("[DB_NODE]" + err.Error())
+				return
+			}
+
+			query := dao.Query(tx)
+
+			// 条件
+			if userId > 0 && len(serverIds) > 0 {
+				query.Attr("serverId", serverIds).
+					Reuse(false)
+			}
+			// 时间条件限制
+			if startAt > 0 && startAt < endAt {
+				query.Where(fmt.Sprintf("createdAt>=%v", startAt))
+				query.Where(fmt.Sprintf("createdAt<%v", endAt))
+			}
+
+			query.Where("firewallPolicyId>0")
+			query.UseIndex("firewallPolicyId")
+
+			// keyword
+			if len(ip) > 0 {
+				// TODO 支持IP范围
+				if hasRemoteAddrField {
+					// IP格式
+					if strings.Contains(ip, ",") || strings.Contains(ip, "-") {
+						rangeConfig, err := shared.ParseIPRange(ip)
+						if err == nil {
+							if len(rangeConfig.IPFrom) > 0 && len(rangeConfig.IPTo) > 0 {
+								query.Between("INET_ATON(remoteAddr)", utils.IP2Long(rangeConfig.IPFrom), utils.IP2Long(rangeConfig.IPTo))
+							}
+						}
+					} else {
+						query.Attr("remoteAddr", ip)
+						query.UseIndex("remoteAddr")
+					}
+				} else {
+					query.Where("JSON_EXTRACT(content, '$.remoteAddr')=:ip1").
+						Param("ip1", ip)
+				}
+			}
+			if len(domain) > 0 {
+				if hasDomainField {
+					if strings.Contains(domain, "*") {
+						domain = strings.ReplaceAll(domain, "*", "%")
+						domain = regexp.MustCompile(`[^a-zA-Z0-9-.%]`).ReplaceAllString(domain, "")
+						query.Where("domain LIKE :host2").
+							Param("host2", domain)
+					} else {
+						query.Attr("domain", domain)
+						query.UseIndex("domain")
+					}
+				} else {
+					query.Where("JSON_EXTRACT(content, '$.host')=:host1").
+						Param("host1", domain)
+				}
+			}
+
+			// offset
+			if len(lastRequestId) > 0 {
+				query.Where("requestId>:requestId").
+					Param("requestId", lastRequestId)
+			}
+			query.Asc("requestId")
+
+			// 开始查询
+			ones, err := query.
+				Table(tableName).
+				Limit(int64(limit)).
+				FindAll()
+			if err != nil {
+				logs.Println("[DB_NODE]" + err.Error())
+				return
+			}
+			locker.Lock()
+			for _, one := range ones {
+				accessLog := one.(*HTTPAccessLog)
+				result = append(result, accessLog)
+			}
+			locker.Unlock()
+		}(daoWrapper)
+	}
+	wg.Wait()
+
+	if len(result) == 0 {
+		return nil, "", nil
+	}
+
+	// 按照requestId排序
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].RequestId > result[j].RequestId
+	})
+
+	if int64(len(result)) > limit {
+		result = result[:limit]
+		nextRequestId = result[len(result)-1].RequestId
+	}
+
+	return result, nextRequestId, nil
+
 }

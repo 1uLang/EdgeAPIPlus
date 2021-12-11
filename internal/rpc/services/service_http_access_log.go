@@ -124,11 +124,95 @@ func (this *HTTPAccessLogService) ListHTTPAccessLogs(ctx context.Context, req *p
 
 		result = append(result, a)
 	}
-
 	return &pb.ListHTTPAccessLogsResponse{
 		HttpAccessLogs: result,
 		AccessLogs:     result, // TODO 仅仅为了兼容，当用户节点版本大于0.0.8时可以删除
 		HasMore:        hasMore,
+		RequestId:      requestId,
+	}, nil
+}
+
+// SearchAccessLogs 列出单页访问日志
+func (this *HTTPAccessLogService) SearchAccessLogs(ctx context.Context, req *pb.SearchHTTPAccessLogsRequest) (*pb.SearchHTTPAccessLogsResponse, error) {
+	// 校验请求
+	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	tx := this.NullTx()
+
+	// 检查服务ID
+	if userId > 0 {
+		if req.UserId > 0 && userId != req.UserId {
+			return nil, this.PermissionError()
+		}
+
+		// 这里不用担心serverId <= 0 的情况，因为如果userId>0，则只会查询当前用户下的服务，不会产生安全问题
+		if req.ServerId > 0 {
+			err = models.SharedServerDAO.CheckUserServer(tx, userId, req.ServerId)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	accessLogs, requestId, err := models.SharedHTTPAccessLogDAO.SearchAccessLogs(tx, req.RequestId, req.Day, req.Ip, req.Domain, req.StartAt, req.EndAt, req.UserId, req.Size)
+	if err != nil {
+		return nil, err
+	}
+
+	result := []*pb.HTTPAccessLog{}
+	var pbNodeMap = map[int64]*pb.Node{}
+	var pbClusterMap = map[int64]*pb.NodeCluster{}
+	for _, accessLog := range accessLogs {
+		a, err := accessLog.ToPB()
+		if err != nil {
+			return nil, err
+		}
+
+		// 节点 & 集群
+		pbNode, ok := pbNodeMap[a.NodeId]
+		if ok {
+			a.Node = pbNode
+		} else {
+			node, err := models.SharedNodeDAO.FindEnabledNode(tx, a.NodeId)
+			if err != nil {
+				return nil, err
+			}
+			if node != nil {
+				pbNode = &pb.Node{Id: int64(node.Id), Name: node.Name}
+
+				var clusterId = int64(node.ClusterId)
+				pbCluster, ok := pbClusterMap[clusterId]
+				if ok {
+					pbNode.NodeCluster = pbCluster
+				} else {
+					cluster, err := models.SharedNodeClusterDAO.FindEnabledNodeCluster(tx, clusterId)
+					if err != nil {
+						return nil, err
+					}
+					if cluster != nil {
+						pbCluster = &pb.NodeCluster{
+							Id:   int64(cluster.Id),
+							Name: cluster.Name,
+						}
+						pbNode.NodeCluster = pbCluster
+						pbClusterMap[clusterId] = pbCluster
+					}
+				}
+
+				pbNodeMap[a.NodeId] = pbNode
+				a.Node = pbNode
+			}
+		}
+
+		result = append(result, a)
+	}
+	return &pb.SearchHTTPAccessLogsResponse{
+		HttpAccessLogs: result,
+		AccessLogs:     result, // TODO 仅仅为了兼容，当用户节点版本大于0.0.8时可以删除
+		HasMore:        requestId != "",
 		RequestId:      requestId,
 	}, nil
 }
