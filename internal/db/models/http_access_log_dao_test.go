@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/iwind/TeaGo/bootstrap"
@@ -144,4 +145,18 @@ func TestHTTPAccessLogDAO_ListAccessLogs_Page_NotExists(t *testing.T) {
 			break
 		}
 	}
+}
+
+func TestHTTPAccessLogDAO_Statistics_Page_NotExists(t *testing.T) {
+	var tx *dbs.Tx
+
+	err := NewDBNodeInitializer().loop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts, err := SharedHTTPAccessLogDAO.Statistics(tx, []string{"20211230", "20211229"}, 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println(counts)
 }

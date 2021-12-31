@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
@@ -616,4 +617,375 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 
 	return result, nextRequestId, nil
 
+}
+
+// StatisticsTop 统计指定域名的攻击ip排行
+func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
+	day string, userId int64, top int, ip2region func(string) (string, string)) (ips IpCount, region RegionCount, err error) {
+
+	accessLogLocker.RLock()
+	daoList := []*HTTPAccessLogDAOWrapper{}
+	for _, daoWrapper := range httpAccessLogDAOMapping {
+		daoList = append(daoList, daoWrapper)
+	}
+	accessLogLocker.RUnlock()
+
+	var result []HTTPAccessLog
+	serverIds := []int64{}
+
+	if userId > 0 {
+		serverIds, err = SharedServerDAO.FindAllEnabledServerIdsWithUserId(tx, userId)
+
+		if err != nil {
+			return
+		}
+		if len(serverIds) == 0 {
+			return
+		}
+	}
+
+	if len(daoList) == 0 {
+		daoList = []*HTTPAccessLogDAOWrapper{{
+			DAO:    SharedHTTPAccessLogDAO,
+			NodeId: 0,
+		}}
+	}
+
+	locker := sync.Mutex{}
+
+	count := len(daoList)
+	wg := &sync.WaitGroup{}
+	wg.Add(count)
+	for _, daoWrapper := range daoList {
+		go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+			defer wg.Done()
+
+			dao := daoWrapper.DAO
+
+			tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
+			if !exists {
+				// 表格不存在则跳过
+				return
+			}
+			if err != nil {
+				logs.Println("[DB_NODE]" + err.Error())
+				return
+			}
+
+			query := dao.Query(tx)
+
+			// 条件
+			if userId > 0 && len(serverIds) > 0 {
+				query.Attr("serverId", serverIds).
+					Reuse(false)
+			}
+			query.Where("status>=400")
+
+			var ones []*HTTPAccessLog
+			// 开始查询
+			_, err = query.
+				Table(tableName).
+				Group("remoteAddr").
+				Result("remoteAddr, COUNT(1) AS count").
+				Slice(&ones).
+				FindAll()
+
+			if err != nil {
+				logs.Println("[DB_NODE]" + err.Error())
+				return
+			}
+			locker.Lock()
+			for _, one := range ones {
+				result = append(result, *one)
+			}
+			locker.Unlock()
+		}(daoWrapper)
+	}
+	wg.Wait()
+	ipCounts := make(map[string]int64, 0)
+	regionCounts := make(map[string]int64, 0)
+	for _, v := range result {
+
+		province, city := ip2region(v.RemoteAddr)
+		regionCounts[province] += v.Count
+
+		ipCounts[v.RemoteAddr+"("+province+city+")"] += v.Count
+	}
+	ipCountStu := IpCount{}
+	regionCountStu := RegionCount{}
+	for k, v := range ipCounts {
+		ipCountStu.Count = append(ipCountStu.Count, v)
+		ipCountStu.IP = append(ipCountStu.IP, k)
+	}
+	for k, v := range regionCounts {
+		regionCountStu.Count = append(regionCountStu.Count, v)
+		regionCountStu.Region = append(regionCountStu.Region, k)
+	}
+	sort.Sort(ipCountStu)
+	sort.Sort(regionCountStu)
+	min := len(ipCountStu.IP)
+	if min > len(ipCountStu.Count) {
+		min = len(ipCountStu.Count)
+	}
+	if min > top {
+		min = top
+	}
+	ipCountStu.IP = ipCountStu.IP[:min]
+	ipCountStu.Count = ipCountStu.Count[:min]
+
+	min = len(regionCountStu.Region)
+	if min > len(regionCountStu.Count) {
+		min = len(regionCountStu.Count)
+	}
+	if min > top {
+		min = top
+	}
+	regionCountStu.Region = regionCountStu.Region[:min]
+	regionCountStu.Count = regionCountStu.Count[:min]
+
+	return ipCountStu, regionCountStu, nil
+}
+
+type IpCount struct {
+	IP    []string
+	Count []int64
+}
+
+func (this IpCount) Len() int {
+	min := len(this.Count)
+	if min > len(this.IP) {
+		return len(this.IP)
+	}
+	return min
+}
+func (this IpCount) Less(i, j int) bool {
+	return this.Count[i] > this.Count[j]
+}
+func (this IpCount) Swap(i, j int) {
+	this.IP[i], this.IP[j] = this.IP[j], this.IP[i]
+	this.Count[i], this.Count[j] = this.Count[j], this.Count[i]
+}
+
+type RegionCount struct {
+	Region []string
+	Count  []int64
+}
+
+func (this RegionCount) Len() int {
+	min := len(this.Count)
+	if min > len(this.Region) {
+		return len(this.Region)
+	}
+	return min
+}
+func (this RegionCount) Less(i, j int) bool {
+	return this.Count[i] > this.Count[j]
+}
+func (this RegionCount) Swap(i, j int) {
+	this.Region[i], this.Region[j] = this.Region[j], this.Region[i]
+	this.Count[i], this.Count[j] = this.Count[j], this.Count[i]
+}
+
+// Statistics 统计指定提起下用户的攻击次数
+func (this *HTTPAccessLogDAO) Statistics(tx *dbs.Tx, days []string, userId int64) (counts []int64, err error) {
+
+	accessLogLocker.RLock()
+	daoList := []*HTTPAccessLogDAOWrapper{}
+	for _, daoWrapper := range httpAccessLogDAOMapping {
+		daoList = append(daoList, daoWrapper)
+	}
+	accessLogLocker.RUnlock()
+
+	serverIds := []int64{}
+
+	if userId > 0 {
+		serverIds, err = SharedServerDAO.FindAllEnabledServerIdsWithUserId(tx, userId)
+
+		if err != nil {
+			return
+		}
+		if len(serverIds) == 0 {
+			return
+		}
+	}
+
+	if len(daoList) == 0 {
+		daoList = []*HTTPAccessLogDAOWrapper{{
+			DAO:    SharedHTTPAccessLogDAO,
+			NodeId: 0,
+		}}
+	}
+	if len(days) == 0 {
+		return []int64{}, nil
+	}
+	counts = make([]int64, len(days))
+	locker := sync.Mutex{}
+
+	count := len(daoList)
+	wg := &sync.WaitGroup{}
+	wg.Add(count)
+	for _, daoWrapper := range daoList {
+		go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+			defer wg.Done()
+
+			dao := daoWrapper.DAO
+			dwg := &sync.WaitGroup{}
+			dwg.Add(len(days))
+			for k, day := range days {
+				go func(k int, day string) {
+					defer dwg.Done()
+					tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
+					if !exists {
+						// 表格不存在则跳过
+						return
+					}
+					if err != nil {
+						logs.Println("[DB_NODE]" + err.Error())
+						return
+					}
+
+					query := dao.Query(tx)
+
+					// 条件
+					if userId > 0 && len(serverIds) > 0 {
+						query.Attr("serverId", serverIds).
+							Reuse(false)
+					}
+					query.Where("status>=400")
+
+					// 开始查询
+					c, err := query.
+						Table(tableName).
+						Count()
+
+					if err != nil {
+						logs.Println("[DB_NODE]" + err.Error())
+						return
+					}
+					locker.Lock()
+					counts[k] += c
+					locker.Unlock()
+				}(k, day)
+			}
+			dwg.Wait()
+		}(daoWrapper)
+	}
+	wg.Wait()
+	return counts, nil
+}
+
+// StatisticsType 统计各类型策略的条数
+func (this *HTTPAccessLogDAO) StatisticsType(tx *dbs.Tx, day string, userId int64) (attacks []AttackType, err error) {
+
+	accessLogLocker.RLock()
+	daoList := []*HTTPAccessLogDAOWrapper{}
+	for _, daoWrapper := range httpAccessLogDAOMapping {
+		daoList = append(daoList, daoWrapper)
+	}
+	accessLogLocker.RUnlock()
+
+	serverIds := []int64{}
+
+	if userId > 0 {
+		serverIds, err = SharedServerDAO.FindAllEnabledServerIdsWithUserId(tx, userId)
+
+		if err != nil {
+			return
+		}
+		if len(serverIds) == 0 {
+			return
+		}
+	}
+
+	if len(daoList) == 0 {
+		daoList = []*HTTPAccessLogDAOWrapper{{
+			DAO:    SharedHTTPAccessLogDAO,
+			NodeId: 0,
+		}}
+	}
+
+	for _, group := range firewallconfigs.HTTPFirewallTemplate().Inbound.Groups {
+
+		ids, err := SharedHTTPFirewallRuleGroupDAO.FindRuleGroupIdWithCode(tx, group.Code)
+		if err != nil {
+			return nil, err
+		}
+		attacks = append(attacks, AttackType{
+			Code: group.Code,
+			Name: group.Name,
+			ids:  ids,
+		})
+	}
+
+	locker := sync.Mutex{}
+	count := len(daoList)
+	wg := &sync.WaitGroup{}
+	wg.Add(count)
+	for _, daoWrapper := range daoList {
+		go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+			defer wg.Done()
+
+			dao := daoWrapper.DAO
+			tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
+			if !exists {
+				// 表格不存在则跳过
+				return
+			}
+			if err != nil {
+				logs.Println("[DB_NODE]" + err.Error())
+				return
+			}
+			gwg := &sync.WaitGroup{}
+			gwg.Add(len(attacks))
+			for k, group := range attacks {
+				go func(k int, group AttackType) {
+					defer gwg.Done()
+					query := dao.Query(tx)
+					// 条件
+					if userId > 0 && len(serverIds) > 0 {
+						query.Attr("serverId", serverIds).
+							Reuse(false)
+					}
+					query.Where("status>=400")
+
+					// 开始查询
+					var c int64
+					if len(group.ids) == 0 {
+						c = 0
+					} else {
+						c, err = query.
+							Table(tableName).
+							Where(fmt.Sprintf("firewallRuleGroupId in (%s)", func(ids []int64) string {
+								r := ""
+								for _, id := range ids {
+									r += fmt.Sprintf("%d,", id)
+								}
+								return r[:len(r)-1]
+							}(group.ids))).
+							Count()
+						if err != nil {
+							logs.Println("[DB_NODE]" + err.Error())
+							return
+						}
+					}
+
+					locker.Lock()
+					attacks[k].Count += c
+					locker.Unlock()
+				}(k, group)
+			}
+			gwg.Wait()
+
+		}(daoWrapper)
+	}
+	wg.Wait()
+
+	return attacks, nil
+}
+
+type AttackType struct {
+	Code  string  `json:"code"`  //攻击code
+	Name  string  `json:"name"`  //攻击名称
+	Count int64   `json:"count"` //条数
+	ids   []int64 //对应策略分组id
 }
