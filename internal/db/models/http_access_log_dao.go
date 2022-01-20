@@ -464,7 +464,7 @@ func (this *HTTPAccessLogDAO) FindAccessLogWithRequestId(tx *dbs.Tx, requestId s
 
 // SearchAccessLogs 根据请求ID获取访问日志
 func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
-	ip, domain string, startAt, endAt uint64, userId int64, limit int64) (result []*HTTPAccessLog, nextRequestId string, err error) {
+	ip, domain, code string, startAt, endAt uint64, userId int64, limit int64) (result []*HTTPAccessLog, nextRequestId string, err error) {
 
 	if len(day) != 8 {
 		return
@@ -499,7 +499,10 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 			NodeId: 0,
 		}}
 	}
-
+	ids, err := SharedHTTPFirewallRuleGroupDAO.FindRuleGroupIdWithCode(tx, code)
+	if err != nil {
+		return nil, "", err
+	}
 	locker := sync.Mutex{}
 
 	count := len(daoList)
@@ -511,7 +514,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 
 			dao := daoWrapper.DAO
 
-			tableName, hasRemoteAddrField, hasDomainField, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
+			tableName, hasRemoteAddrField, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
 			if !exists {
 				// 表格不存在则跳过
 				return
@@ -559,33 +562,41 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 				}
 			}
 			if len(domain) > 0 {
-				if hasDomainField {
-					if strings.Contains(domain, "*") {
-						domain = strings.ReplaceAll(domain, "*", "%")
-						domain = regexp.MustCompile(`[^a-zA-Z0-9-.%]`).ReplaceAllString(domain, "")
-						query.Where("domain LIKE :host2").
-							Param("host2", domain)
-					} else {
-						query.Attr("domain", domain)
-						query.UseIndex("domain")
-					}
-				} else {
-					query.Where("JSON_EXTRACT(content, '$.host')=:host1").
-						Param("host1", domain)
-				}
+				//if hasDomainField {
+				//	if strings.Contains(domain, "*") {
+				//		domain = strings.ReplaceAll(domain, "*", "%")
+				//		domain = regexp.MustCompile(`[^a-zA-Z0-9-.%]`).ReplaceAllString(domain, "")
+				//		query.Where("domain LIKE :host2").
+				//			Param("host2", domain)
+				//	} else {
+				//		query.Attr("domain", domain)
+				//		query.UseIndex("domain")
+				//	}
+				//} else {
+				query.Where("JSON_EXTRACT(content, '$.host')=:host1").
+					Param("host1", domain)
+				//}
 			}
 
 			// offset
 			if len(lastRequestId) > 0 {
-				query.Where("requestId>:requestId").
+				query.Where("requestId<:requestId").
 					Param("requestId", lastRequestId)
 			}
 			query.Asc("requestId")
-
+			if len(ids) > 0 {
+				query.Where(fmt.Sprintf("firewallRuleGroupId in (%s)", func(ids []int64) string {
+					r := ""
+					for _, id := range ids {
+						r += fmt.Sprintf("%d,", id)
+					}
+					return r[:len(r)-1]
+				}(ids)))
+			}
 			// 开始查询
-			ones, err := query.
+			ones, err := query.Debug(true).
 				Table(tableName).
-				Limit(int64(limit)).
+				Limit(limit + 1).
 				FindAll()
 			if err != nil {
 				logs.Println("[DB_NODE]" + err.Error())
@@ -611,8 +622,10 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 	})
 
 	if int64(len(result)) > limit {
+		nextRequestId = result[limit-1].RequestId
+	}
+	if int64(len(result)) >= limit {
 		result = result[:limit]
-		nextRequestId = result[len(result)-1].RequestId
 	}
 
 	return result, nextRequestId, nil
@@ -621,7 +634,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 
 // StatisticsTop 统计指定域名的攻击ip排行
 func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
-	day string, userId int64, top int, ip2region func(string) (string, string)) (ips IpCount, region RegionCount, err error) {
+	day string, userId int64, top int, ip2region func(string) (string, string)) (total int64, ips IpCount, region RegionCount, err error) {
 
 	accessLogLocker.RLock()
 	daoList := []*HTTPAccessLogDAOWrapper{}
@@ -704,9 +717,14 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 	wg.Wait()
 	ipCounts := make(map[string]int64, 0)
 	regionCounts := make(map[string]int64, 0)
+
 	for _, v := range result {
 
+		total += v.Count
 		province, city := ip2region(v.RemoteAddr)
+		if province == "" {
+			continue
+		}
 		regionCounts[province] += v.Count
 
 		ipCounts[v.RemoteAddr+"("+province+city+")"] += v.Count
@@ -743,7 +761,7 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 	regionCountStu.Region = regionCountStu.Region[:min]
 	regionCountStu.Count = regionCountStu.Count[:min]
 
-	return ipCountStu, regionCountStu, nil
+	return total, ipCountStu, regionCountStu, nil
 }
 
 type IpCount struct {

@@ -246,7 +246,9 @@ func (this *HTTPFirewallRuleGroupDAO) NotifyUpdate(tx *dbs.Tx, groupId int64) er
 
 // FindRuleGroupIdWithCode 根据分组code查找规则分组
 func (this *HTTPFirewallRuleGroupDAO) FindRuleGroupIdWithCode(tx *dbs.Tx, code string) ([]int64, error) {
-
+	if code == "" {
+		return nil, nil
+	}
 	ones, err := this.Query(tx).
 		State(HTTPFirewallRuleStateEnabled).
 		Where(fmt.Sprintf("code='%s'", code)).

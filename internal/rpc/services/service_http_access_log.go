@@ -157,8 +157,9 @@ func (this *HTTPAccessLogService) SearchHTTPAccessLogs(ctx context.Context, req 
 			}
 		}
 	}
+	accessLogs, requestId, err := models.SharedHTTPAccessLogDAO.SearchAccessLogs(tx,
+		req.RequestId, req.Day, req.Ip, req.Domain, req.Code, req.StartAt, req.EndAt, req.UserId, req.Size)
 
-	accessLogs, requestId, err := models.SharedHTTPAccessLogDAO.SearchAccessLogs(tx, req.RequestId, req.Day, req.Ip, req.Domain, req.StartAt, req.EndAt, req.UserId, req.Size)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +192,7 @@ func (this *HTTPAccessLogService) SearchHTTPAccessLogs(ctx context.Context, req 
 				} else {
 					cluster, err := models.SharedNodeClusterDAO.FindEnabledNodeCluster(tx, clusterId)
 					if err != nil {
+
 						return nil, err
 					}
 					if cluster != nil {
@@ -212,7 +214,6 @@ func (this *HTTPAccessLogService) SearchHTTPAccessLogs(ctx context.Context, req 
 	}
 	return &pb.SearchHTTPAccessLogsResponse{
 		HttpAccessLogs: result,
-		AccessLogs:     result, // TODO 仅仅为了兼容，当用户节点版本大于0.0.8时可以删除
 		HasMore:        requestId != "",
 		RequestId:      requestId,
 	}, nil
@@ -254,23 +255,19 @@ func (this *HTTPAccessLogService) FindHTTPAccessLog(ctx context.Context, req *pb
 // StatisticsHTTPAccessTop 统计攻击ip排行
 func (this *HTTPAccessLogService) StatisticsHTTPAccessTop(ctx context.Context, req *pb.StatisticsHTTPAccessTopRequest) (*pb.StatisticsHTTPAccessTopResponse, error) {
 	// 校验请求
-	_, _, _, err := rpcutils.ValidateRequest(ctx, rpcutils.UserTypeNode)
-	if err != nil {
-		return nil, err
-	}
 	if len(req.Day) == 0 {
 		return &pb.StatisticsHTTPAccessTopResponse{}, nil
 	}
 	tx := this.NullTx()
 	//防止存在 循环包
-	ips, regions, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, int(req.Top), func(s string) (string, string) {
+	total, ips, regions, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, int(req.Top), func(s string) (string, string) {
 		r, _ := iplibrary.SharedLibrary.Lookup(s)
 		return r.Province, r.City
 	})
 	if err != nil {
 		return nil, err
 	}
-	resp := &pb.StatisticsHTTPAccessTopResponse{Ip: &pb.AccessTop{}, Region: &pb.AccessTop{}}
+	resp := &pb.StatisticsHTTPAccessTopResponse{Ip: &pb.AccessTop{}, Region: &pb.AccessTop{}, Total: total}
 	for k, v := range ips.IP {
 		resp.Ip.Names = append(resp.Ip.Names, v)
 		resp.Ip.Counts = append(resp.Ip.Counts, ips.Count[k])
@@ -285,10 +282,6 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessTop(ctx context.Context, r
 // StatisticsHTTPAccess 统计指定日期下用户的攻击次数
 func (this *HTTPAccessLogService) StatisticsHTTPAccess(ctx context.Context, req *pb.StatisticsHTTPAccessRequest) (*pb.StatisticsHTTPAccessResponse, error) {
 	// 校验请求
-	_, _, _, err := rpcutils.ValidateRequest(ctx, rpcutils.UserTypeNode)
-	if err != nil {
-		return nil, err
-	}
 	if len(req.Days) == 0 {
 		return &pb.StatisticsHTTPAccessResponse{}, nil
 	}
@@ -305,10 +298,6 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccess(ctx context.Context, req 
 // StatisticsHTTPAccessType 统计各类型的攻击策略条数
 func (this *HTTPAccessLogService) StatisticsHTTPAccessType(ctx context.Context, req *pb.StatisticsHTTPAccessTypeRequest) (*pb.StatisticsHTTPAccessTypeResponse, error) {
 	// 校验请求
-	_, _, _, err := rpcutils.ValidateRequest(ctx, rpcutils.UserTypeNode)
-	if err != nil {
-		return nil, err
-	}
 	tx := this.NullTx()
 	//防止存在 循环包
 	counts, err := models.SharedHTTPAccessLogDAO.StatisticsType(tx, req.Day, req.User)

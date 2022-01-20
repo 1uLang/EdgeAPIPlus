@@ -13,6 +13,9 @@ var sharedAPIConfig *APIConfig = nil
 
 // APIConfig API节点配置
 type APIConfig struct {
+	RPC struct {
+		Endpoints []string `yaml:"endpoints"`
+	} `yaml:"rpc"`
 	NodeId string `yaml:"nodeId" json:"nodeId"`
 	Secret string `yaml:"secret" json:"secret"`
 
