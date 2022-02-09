@@ -12,6 +12,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/regions"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/types"
 	timeutil "github.com/iwind/TeaGo/utils/time"
@@ -1504,9 +1505,15 @@ func (this *ServerService) CheckServerNameDuplicationInNodeCluster(ctx context.C
 
 	var tx = this.NullTx()
 
+	var checkFunc func(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64) (bool, error)
+	if req.All {
+		checkFunc = models.SharedServerDAO.ExistServerNameInCluster
+	} else {
+		checkFunc = models.SharedServerDAO.ExistServerNameInClusterAll
+	}
 	duplicatedServerNames := []string{}
 	for _, serverName := range req.ServerNames {
-		exist, err := models.SharedServerDAO.ExistServerNameInCluster(tx, req.NodeClusterId, serverName, req.ExcludeServerId)
+		exist, err := checkFunc(tx, req.NodeClusterId, serverName, req.ExcludeServerId)
 		if err != nil {
 			return nil, err
 		}
