@@ -466,7 +466,7 @@ func (this *HTTPAccessLogDAO) FindAccessLogWithRequestId(tx *dbs.Tx, requestId s
 func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 	ip, domain, code string, startAt, endAt uint64, userId int64, limit int64) (result []*HTTPAccessLog, nextRequestId string, err error) {
 
-	if len(day) != 8 {
+	if len(day) != 8 && limit < 0 {
 		return
 	}
 
@@ -583,7 +583,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 				query.Where("requestId<:requestId").
 					Param("requestId", lastRequestId)
 			}
-			query.Asc("requestId")
+			query.Desc("requestId")
 			if len(ids) > 0 {
 				query.Where(fmt.Sprintf("firewallRuleGroupId in (%s)", func(ids []int64) string {
 					r := ""
@@ -594,7 +594,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 				}(ids)))
 			}
 			// 开始查询
-			ones, err := query.Debug(true).
+			ones, err := query.
 				Table(tableName).
 				Limit(limit + 1).
 				FindAll()
@@ -621,7 +621,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 		return result[i].RequestId > result[j].RequestId
 	})
 
-	if int64(len(result)) > limit {
+	if int64(len(result)) > limit && limit > 0 {
 		nextRequestId = result[limit-1].RequestId
 	}
 	if int64(len(result)) >= limit {

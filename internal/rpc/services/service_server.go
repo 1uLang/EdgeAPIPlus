@@ -1507,9 +1507,9 @@ func (this *ServerService) CheckServerNameDuplicationInNodeCluster(ctx context.C
 
 	var checkFunc func(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64) (bool, error)
 	if req.All {
-		checkFunc = models.SharedServerDAO.ExistServerNameInCluster
-	} else {
 		checkFunc = models.SharedServerDAO.ExistServerNameInClusterAll
+	} else {
+		checkFunc = models.SharedServerDAO.ExistServerNameInCluster
 	}
 	duplicatedServerNames := []string{}
 	for _, serverName := range req.ServerNames {

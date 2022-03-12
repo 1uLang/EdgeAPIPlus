@@ -1528,6 +1528,8 @@ func (this *ServerDAO) FindAllEnabledServersWithUserId(tx *dbs.Tx, userId int64)
 	_, err = this.Query(tx).
 		State(ServerStateEnabled).
 		Attr("userId", userId).
+		//Attr("isAuditing", 0).
+		//Where("JSON_CONTAINS(auditingResult, '{\"isOk\": true}')").
 		DescPk().
 		Slice(&result).
 		FindAll()
@@ -1639,16 +1641,14 @@ func (this *ServerDAO) ExistServerNameInCluster(tx *dbs.Tx, clusterId int64, ser
 
 // ExistServerNameInClusterAll 检查ServerName是否已存在包含审核通过和正在审核中的
 func (this *ServerDAO) ExistServerNameInClusterAll(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64) (bool, error) {
-	query := this.Query(tx).
+	query := this.Query(tx).State(ServerStateEnabled).
 		Attr("clusterId", clusterId).
-		Where("(JSON_CONTAINS(serverNames, :jsonQuery1) OR JSON_CONTAINS(serverNames, :jsonQuery2))").
-		Where("(JSON_CONTAINS(auditingServerNames, :jsonQuery1) OR JSON_CONTAINS(auditingServerNames, :jsonQuery2))").
+		Where("((JSON_CONTAINS(serverNames, :jsonQuery1) OR JSON_CONTAINS(serverNames, :jsonQuery2)) OR ((JSON_CONTAINS(auditingServerNames, :jsonQuery1) OR JSON_CONTAINS(auditingServerNames, :jsonQuery2)) AND isAuditing = 1))").
 		Param("jsonQuery1", maps.Map{"name": serverName}.AsJSON()).
 		Param("jsonQuery2", maps.Map{"subNames": serverName}.AsJSON())
 	if excludeServerId > 0 {
 		query.Neq("id", excludeServerId)
 	}
-	query.State(ServerStateEnabled)
 	return query.Exist()
 }
 

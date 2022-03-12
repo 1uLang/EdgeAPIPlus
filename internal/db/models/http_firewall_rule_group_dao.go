@@ -249,9 +249,20 @@ func (this *HTTPFirewallRuleGroupDAO) FindRuleGroupIdWithCode(tx *dbs.Tx, code s
 	if code == "" {
 		return nil, nil
 	}
+	sqlStr := fmt.Sprintf("code='%s'", code)
+	if code == "other" { //用户自定义分组
+		codes := []string{}
+		for _, group := range firewallconfigs.HTTPFirewallTemplate().AllRuleGroups() {
+			codes = append(codes, group.Code)
+		}
+		s, _ := json.Marshal(codes)
+		s[0] = '('
+		s[len(s)-1] = ')'
+		sqlStr = fmt.Sprintf("code not in %s", s)
+	}
 	ones, err := this.Query(tx).
 		State(HTTPFirewallRuleStateEnabled).
-		Where(fmt.Sprintf("code='%s'", code)).
+		Where(sqlStr).
 		AscPk().
 		ResultPk().
 		FindAll()
