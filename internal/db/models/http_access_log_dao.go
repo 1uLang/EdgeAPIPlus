@@ -464,7 +464,8 @@ func (this *HTTPAccessLogDAO) FindAccessLogWithRequestId(tx *dbs.Tx, requestId s
 
 // SearchAccessLogs 根据请求ID获取访问日志
 func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
-	ip, domain, code string, startAt, endAt uint64, userId int64, limit int64) (result []*HTTPAccessLog, nextRequestId string, err error) {
+	ip, domain, code, method string, startAt, endAt uint64, userId int64, limit int64, allLog, errLog bool) (
+	result []*HTTPAccessLog, nextRequestId string, err error) {
 
 	if len(day) != 8 && limit < 0 {
 		return
@@ -499,9 +500,13 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 			NodeId: 0,
 		}}
 	}
-	ids, err := SharedHTTPFirewallRuleGroupDAO.FindRuleGroupIdWithCode(tx, code)
-	if err != nil {
-		return nil, "", err
+	var ids []int64
+	wafLog := !allLog && !errLog
+	if wafLog {
+		ids, err = SharedHTTPFirewallRuleGroupDAO.FindRuleGroupIdWithCode(tx, code)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	locker := sync.Mutex{}
 
@@ -536,10 +541,13 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 				query.Where(fmt.Sprintf("createdAt>=%v", startAt))
 				query.Where(fmt.Sprintf("createdAt<%v", endAt))
 			}
-
-			query.Where("firewallPolicyId>0")
-			query.UseIndex("firewallPolicyId")
-
+			if wafLog {
+				query.Where("firewallPolicyId>0")
+				query.UseIndex("firewallPolicyId")
+			}
+			if errLog {
+				query.Where("status>=400")
+			}
 			// keyword
 			if len(ip) > 0 {
 				// TODO 支持IP范围
@@ -577,14 +585,17 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 					Param("host1", domain)
 				//}
 			}
-
+			if len(method) > 0 {
+				query.Where("JSON_EXTRACT(content, '$.requestMethod')=:method1").
+					Param("method1", strings.ToUpper(method))
+			}
 			// offset
 			if len(lastRequestId) > 0 {
 				query.Where("requestId<:requestId").
 					Param("requestId", lastRequestId)
 			}
 			query.Desc("requestId")
-			if len(ids) > 0 {
+			if wafLog && len(ids) > 0 {
 				query.Where(fmt.Sprintf("firewallRuleGroupId in (%s)", func(ids []int64) string {
 					r := ""
 					for _, id := range ids {

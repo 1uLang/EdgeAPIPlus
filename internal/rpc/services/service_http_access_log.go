@@ -158,7 +158,7 @@ func (this *HTTPAccessLogService) SearchHTTPAccessLogs(ctx context.Context, req 
 		}
 	}
 	accessLogs, requestId, err := models.SharedHTTPAccessLogDAO.SearchAccessLogs(tx,
-		req.RequestId, req.Day, req.Ip, req.Domain, req.Code, req.StartAt, req.EndAt, req.UserId, req.Size)
+		req.RequestId, req.Day, req.Ip, req.Domain, req.Code, req.RequestMethod, req.StartAt, req.EndAt, req.UserId, req.Size, req.HasAll, req.HasError)
 
 	if err != nil {
 		return nil, err

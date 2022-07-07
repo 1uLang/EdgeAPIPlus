@@ -365,7 +365,7 @@ func (this *APINode) listenPorts(apiNode *models.APINode) (isListening bool) {
 				isListening = true
 			}
 		}
-	}
+	
 
 	// HTTPS
 	httpsConfig, err := apiNode.DecodeHTTPS(nil, nil)
