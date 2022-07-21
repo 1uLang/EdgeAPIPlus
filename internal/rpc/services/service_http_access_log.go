@@ -263,7 +263,7 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessTop(ctx context.Context, r
 	total, ips, regions, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, int(req.Top), func(s string) (string, string) {
 		r, _ := iplibrary.SharedLibrary.Lookup(s)
 		//忽略国外的攻击
-		if r.Country != "中国" {
+		if r == nil || r.Country != "中国" {
 			return "", ""
 		}
 		return r.Province, r.City
