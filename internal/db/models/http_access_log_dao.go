@@ -1206,7 +1206,7 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64,
 	accessLogLocker.RUnlock()
 
 	serverIds := []int64{}
-
+	resp = &AttackURLTop{Tops: make([]*AttackUrlTopItem1, 0)}
 	if userId > 0 {
 		serverIds, err = SharedServerDAO.FindAllEnabledServerIdsWithUserId(tx, userId)
 
@@ -1227,7 +1227,6 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64,
 
 	locker := sync.Mutex{}
 	stats := make([]*HTTPAccessLog, 0)
-	resp = &AttackURLTop{Tops: make([]*AttackUrlTopItem1, 0)}
 
 	wg := &sync.WaitGroup{}
 	wg.Add(len(serverIds))
@@ -1339,7 +1338,7 @@ func (this *HTTPAccessLogDAO) AccessIPTop(tx *dbs.Tx, day string, userId int64, 
 	accessLogLocker.RUnlock()
 
 	serverIds := []int64{}
-
+	resp = &AccessIPTop{Tops: make([]*AccessIPTopItem, 0)}
 	if userId > 0 {
 		serverIds, err = SharedServerDAO.FindAllEnabledServerIdsWithUserId(tx, userId)
 
@@ -1360,7 +1359,6 @@ func (this *HTTPAccessLogDAO) AccessIPTop(tx *dbs.Tx, day string, userId int64, 
 
 	locker := sync.Mutex{}
 	stats := make([]*HTTPAccessLog, 0)
-	resp = &AccessIPTop{Tops: make([]*AccessIPTopItem, 0)}
 	wg := &sync.WaitGroup{}
 	wg.Add(len(serverIds))
 	for _, serverId := range serverIds {
