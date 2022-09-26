@@ -237,7 +237,7 @@ func (this *IPItemDAO) UpdateIPItem(tx *dbs.Tx, itemId int64, ipFrom string, ipT
 
 // CountIPItemsWithListId 计算IP数量
 func (this *IPItemDAO) CountIPItemsWithListId(tx *dbs.Tx, listId int64, ipFrom string, ipTo string, keyword string) (int64, error) {
-	var query = this.Query(tx).Debug(true).
+	var query = this.Query(tx).
 		State(IPItemStateEnabled).
 		Attr("listId", listId)
 	if len(keyword) > 0 {

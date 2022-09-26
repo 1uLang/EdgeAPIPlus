@@ -1397,7 +1397,7 @@ func (this *HTTPAccessLogDAO) AccessIPTop(tx *dbs.Tx, day string, userId int64, 
 
 					var ones []*HTTPAccessLog
 					// 开始查询
-					_, err = query.Debug(true).
+					_, err = query.
 						Table(tableName).
 						Group("remoteAddr").
 						Result("remoteAddr, COUNT(1) AS count").

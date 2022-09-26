@@ -4,9 +4,7 @@ go 1.15
 
 replace github.com/TeaOSLab/EdgePlus => ../EdgePlus
 
-
-
-replace github.com/1uLang/EdgeCommon => ../EdgeCommonll
+replace github.com/1uLang/EdgeCommon => ../EdgeCommon
 
 require (
 	github.com/1uLang/EdgeCommon v0.0.0-00010101000000-000000000000
