@@ -170,7 +170,7 @@ func (this *IPItemService) CountIPItemsWithListId(ctx context.Context, req *pb.C
 		}
 	}
 
-	count, err := models.SharedIPItemDAO.CountIPItemsWithListId(tx, req.IpListId, req.Keyword, req.IpFrom, req.IpTo)
+	count, err := models.SharedIPItemDAO.CountIPItemsWithListId(tx, req.IpListId, req.IpFrom, req.IpTo, req.Keyword)
 	if err != nil {
 		return nil, err
 	}

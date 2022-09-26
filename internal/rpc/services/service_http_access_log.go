@@ -260,7 +260,7 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessTop(ctx context.Context, r
 	}
 	tx := this.NullTx()
 	//防止存在 循环包
-	total, ips, regions, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, int(req.Top), func(s string) (string, string) {
+	stats, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, int(req.Top), func(s string) (string, string) {
 		r, _ := iplibrary.SharedLibrary.Lookup(s)
 		//忽略国外的攻击
 		if r == nil || r.Country != "中国" {
@@ -271,14 +271,12 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessTop(ctx context.Context, r
 	if err != nil {
 		return nil, err
 	}
-	resp := &pb.StatisticsHTTPAccessTopResponse{Ip: &pb.AccessTop{}, Region: &pb.AccessTop{}, Total: total}
-	for k, v := range ips.IP {
-		resp.Ip.Names = append(resp.Ip.Names, v)
-		resp.Ip.Counts = append(resp.Ip.Counts, ips.Count[k])
-	}
-	for k, v := range regions.Region {
-		resp.Region.Names = append(resp.Region.Names, v)
-		resp.Region.Counts = append(resp.Region.Counts, regions.Count[k])
+	resp := &pb.StatisticsHTTPAccessTopResponse{}
+	for _, v := range stats.Tops {
+		stat := &pb.StatisticsHTTPAccess{ServerId: v.ServerId, Total: v.Total}
+		stat.Ip = &pb.AccessTop{Names: v.Ips.IP, Counts: v.Ips.Count}
+		stat.Region = &pb.AccessTop{Names: v.Region.Region, Counts: v.Region.Count}
+		resp.Stats = append(resp.Stats, stat)
 	}
 	return resp, nil
 }
@@ -311,6 +309,58 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessType(ctx context.Context, 
 	resp := &pb.StatisticsHTTPAccessTypeResponse{}
 	for _, v := range counts {
 		resp.Attacks = append(resp.Attacks, &pb.HTTPAccessType{Count: v.Count, Code: v.Code, Name: v.Name})
+	}
+
+	return resp, nil
+}
+
+// StatisticsHTTPAccessLogs 统计指定用户日期下 各访问的 访问条数 访问总次数  防护总次数 访问IP总数 拦截IP总数
+func (this *HTTPAccessLogService) StatisticsHTTPAccessLogs(ctx context.Context, req *pb.StatisticsHTTPAccessTypeRequest) (*pb.StatisticsHTTPAccessLogResponse, error) {
+	// 校验请求
+	tx := this.NullTx()
+	//防止存在 循环包
+	stats, err := models.SharedHTTPAccessLogDAO.AccessStatistics(tx, req.Day, req.User)
+	if err != nil {
+		return nil, err
+	}
+	resp := &pb.StatisticsHTTPAccessLogResponse{}
+	for _, v := range stats {
+		resp.Attacks = append(resp.Attacks, &pb.HTTPAccessStat{ServerId: v.ServerId, AccessTotal: v.AccessTotal, AttackTotal: v.AttackTotal,
+			AccessIpTotal: v.AccessIpTotal, AttackIpTotal: v.AttackIpTotal})
+	}
+
+	return resp, nil
+}
+
+// StatisticsAttackURLTop 统计最受攻击的域名排行
+func (this *HTTPAccessLogService) StatisticsAttackURLTop(ctx context.Context, req *pb.StatisticsHTTPAccessTopRequest) (*pb.StatisticsHTTPAttackURLTopResponse, error) {
+	// 校验请求
+	tx := this.NullTx()
+	//防止存在 循环包
+	stats, err := models.SharedHTTPAccessLogDAO.AttackURLTop(tx, req.Day, req.User, int(req.Top))
+	if err != nil {
+		return nil, err
+	}
+	resp := &pb.StatisticsHTTPAttackURLTopResponse{}
+	for _, v := range stats.Tops {
+		resp.Attacks = append(resp.Attacks, &pb.HTTPAttackURL{ServerId: v.ServerId, Url: v.Urls, Count: v.Counts})
+	}
+
+	return resp, nil
+}
+
+// StatisticsAccessIPTop 客户端访问IP排行
+func (this *HTTPAccessLogService) StatisticsAccessIPTop(ctx context.Context, req *pb.StatisticsHTTPAccessTopRequest) (*pb.StatisticsHTTPAccessIPTopResponse, error) {
+	// 校验请求
+	tx := this.NullTx()
+	//防止存在 循环包
+	stats, err := models.SharedHTTPAccessLogDAO.AccessIPTop(tx, req.Day, req.User, int(req.Top))
+	if err != nil {
+		return nil, err
+	}
+	resp := &pb.StatisticsHTTPAccessIPTopResponse{}
+	for _, v := range stats.Tops {
+		resp.Access = append(resp.Access, &pb.HTTPAccessIP{ServerId: v.ServerId, Ip: v.IPs, Count: v.Counts})
 	}
 
 	return resp, nil

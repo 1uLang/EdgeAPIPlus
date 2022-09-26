@@ -17,7 +17,9 @@ type HTTPAccessLog struct {
 	Domain              string `field:"domain"`              // 域名
 	RequestBody         string `field:"requestBody"`         // 请求内容
 	ResponseBody        string `field:"responseBody"`        // 响应内容
-	Count               int64  `field:"count"`               // 条数
+	// - db查询映射字段
+	Count int64  `field:"count"` // 条数
+	Url   string `field:"url"`   // 条数
 }
 
 type HTTPAccessLogOperator struct {
