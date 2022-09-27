@@ -18,8 +18,11 @@ type HTTPAccessLog struct {
 	RequestBody         string `field:"requestBody"`         // 请求内容
 	ResponseBody        string `field:"responseBody"`        // 响应内容
 	// - db查询映射字段
-	Count int64  `field:"count"` // 条数
-	Url   string `field:"url"`   // 条数
+	Count int64 `field:"count"` // 条数
+
+	Host string `field:"host"` // 条数
+	Uri  string `field:"uri"`  // 条数
+
 }
 
 type HTTPAccessLogOperator struct {

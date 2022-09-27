@@ -343,7 +343,10 @@ func (this *HTTPAccessLogService) StatisticsAttackURLTop(ctx context.Context, re
 	}
 	resp := &pb.StatisticsHTTPAttackURLTopResponse{}
 	for _, v := range stats.Tops {
-		resp.Attacks = append(resp.Attacks, &pb.HTTPAttackURL{ServerId: v.ServerId, Url: v.Urls, Count: v.Counts})
+		item := pb.HTTPAttackURL{ServerId: v.ServerId}
+		item.Uris = &pb.AttackCount{Values: v.Uris.Value, Counts: v.Uris.Count}
+		item.Hosts = &pb.AttackCount{Values: v.Hosts.Value, Counts: v.Hosts.Count}
+		resp.Attacks = append(resp.Attacks, &item)
 	}
 
 	return resp, nil

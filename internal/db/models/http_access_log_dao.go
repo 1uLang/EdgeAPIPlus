@@ -1226,14 +1226,16 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64,
 	}
 
 	locker := sync.Mutex{}
-	stats := make([]*HTTPAccessLog, 0)
+	hostStats := make([]*HTTPAccessLog, 0)
+	uriStats := make([]*HTTPAccessLog, 0)
 
 	wg := &sync.WaitGroup{}
 	wg.Add(len(serverIds))
 	for _, serverId := range serverIds {
 
 		l := sync.Mutex{}
-		serverStats := make([]*HTTPAccessLog, 0)
+		serverHostStats := make([]*HTTPAccessLog, 0)
+		serverUriStats := make([]*HTTPAccessLog, 0)
 
 		dwg := &sync.WaitGroup{}
 		dwg.Add(len(daoList))
@@ -1255,7 +1257,7 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64,
 						return
 					}
 
-					// 开始查询
+					// 开始查询 - 统计域名
 					query := dao.Query(tx)
 
 					// 条件
@@ -1270,8 +1272,8 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64,
 					// 开始查询
 					_, err = query.
 						Table(tableName).
-						Group("url").
-						Result("TRIM(BOTH '\"' FROM json_extract(content,'$.host')) AS url, COUNT(*) AS count").
+						Group("host").
+						Result("TRIM(BOTH '\"' FROM json_extract(content,'$.host')) AS host, COUNT(*) AS count").
 						Slice(&ones).
 						FindAll()
 					if err != nil {
@@ -1279,53 +1281,113 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64,
 						return
 					}
 					l.Lock()
-					serverStats = append(serverStats, ones...)
+					serverHostStats = append(serverHostStats, ones...)
+					l.Unlock()
+
+					ones = make([]*HTTPAccessLog, 0)
+					// 开始查询 - 统计URI
+					query = dao.Query(tx)
+
+					// 条件
+					query.Attr("serverId", serverId).
+						Reuse(false)
+
+					query.Where("firewallPolicyId>0")
+					query.UseIndex("firewallPolicyId")
+
+					// 开始查询
+					_, err = query.
+						Table(tableName).
+						Group("uri").
+						Result("TRIM(BOTH '\"' FROM json_extract(content,'$.requestURI')) AS uri, COUNT(*) AS count").
+						Slice(&ones).
+						FindAll()
+					if err != nil {
+						logs.Println("[DB_NODE]" + err.Error())
+						return
+					}
+					l.Lock()
+					serverUriStats = append(serverUriStats, ones...)
 					l.Unlock()
 				}(daoWrapper)
 			}
 		}(serverId)
 		dwg.Wait()
-		mergeStats, urlCountStu := statisticsUrlTop(serverStats, top)
+		mergeHostStats, hostCountStu := statisticsHostTop(serverHostStats, top)
+		serverUriStats, uriCountStu := statisticsUriTop(serverUriStats, top)
 		locker.Lock()
-		stats = append(stats, mergeStats...)
-		resp.Tops = append(resp.Tops, &AttackUrlTopItem1{ServerId: serverId, Counts: urlCountStu.Count, Urls: urlCountStu.Url})
+		hostStats = append(hostStats, mergeHostStats...)
+		uriStats = append(uriStats, serverUriStats...)
+		resp.Tops = append(resp.Tops, &AttackUrlTopItem1{ServerId: serverId, Hosts: hostCountStu, Uris: uriCountStu})
 		locker.Unlock()
 	}
 	wg.Wait()
 
-	_, urlCountStu := statisticsUrlTop(stats, top)
-	resp.Tops = append(resp.Tops, &AttackUrlTopItem1{ServerId: 0, Counts: urlCountStu.Count, Urls: urlCountStu.Url})
+	_, hostCountStu := statisticsHostTop(hostStats, top)
+	_, uriCountStu := statisticsUriTop(uriStats, top)
+	resp.Tops = append(resp.Tops, &AttackUrlTopItem1{ServerId: 0, Hosts: hostCountStu, Uris: uriCountStu})
 	return resp, nil
 }
-func statisticsUrlTop(serverStats []*HTTPAccessLog, top int) ([]*HTTPAccessLog, *UrlCount) {
+func statisticsUriTop(serverStats []*HTTPAccessLog, top int) ([]*HTTPAccessLog, *ValueCount) {
 	// 同服务下排序
 	// 统计同域名下访护次数
-	urlCountMaps := make(map[string]int64, 0)
+	uriCountMaps := make(map[string]int64, 0)
 	// 合并同域名的访护次数
 	mergeStats := make([]*HTTPAccessLog, 0)
 	// 排序
-	urlCountStu := UrlCount{}
+	uriCountStu := ValueCount{}
 	for _, stat := range serverStats {
-		urlCountMaps[stat.Url] += stat.Count
+		uriCountMaps[stat.Uri] += stat.Count
 	}
-	for url, count := range urlCountMaps {
-		mergeStats = append(mergeStats, &HTTPAccessLog{Url: url, Count: count})
-		urlCountStu.Url = append(urlCountStu.Url, url)
-		urlCountStu.Count = append(urlCountStu.Count, count)
+	for uri, count := range uriCountMaps {
+		mergeStats = append(mergeStats, &HTTPAccessLog{Uri: uri, Count: count})
+		uriCountStu.Value = append(uriCountStu.Value, uri)
+		uriCountStu.Count = append(uriCountStu.Count, count)
 	}
 	// 排序
-	sort.Sort(urlCountStu)
+	sort.Sort(uriCountStu)
 
-	min := len(urlCountStu.Url)
-	if min > len(urlCountStu.Count) {
-		min = len(urlCountStu.Count)
+	min := len(uriCountStu.Value)
+	if min > len(uriCountStu.Count) {
+		min = len(uriCountStu.Count)
 	}
 	if min > top {
 		min = top
 	}
-	urlCountStu.Url = urlCountStu.Url[:min]
-	urlCountStu.Count = urlCountStu.Count[:min]
-	return mergeStats, &urlCountStu
+	uriCountStu.Value = uriCountStu.Value[:min]
+	uriCountStu.Count = uriCountStu.Count[:min]
+	return mergeStats, &uriCountStu
+}
+
+func statisticsHostTop(serverStats []*HTTPAccessLog, top int) ([]*HTTPAccessLog, *ValueCount) {
+	// 同服务下排序
+	// 统计同域名下访护次数
+	hostCountMaps := make(map[string]int64, 0)
+	// 合并同域名的访护次数
+	mergeStats := make([]*HTTPAccessLog, 0)
+	// 排序
+	hostCountStu := ValueCount{}
+	for _, stat := range serverStats {
+		hostCountMaps[stat.Host] += stat.Count
+	}
+	for host, count := range hostCountMaps {
+		mergeStats = append(mergeStats, &HTTPAccessLog{Host: host, Count: count})
+		hostCountStu.Value = append(hostCountStu.Value, host)
+		hostCountStu.Count = append(hostCountStu.Count, count)
+	}
+	// 排序
+	sort.Sort(hostCountStu)
+
+	min := len(hostCountStu.Value)
+	if min > len(hostCountStu.Count) {
+		min = len(hostCountStu.Count)
+	}
+	if min > top {
+		min = top
+	}
+	hostCountStu.Value = hostCountStu.Value[:min]
+	hostCountStu.Count = hostCountStu.Count[:min]
+	return mergeStats, &hostCountStu
 }
 
 // AccessIPTop 客户端访问IP排行
@@ -1479,9 +1541,9 @@ type AttackUrlTopItem struct {
 	Count    int64  `json:"count"`
 }
 type AttackUrlTopItem1 struct {
-	ServerId int64    `json:"server_id"`
-	Urls     []string `json:"url"`
-	Counts   []int64  `json:"count"`
+	ServerId int64       `json:"server_id"`
+	Uris     *ValueCount `json:"uris"`
+	Hosts    *ValueCount `json:"hosts"`
 }
 
 type AccessIPTop struct {
@@ -1493,22 +1555,22 @@ type AccessIPTopItem struct {
 	IPs      []string `json:"url"`
 	Counts   []int64  `json:"count"`
 }
-type UrlCount struct {
-	Url   []string
+type ValueCount struct {
+	Value []string
 	Count []int64
 }
 
-func (this UrlCount) Len() int {
+func (this ValueCount) Len() int {
 	min := len(this.Count)
-	if min > len(this.Url) {
-		return len(this.Url)
+	if min > len(this.Value) {
+		return len(this.Value)
 	}
 	return min
 }
-func (this UrlCount) Less(i, j int) bool {
+func (this ValueCount) Less(i, j int) bool {
 	return this.Count[i] > this.Count[j]
 }
-func (this UrlCount) Swap(i, j int) {
-	this.Url[i], this.Url[j] = this.Url[j], this.Url[i]
+func (this ValueCount) Swap(i, j int) {
+	this.Value[i], this.Value[j] = this.Value[j], this.Value[i]
 	this.Count[i], this.Count[j] = this.Count[j], this.Count[i]
 }
