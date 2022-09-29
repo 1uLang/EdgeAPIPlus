@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/accesslogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
@@ -308,7 +309,7 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessType(ctx context.Context, 
 	}
 	resp := &pb.StatisticsHTTPAccessTypeResponse{}
 	for _, v := range counts {
-		resp.Attacks = append(resp.Attacks, &pb.HTTPAccessType{Count: v.Count, Code: v.Code, Name: v.Name})
+		resp.Attacks = append(resp.Attacks, &pb.HTTPAccessType{ServerId: fmt.Sprintf("%d", v.ServerId), Count: v.Count, Code: v.Code, Name: v.Name})
 	}
 
 	return resp, nil

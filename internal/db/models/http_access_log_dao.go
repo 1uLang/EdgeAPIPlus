@@ -1058,7 +1058,6 @@ func (this *HTTPAccessLogDAO) StatisticsType(tx *dbs.Tx, day string, userId int6
 				}(k, group)
 			}
 			gwg.Wait()
-
 		}(daoWrapper)
 	}
 	wg.Wait()
@@ -1109,6 +1108,10 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 			dwg := &sync.WaitGroup{}
 			dwg.Add(len(daoList))
 			stat := &AccessStatistics{ServerId: serverId}
+			//访问IP地址列表
+			svrAddrStats1 := []*HTTPAccessLog{}
+			// 攻击访问IP地址列表
+			svrAddrStats2 := []*HTTPAccessLog{}
 			for _, daoWrapper := range daoList {
 				go func(daoWrapper *HTTPAccessLogDAOWrapper, stat *AccessStatistics) {
 					defer dwg.Done()
@@ -1123,16 +1126,9 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 						logs.Println("[DB_NODE]" + err.Error())
 						return
 					}
-
 					// 1. 统计该服务的服务总数
-					query := dao.Query(tx)
-
-					// 条件
-					query.Attr("serverId", serverId).
-						Reuse(false)
-
-					// 开始查询
-					accessTotal, err := query.
+					accessTotal, err := dao.Query(tx).Attr("serverId", serverId).
+						Reuse(false).
 						Table(tableName).
 						Count()
 					if err != nil {
@@ -1140,27 +1136,19 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 						return
 					}
 					// 2. 统计防护的总数
-					query = dao.Query(tx)
-
-					// 条件
-					query.Attr("serverId", serverId).
-						Reuse(false)
-
-					query.Where("firewallPolicyId>0")
-					query.UseIndex("firewallPolicyId")
-					// 开始查询
-					attackTotal, err := query.
+					attackTotal, err := dao.Query(tx).Attr("serverId", serverId).
+						Reuse(false).Where("firewallPolicyId>0").UseIndex("firewallPolicyId").
 						Table(tableName).
 						Count()
 					if err != nil {
 						logs.Println("[DB_NODE]" + err.Error())
 						return
 					}
-					// 3. 访问IP总数
-					query = dao.Query(tx)
-					// 4. 拦截IP总数
-					query = dao.Query(tx)
-					accessIpTotal, err := query.SQL(fmt.Sprintf("select COUNT(*) from(SELECT  `remoteAddr` FROM `%s` WHERE `serverId`=%d GROUP BY `remoteAddr`) as addrs", tableName, serverId)).Count()
+					// 3. 访问IP列表
+					var logs1 []*HTTPAccessLog
+					_, err = dao.Query(tx).SQL(fmt.Sprintf("SELECT  `remoteAddr` FROM `%s`"+
+						" WHERE `serverId`=%d GROUP BY `remoteAddr`", tableName, serverId)).Slice(&logs1).
+						FindAll()
 					if err != nil {
 						logs.Println("[DB_NODE]" + err.Error())
 						return
@@ -1169,9 +1157,10 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 						logs.Println("[DB_NODE]" + err.Error())
 						return
 					}
-					// 4. 拦截IP总数
-					query = dao.Query(tx)
-					attackIpTotal, err := query.SQL(fmt.Sprintf("select COUNT(*) from (SELECT  `remoteAddr` FROM `%s` WHERE `serverId`=%d and `firewallPolicyId`>0 GROUP BY `remoteAddr`) as addrs", tableName, serverId)).Count()
+					// 4. 拦截IP列表
+					var logs2 []*HTTPAccessLog
+					_, err = dao.Query(tx).SQL(fmt.Sprintf("SELECT  `remoteAddr` FROM `%s` WHERE `serverId`=%d and `firewallPolicyId`>0 GROUP BY `remoteAddr`", tableName, serverId)).Slice(&logs2).
+						FindAll()
 					if err != nil {
 						logs.Println("[DB_NODE]" + err.Error())
 						return
@@ -1179,14 +1168,29 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 					locker.Lock()
 					stat.AccessTotal += accessTotal
 					stat.AttackTotal += attackTotal
-					stat.AccessIpTotal += accessIpTotal
-					stat.AttackIpTotal += attackIpTotal
+					svrAddrStats1 = append(svrAddrStats1, logs1...)
+					svrAddrStats2 = append(svrAddrStats2, logs2...)
 					locker.Unlock()
 				}(daoWrapper, stat)
 			}
 			dwg.Wait()
-
+			// 访问IP地址列表 差重map
+			fraddr1 := map[string]bool{}
+			// 攻击IP地址列表 差重map
+			fraddr2 := map[string]bool{}
 			locker.Lock()
+			for _, v := range svrAddrStats1 {
+				if _, ok := fraddr1[v.RemoteAddr]; !ok {
+					fraddr1[v.RemoteAddr] = true
+					stat.AccessIpTotal++
+				}
+			}
+			for _, v := range svrAddrStats2 {
+				if _, ok := fraddr2[v.RemoteAddr]; !ok {
+					fraddr2[v.RemoteAddr] = true
+					stat.AttackIpTotal++
+				}
+			}
 			stats = append(stats, stat)
 			locker.Unlock()
 		}(serverId)
