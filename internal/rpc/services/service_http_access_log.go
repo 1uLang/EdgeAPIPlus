@@ -311,7 +311,6 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessType(ctx context.Context, 
 	for _, v := range counts {
 		resp.Attacks = append(resp.Attacks, &pb.HTTPAccessType{ServerId: fmt.Sprintf("%d", v.ServerId), Count: v.Count, Code: v.Code, Name: v.Name})
 	}
-
 	return resp, nil
 }
 

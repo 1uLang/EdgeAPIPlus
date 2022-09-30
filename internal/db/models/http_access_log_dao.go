@@ -985,35 +985,34 @@ func (this *HTTPAccessLogDAO) StatisticsType(tx *dbs.Tx, day string, userId int6
 	}
 
 	locker := sync.Mutex{}
-	count := len(daoList)
 	wg := &sync.WaitGroup{}
-	wg.Add(count)
-	for _, daoWrapper := range daoList {
-		go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+	wg.Add(len(serverIds))
+
+	for _, serverId := range serverIds {
+		go func(serverId int64) {
 			defer wg.Done()
 
-			dao := daoWrapper.DAO
-			tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-			if !exists {
-				// 表格不存在则跳过
-				return
-			}
-			if err != nil {
-				logs.Println("[DB_NODE]" + err.Error())
-				return
-			}
 			gwg := &sync.WaitGroup{}
 			gwg.Add(len(attacks1))
 			for k, group := range attacks1 {
 				go func(k int, group AttackType) {
 					defer gwg.Done()
-
-					sgwg := &sync.WaitGroup{}
-					sgwg.Add(len(serverIds))
-
-					for _, serverId := range serverIds {
-						go func(k int, group AttackType, serverId int64) {
-							defer sgwg.Done()
+					dwg := &sync.WaitGroup{}
+					dwg.Add(len(daoList))
+					var count int64
+					for _, daoWrapper := range daoList {
+						go func(daoWrapper *HTTPAccessLogDAOWrapper, count *int64) {
+							defer dwg.Done()
+							dao := daoWrapper.DAO
+							tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
+							if !exists {
+								// 表格不存在则跳过
+								return
+							}
+							if err != nil {
+								logs.Println("[DB_NODE]" + err.Error())
+								return
+							}
 							query := dao.Query(tx)
 
 							// 条件
@@ -1043,22 +1042,24 @@ func (this *HTTPAccessLogDAO) StatisticsType(tx *dbs.Tx, day string, userId int6
 									return
 								}
 							}
-
 							locker.Lock()
-							attacks = append(attacks, &AttackType{
-								Code:     attacks1[k].Code,
-								Name:     attacks1[k].Name,
-								ServerId: serverId,
-								Count:    c,
-							})
+							*count += c
 							locker.Unlock()
-						}(k, group, serverId)
+						}(daoWrapper, &count)
 					}
-					sgwg.Wait()
+					dwg.Wait()
+					locker.Lock()
+					attacks = append(attacks, &AttackType{
+						Code:     attacks1[k].Code,
+						Name:     attacks1[k].Name,
+						ServerId: serverId,
+						Count:    count,
+					})
+					locker.Unlock()
 				}(k, group)
 			}
 			gwg.Wait()
-		}(daoWrapper)
+		}(serverId)
 	}
 	wg.Wait()
 
