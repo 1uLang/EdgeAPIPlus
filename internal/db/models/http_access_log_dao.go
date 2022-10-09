@@ -464,7 +464,7 @@ func (this *HTTPAccessLogDAO) FindAccessLogWithRequestId(tx *dbs.Tx, requestId s
 
 // SearchAccessLogs 根据请求ID获取访问日志
 func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
-	ip, domain, code, method string, startAt, endAt uint64, userId int64, limit int64, allLog, errLog bool) (
+	ip, domain, code, method, keyword string, startAt, endAt uint64, userId int64, limit int64, allLog, errLog bool) (
 	result []*HTTPAccessLog, nextRequestId string, err error) {
 
 	if len(day) != 8 && limit < 0 {
@@ -588,6 +588,67 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 			if len(method) > 0 {
 				query.Where("JSON_EXTRACT(content, '$.requestMethod')=:method1").
 					Param("method1", strings.ToUpper(method))
+			}
+			if len(keyword) > 0 {
+				// remoteAddr
+				if hasRemoteAddrField && net.ParseIP(keyword) != nil {
+					query.Attr("remoteAddr", keyword)
+				} else if hasRemoteAddrField && regexp.MustCompile(`^ip:.+`).MatchString(keyword) {
+					keyword = keyword[3:]
+					pieces := strings.SplitN(keyword, ",", 2)
+					if len(pieces) == 1 || len(pieces[1]) == 0 {
+						query.Attr("remoteAddr", pieces[0])
+					} else {
+						query.Between("INET_ATON(remoteAddr)", utils.IP2Long(pieces[0]), utils.IP2Long(pieces[1]))
+					}
+				} else {
+					if regexp.MustCompile(`^ip:.+`).MatchString(keyword) {
+						keyword = keyword[3:]
+					}
+
+					useOriginKeyword := false
+
+					where := "JSON_EXTRACT(content, '$.remoteAddr') LIKE :keyword OR JSON_EXTRACT(content, '$.requestURI') LIKE :keyword OR JSON_EXTRACT(content, '$.host') LIKE :keyword OR JSON_EXTRACT(content, '$.userAgent') LIKE :keyword"
+
+					jsonKeyword, err := json.Marshal(keyword)
+					if err == nil {
+						where += " OR JSON_CONTAINS(content, :jsonKeyword, '$.tags')"
+						query.Param("jsonKeyword", jsonKeyword)
+					}
+
+					// 请求方法
+					if keyword == http.MethodGet ||
+						keyword == http.MethodPost ||
+						keyword == http.MethodHead ||
+						keyword == http.MethodConnect ||
+						keyword == http.MethodPut ||
+						keyword == http.MethodTrace ||
+						keyword == http.MethodOptions ||
+						keyword == http.MethodDelete ||
+						keyword == http.MethodPatch {
+						where += " OR JSON_EXTRACT(content, '$.requestMethod')=:originKeyword"
+						useOriginKeyword = true
+					}
+
+					// 响应状态码
+					if regexp.MustCompile(`^\d{3}$`).MatchString(keyword) {
+						where += " OR JSON_EXTRACT(content, '$.status')=:intKeyword"
+						query.Param("intKeyword", types.Int(keyword))
+					}
+
+					if regexp.MustCompile(`^\d{3}-\d{3}$`).MatchString(keyword) {
+						pieces := strings.Split(keyword, "-")
+						where += " OR JSON_EXTRACT(content, '$.status') BETWEEN :intKeyword1 AND :intKeyword2"
+						query.Param("intKeyword1", types.Int(pieces[0]))
+						query.Param("intKeyword2", types.Int(pieces[1]))
+					}
+
+					query.Where("("+where+")").
+						Param("keyword", "%"+keyword+"%")
+					if useOriginKeyword {
+						query.Param("originKeyword", keyword)
+					}
+				}
 			}
 			// offset
 			if len(lastRequestId) > 0 {
@@ -733,6 +794,7 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 			// 统计
 
 			mergeLogs, total, ips, region := statisticsTop(serverLogs, top, ip2region)
+
 			locker.Lock()
 			result = append(result, mergeLogs...)
 			resp.Tops = append(resp.Tops, &StatisticsTopItem{ServerId: serverId, Total: total, Ips: ips, Region: region})
@@ -754,9 +816,13 @@ func statisticsTop(result []*HTTPAccessLog, top int, ip2region func(string) (str
 
 	for _, v := range result {
 		total += v.Count
+
 		province, city := ip2region(v.RemoteAddr)
 		if province == "" {
-			continue
+			province = "未知"
+		}
+		if city == "" {
+			city = "未知"
 		}
 		regionCounts[province] += v.Count
 
@@ -828,6 +894,11 @@ func (this IpCount) Less(i, j int) bool {
 func (this IpCount) Swap(i, j int) {
 	this.IP[i], this.IP[j] = this.IP[j], this.IP[i]
 	this.Count[i], this.Count[j] = this.Count[j], this.Count[i]
+}
+
+type CodeCount struct {
+	Code  []uint32
+	Count []int64
 }
 
 type RegionCount struct {
@@ -1202,7 +1273,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 }
 
 // AttackURLTop 统计最受攻击的域名排行
-func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64, top int) (resp *AttackURLTop, err error) {
+func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64) (resp *AttackURLTop, err error) {
 	accessLogLocker.RLock()
 	daoList := []*HTTPAccessLogDAOWrapper{}
 	for _, daoWrapper := range httpAccessLogDAOMapping {
@@ -1318,8 +1389,8 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64,
 			}
 		}(serverId)
 		dwg.Wait()
-		mergeHostStats, hostCountStu := statisticsHostTop(serverHostStats, top)
-		serverUriStats, uriCountStu := statisticsUriTop(serverUriStats, top)
+		mergeHostStats, hostCountStu := statisticsHostTop(serverHostStats)
+		serverUriStats, uriCountStu := statisticsUriTop(serverUriStats)
 		locker.Lock()
 		hostStats = append(hostStats, mergeHostStats...)
 		uriStats = append(uriStats, serverUriStats...)
@@ -1328,12 +1399,12 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64,
 	}
 	wg.Wait()
 
-	_, hostCountStu := statisticsHostTop(hostStats, top)
-	_, uriCountStu := statisticsUriTop(uriStats, top)
+	_, hostCountStu := statisticsHostTop(hostStats)
+	_, uriCountStu := statisticsUriTop(uriStats)
 	resp.Tops = append(resp.Tops, &AttackUrlTopItem1{ServerId: 0, Hosts: hostCountStu, Uris: uriCountStu})
 	return resp, nil
 }
-func statisticsUriTop(serverStats []*HTTPAccessLog, top int) ([]*HTTPAccessLog, *ValueCount) {
+func statisticsUriTop(serverStats []*HTTPAccessLog) ([]*HTTPAccessLog, *ValueCount) {
 	// 同服务下排序
 	// 统计同域名下访护次数
 	uriCountMaps := make(map[string]int64, 0)
@@ -1356,15 +1427,13 @@ func statisticsUriTop(serverStats []*HTTPAccessLog, top int) ([]*HTTPAccessLog, 
 	if min > len(uriCountStu.Count) {
 		min = len(uriCountStu.Count)
 	}
-	if min > top {
-		min = top
-	}
+
 	uriCountStu.Value = uriCountStu.Value[:min]
 	uriCountStu.Count = uriCountStu.Count[:min]
 	return mergeStats, &uriCountStu
 }
 
-func statisticsHostTop(serverStats []*HTTPAccessLog, top int) ([]*HTTPAccessLog, *ValueCount) {
+func statisticsHostTop(serverStats []*HTTPAccessLog) ([]*HTTPAccessLog, *ValueCount) {
 	// 同服务下排序
 	// 统计同域名下访护次数
 	hostCountMaps := make(map[string]int64, 0)
@@ -1386,9 +1455,6 @@ func statisticsHostTop(serverStats []*HTTPAccessLog, top int) ([]*HTTPAccessLog,
 	min := len(hostCountStu.Value)
 	if min > len(hostCountStu.Count) {
 		min = len(hostCountStu.Count)
-	}
-	if min > top {
-		min = top
 	}
 	hostCountStu.Value = hostCountStu.Value[:min]
 	hostCountStu.Count = hostCountStu.Count[:min]
@@ -1521,6 +1587,129 @@ func statisticsAccessIpTop(serverStats []*HTTPAccessLog, top int) ([]*HTTPAccess
 	ipCountStu.Count = ipCountStu.Count[:min]
 	return mergeStats, &ipCountStu
 }
+func statisticsStatusCodeTop(serverStats []*HTTPAccessLog) ([]*HTTPAccessLog, *CodeCount) {
+	// 同服务下排序
+	// 统计同域名下访护次数
+	codeCountMaps := make(map[uint32]int64, 0)
+	// 合并同域名的访护次数
+	mergeStats := make([]*HTTPAccessLog, 0)
+	// 排序
+	codeCountStu := CodeCount{}
+	for _, stat := range serverStats {
+		codeCountMaps[stat.Status] += stat.Count
+	}
+	for code, count := range codeCountMaps {
+		mergeStats = append(mergeStats, &HTTPAccessLog{Status: code, Count: count})
+		codeCountStu.Code = append(codeCountStu.Code, code)
+		codeCountStu.Count = append(codeCountStu.Count, count)
+	}
+
+	min := len(codeCountStu.Code)
+	if min > len(codeCountStu.Count) {
+		min = len(codeCountStu.Count)
+	}
+
+	codeCountStu.Code = codeCountStu.Code[:min]
+	codeCountStu.Count = codeCountStu.Count[:min]
+	return mergeStats, &codeCountStu
+}
+
+// StatusCodeStatistics 客户端访问IP排行
+func (this *HTTPAccessLogDAO) StatusCodeStatistics(tx *dbs.Tx, day string, userId int64) (resp *StatusCodeTop, err error) {
+	accessLogLocker.RLock()
+	daoList := []*HTTPAccessLogDAOWrapper{}
+	for _, daoWrapper := range httpAccessLogDAOMapping {
+		daoList = append(daoList, daoWrapper)
+	}
+	accessLogLocker.RUnlock()
+
+	serverIds := []int64{}
+	resp = &StatusCodeTop{Tops: make([]*StatusCodeTopItem, 0)}
+	if userId > 0 {
+		serverIds, err = SharedServerDAO.FindAllEnabledServerIdsWithUserId(tx, userId)
+
+		if err != nil {
+			return
+		}
+		if len(serverIds) == 0 {
+			return
+		}
+	}
+
+	if len(daoList) == 0 {
+		daoList = []*HTTPAccessLogDAOWrapper{{
+			DAO:    SharedHTTPAccessLogDAO,
+			NodeId: 0,
+		}}
+	}
+
+	locker := sync.Mutex{}
+	stats := make([]*HTTPAccessLog, 0)
+	wg := &sync.WaitGroup{}
+	wg.Add(len(serverIds))
+	for _, serverId := range serverIds {
+
+		go func(serverId int64) {
+			defer wg.Done()
+
+			l := sync.Mutex{}
+			serverLogs := make([]*HTTPAccessLog, 0)
+
+			dwg := &sync.WaitGroup{}
+			dwg.Add(len(daoList))
+			for _, daoWrapper := range daoList {
+				go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+					defer dwg.Done()
+
+					dao := daoWrapper.DAO
+					tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
+					if !exists {
+						// 表格不存在则跳过
+						return
+					}
+					if err != nil {
+						logs.Println("[DB_NODE]" + err.Error())
+						return
+					}
+
+					// 开始查询
+					query := dao.Query(tx)
+
+					// 条件
+					query.Attr("serverId", serverId).
+						Reuse(false)
+
+					var ones []*HTTPAccessLog
+					// 开始查询
+					_, err = query.
+						Table(tableName).
+						Group("status").
+						Result("status, COUNT(1) AS count").
+						Slice(&ones).
+						FindAll()
+					if err != nil {
+						logs.Println("[DB_NODE]" + err.Error())
+						return
+					}
+					l.Lock()
+					serverLogs = append(serverLogs, ones...)
+					l.Unlock()
+				}(daoWrapper)
+			}
+			dwg.Wait()
+			mergeStats, codeCountStu := statisticsStatusCodeTop(serverLogs)
+			locker.Lock()
+			stats = append(stats, mergeStats...)
+			resp.Tops = append(resp.Tops, &StatusCodeTopItem{ServerId: serverId, Counts: codeCountStu.Count, Codes: codeCountStu.Code})
+			locker.Unlock()
+		}(serverId)
+	}
+	wg.Wait()
+
+	_, ipCountStu := statisticsStatusCodeTop(stats)
+	resp.Tops = append(resp.Tops, &StatusCodeTopItem{ServerId: 0, Counts: ipCountStu.Count, Codes: ipCountStu.Code})
+	return resp, nil
+}
 
 type AttackType struct {
 	ServerId int64   `json:"serverId"` //所属服务ID
@@ -1554,10 +1743,18 @@ type AttackUrlTopItem1 struct {
 type AccessIPTop struct {
 	Tops []*AccessIPTopItem `json:"tops"`
 }
+type StatusCodeTop struct {
+	Tops []*StatusCodeTopItem `json:"tops"`
+}
 
 type AccessIPTopItem struct {
 	ServerId int64    `json:"server_id"`
 	IPs      []string `json:"url"`
+	Counts   []int64  `json:"count"`
+}
+type StatusCodeTopItem struct {
+	ServerId int64    `json:"server_id"`
+	Codes    []uint32 `json:"codes"`
 	Counts   []int64  `json:"count"`
 }
 type ValueCount struct {

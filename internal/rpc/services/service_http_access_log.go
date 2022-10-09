@@ -159,7 +159,7 @@ func (this *HTTPAccessLogService) SearchHTTPAccessLogs(ctx context.Context, req 
 		}
 	}
 	accessLogs, requestId, err := models.SharedHTTPAccessLogDAO.SearchAccessLogs(tx,
-		req.RequestId, req.Day, req.Ip, req.Domain, req.Code, req.RequestMethod, req.StartAt, req.EndAt, req.UserId, req.Size, req.HasAll, req.HasError)
+		req.RequestId, req.Day, req.Ip, req.Domain, req.Code, req.RequestMethod, req.Keyword, req.StartAt, req.EndAt, req.UserId, req.Size, req.HasAll, req.HasError)
 
 	if err != nil {
 		return nil, err
@@ -337,7 +337,7 @@ func (this *HTTPAccessLogService) StatisticsAttackURLTop(ctx context.Context, re
 	// 校验请求
 	tx := this.NullTx()
 	//防止存在 循环包
-	stats, err := models.SharedHTTPAccessLogDAO.AttackURLTop(tx, req.Day, req.User, int(req.Top))
+	stats, err := models.SharedHTTPAccessLogDAO.AttackURLTop(tx, req.Day, req.User)
 	if err != nil {
 		return nil, err
 	}
@@ -364,6 +364,23 @@ func (this *HTTPAccessLogService) StatisticsAccessIPTop(ctx context.Context, req
 	resp := &pb.StatisticsHTTPAccessIPTopResponse{}
 	for _, v := range stats.Tops {
 		resp.Access = append(resp.Access, &pb.HTTPAccessIP{ServerId: v.ServerId, Ip: v.IPs, Count: v.Counts})
+	}
+
+	return resp, nil
+}
+
+// StatusCodeStatistics 访问状态码统计
+func (this *HTTPAccessLogService) StatusCodeStatistics(ctx context.Context, req *pb.StatisticsHTTPAccessTopRequest) (*pb.StatisticsStatusCodeTopResponse, error) {
+	// 校验请求
+	tx := this.NullTx()
+	//防止存在 循环包
+	stats, err := models.SharedHTTPAccessLogDAO.StatusCodeStatistics(tx, req.Day, req.User)
+	if err != nil {
+		return nil, err
+	}
+	resp := &pb.StatisticsStatusCodeTopResponse{}
+	for _, v := range stats.Tops {
+		resp.Codes = append(resp.Codes, &pb.StatusCode{ServerId: v.ServerId, Code: v.Codes, Count: v.Counts})
 	}
 
 	return resp, nil
