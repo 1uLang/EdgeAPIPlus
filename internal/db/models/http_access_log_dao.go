@@ -706,7 +706,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 
 // StatisticsTop 统计指定域名的攻击ip排行
 func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
-	day string, userId int64, top int, ip2region func(string) (string, string)) (resp *StatisticsTop, err error) {
+	day string, userId int64, ip2region func(string) (string, string)) (resp *StatisticsTop, err error) {
 
 	accessLogLocker.RLock()
 	daoList := []*HTTPAccessLogDAOWrapper{}
@@ -793,7 +793,7 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 			dwg.Wait()
 			// 统计
 
-			mergeLogs, total, ips, region := statisticsTop(serverLogs, top, ip2region)
+			mergeLogs, total, ips, region := statisticsTop(serverLogs, ip2region)
 
 			locker.Lock()
 			result = append(result, mergeLogs...)
@@ -802,11 +802,11 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 		}(serverId)
 	}
 	wg.Wait()
-	_, total, ips, region := statisticsTop(result, top, ip2region)
+	_, total, ips, region := statisticsTop(result, ip2region)
 	resp.Tops = append(resp.Tops, &StatisticsTopItem{ServerId: 0, Total: total, Ips: ips, Region: region})
 	return resp, nil
 }
-func statisticsTop(result []*HTTPAccessLog, top int, ip2region func(string) (string, string)) (mergeLogs []*HTTPAccessLog, total int64, ips IpCount, region RegionCount) {
+func statisticsTop(result []*HTTPAccessLog, ip2region func(string) (string, string)) (mergeLogs []*HTTPAccessLog, total int64, ips IpCount, region RegionCount) {
 
 	// ip+city
 	ipCounts := make(map[string]int64, 0)
@@ -849,18 +849,12 @@ func statisticsTop(result []*HTTPAccessLog, top int, ip2region func(string) (str
 	if min > len(ipCountStu.Count) {
 		min = len(ipCountStu.Count)
 	}
-	if min > top {
-		min = top
-	}
 	ipCountStu.IP = ipCountStu.IP[:min]
 	ipCountStu.Count = ipCountStu.Count[:min]
 
 	min = len(regionCountStu.Region)
 	if min > len(regionCountStu.Count) {
 		min = len(regionCountStu.Count)
-	}
-	if min > top {
-		min = top
 	}
 	regionCountStu.Region = regionCountStu.Region[:min]
 	regionCountStu.Count = regionCountStu.Count[:min]
