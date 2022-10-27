@@ -261,13 +261,12 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessTop(ctx context.Context, r
 	}
 	tx := this.NullTx()
 	//防止存在 循环包
-	stats, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, func(s string) (string, string) {
+	stats, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, func(s string) (string, string, string) {
 		r, _ := iplibrary.SharedLibrary.Lookup(s)
-		//忽略国外的攻击
-		if r == nil || r.Country != "中国" {
-			return "", ""
+		if r == nil {
+			return "未知", "", ""
 		}
-		return r.Province, r.City
+		return r.Country, r.Province, r.City
 	})
 	if err != nil {
 		return nil, err

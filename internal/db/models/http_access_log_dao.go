@@ -706,7 +706,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 
 // StatisticsTop 统计指定域名的攻击ip排行
 func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
-	day string, userId int64, ip2region func(string) (string, string)) (resp *StatisticsTop, err error) {
+	day string, userId int64, ip2region func(string) (string, string, string)) (resp *StatisticsTop, err error) {
 
 	accessLogLocker.RLock()
 	daoList := []*HTTPAccessLogDAOWrapper{}
@@ -806,7 +806,7 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 	resp.Tops = append(resp.Tops, &StatisticsTopItem{ServerId: 0, Total: total, Ips: ips, Region: region})
 	return resp, nil
 }
-func statisticsTop(result []*HTTPAccessLog, ip2region func(string) (string, string)) (mergeLogs []*HTTPAccessLog, total int64, ips IpCount, region RegionCount) {
+func statisticsTop(result []*HTTPAccessLog, ip2region func(string) (string, string, string)) (mergeLogs []*HTTPAccessLog, total int64, ips IpCount, region RegionCount) {
 
 	// ip+city
 	ipCounts := make(map[string]int64, 0)
@@ -817,17 +817,11 @@ func statisticsTop(result []*HTTPAccessLog, ip2region func(string) (string, stri
 	for _, v := range result {
 		total += v.Count
 
-		province, city := ip2region(v.RemoteAddr)
-		if province == "" {
-			province = "未知"
-		}
-		if city == "" {
-			city = "未知"
-		}
+		country, province, city := ip2region(v.RemoteAddr)
 		regionCounts[province] += v.Count
 
-		ipCounts[v.RemoteAddr+"("+province+city+")"] += v.Count
-		ipCity[v.RemoteAddr+"("+province+city+")"] = v.RemoteAddr
+		ipCounts[v.RemoteAddr+"("+country+province+city+")"] += v.Count
+		ipCity[v.RemoteAddr+"("+country+province+city+")"] = v.RemoteAddr
 	}
 	ipCountStu := IpCount{}
 	regionCountStu := RegionCount{}
