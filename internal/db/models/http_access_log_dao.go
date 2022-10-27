@@ -818,6 +818,9 @@ func statisticsTop(result []*HTTPAccessLog, ip2region func(string) (string, stri
 		total += v.Count
 
 		country, province, city := ip2region(v.RemoteAddr)
+		if province == "" {
+			province = country
+		}
 		regionCounts[province] += v.Count
 
 		ipCounts[v.RemoteAddr+"("+country+province+city+")"] += v.Count
