@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/accesslogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
@@ -158,7 +159,7 @@ func (this *HTTPAccessLogService) SearchHTTPAccessLogs(ctx context.Context, req 
 		}
 	}
 	accessLogs, requestId, err := models.SharedHTTPAccessLogDAO.SearchAccessLogs(tx,
-		req.RequestId, req.Day, req.Ip, req.Domain, req.Code, req.RequestMethod, req.StartAt, req.EndAt, req.UserId, req.Size, req.HasAll, req.HasError)
+		req.RequestId, req.Day, req.Ip, req.Domain, req.Code, req.RequestMethod, req.Keyword, req.StartAt, req.EndAt, req.UserId, req.Size, req.HasAll, req.HasError)
 
 	if err != nil {
 		return nil, err
@@ -260,13 +261,12 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessTop(ctx context.Context, r
 	}
 	tx := this.NullTx()
 	//防止存在 循环包
-	stats, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, int(req.Top), func(s string) (string, string) {
+	stats, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, func(s string) (string, string, string) {
 		r, _ := iplibrary.SharedLibrary.Lookup(s)
-		//忽略国外的攻击
-		if r == nil || r.Country != "中国" {
-			return "", ""
+		if r == nil {
+			return "未知", "", ""
 		}
-		return r.Province, r.City
+		return r.Country, r.Province, r.City
 	})
 	if err != nil {
 		return nil, err
@@ -308,9 +308,8 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessType(ctx context.Context, 
 	}
 	resp := &pb.StatisticsHTTPAccessTypeResponse{}
 	for _, v := range counts {
-		resp.Attacks = append(resp.Attacks, &pb.HTTPAccessType{Count: v.Count, Code: v.Code, Name: v.Name})
+		resp.Attacks = append(resp.Attacks, &pb.HTTPAccessType{ServerId: fmt.Sprintf("%d", v.ServerId), Count: v.Count, Code: v.Code, Name: v.Name})
 	}
-
 	return resp, nil
 }
 
@@ -337,7 +336,7 @@ func (this *HTTPAccessLogService) StatisticsAttackURLTop(ctx context.Context, re
 	// 校验请求
 	tx := this.NullTx()
 	//防止存在 循环包
-	stats, err := models.SharedHTTPAccessLogDAO.AttackURLTop(tx, req.Day, req.User, int(req.Top))
+	stats, err := models.SharedHTTPAccessLogDAO.AttackURLTop(tx, req.Day, req.User)
 	if err != nil {
 		return nil, err
 	}
@@ -364,6 +363,23 @@ func (this *HTTPAccessLogService) StatisticsAccessIPTop(ctx context.Context, req
 	resp := &pb.StatisticsHTTPAccessIPTopResponse{}
 	for _, v := range stats.Tops {
 		resp.Access = append(resp.Access, &pb.HTTPAccessIP{ServerId: v.ServerId, Ip: v.IPs, Count: v.Counts})
+	}
+
+	return resp, nil
+}
+
+// StatusCodeStatistics 访问状态码统计
+func (this *HTTPAccessLogService) StatusCodeStatistics(ctx context.Context, req *pb.StatisticsHTTPAccessTopRequest) (*pb.StatisticsStatusCodeTopResponse, error) {
+	// 校验请求
+	tx := this.NullTx()
+	//防止存在 循环包
+	stats, err := models.SharedHTTPAccessLogDAO.StatusCodeStatistics(tx, req.Day, req.User)
+	if err != nil {
+		return nil, err
+	}
+	resp := &pb.StatisticsStatusCodeTopResponse{}
+	for _, v := range stats.Tops {
+		resp.Codes = append(resp.Codes, &pb.StatusCode{ServerId: v.ServerId, Code: v.Codes, Count: v.Counts})
 	}
 
 	return resp, nil
