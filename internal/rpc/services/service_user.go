@@ -102,7 +102,7 @@ func (this *UserService) CountAllEnabledUsers(ctx context.Context, req *pb.Count
 
 	tx := this.NullTx()
 
-	count, err := models.SharedUserDAO.CountAllEnabledUsers(tx, 0, req.Keyword)
+	count, err := models.SharedUserDAO.CountAllEnabledUsers(tx, req.ClusterId, req.Keyword)
 	if err != nil {
 		return nil, err
 	}
