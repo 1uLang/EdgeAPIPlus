@@ -8,6 +8,7 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/configs"
+	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
@@ -103,6 +104,12 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 			remotelogs.Error("NODE_SERVICE", "change node active failed: "+err.Error())
 		}
 	}()
+
+	// 设置API节点
+	err = models.SharedNodeDAO.UpdateNodeConnectedAPINodes(nil, nodeId, []int64{teaconst.NodeId})
+	if err != nil {
+		return err
+	}
 
 	// 返回连接成功
 	{
