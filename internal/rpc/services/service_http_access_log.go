@@ -3,13 +3,14 @@ package services
 import (
 	"context"
 	"fmt"
+	"github.com/1uLang/EdgeCommon/pkg/iplibrary"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
-	"github.com/TeaOSLab/EdgeAPI/internal/iplibrary"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
+	"net"
 	"regexp"
 	"sync"
 )
@@ -318,11 +319,11 @@ func (this *HTTPAccessLogService) StatisticsHTTPAccessTop(ctx context.Context, r
 	tx := this.NullTx()
 	//防止存在 循环包
 	stats, err := models.SharedHTTPAccessLogDAO.StatisticsTop(tx, req.Day, req.User, func(s string) (string, string, string) {
-		r, _ := iplibrary.SharedLibrary.Lookup(s)
-		if r == nil {
+		r := iplibrary.Lookup(net.ParseIP(s))
+		if r.CountryName() == "" {
 			return "未知", "", ""
 		}
-		return r.Country, r.Province, r.City
+		return r.CountryName(), r.ProvinceName(), r.CityName()
 	})
 	if err != nil {
 		return nil, err

@@ -1207,7 +1207,7 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 		var instance = daoWrapper.DAO.Instance
 		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
 		if err != nil {
-			return
+			return nil, err
 		}
 		if !def.Exists {
 			continue
@@ -1553,7 +1553,7 @@ func (this *HTTPAccessLogDAO) StatisticsType(tx *dbs.Tx, day string, userId int6
 		var instance = daoWrapper.DAO.Instance
 		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
 		if err != nil {
-			return
+			return nil, err
 		}
 		if !def.Exists {
 			continue
@@ -1707,7 +1707,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 		var instance = daoWrapper.DAO.Instance
 		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
 		if err != nil {
-			return
+			return nil, err
 		}
 		if !def.Exists {
 			continue
@@ -1876,7 +1876,7 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64)
 		var instance = daoWrapper.DAO.Instance
 		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
 		if err != nil {
-			return
+			return nil, err
 		}
 		if !def.Exists {
 			continue
@@ -2086,7 +2086,7 @@ func (this *HTTPAccessLogDAO) AccessIPTop(tx *dbs.Tx, day string, userId int64, 
 		var instance = daoWrapper.DAO.Instance
 		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
 		if err != nil {
-			return
+			return nil, err
 		}
 		if !def.Exists {
 			continue
@@ -2266,7 +2266,7 @@ func (this *HTTPAccessLogDAO) StatusCodeStatistics(tx *dbs.Tx, day string, userI
 		var instance = daoWrapper.DAO.Instance
 		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
 		if err != nil {
-			return
+			return nil, err
 		}
 		if !def.Exists {
 			continue
