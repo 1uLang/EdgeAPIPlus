@@ -20,7 +20,7 @@ func (this *LogService) CreateLog(ctx context.Context, req *pb.CreateLogRequest)
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedLogDAO.CreateLog(tx, userType, userId, req.Level, req.Description, req.Action, req.Ip)
 	if err != nil {
@@ -32,12 +32,12 @@ func (this *LogService) CreateLog(ctx context.Context, req *pb.CreateLogRequest)
 // CountLogs 计算日志数量
 func (this *LogService) CountLogs(ctx context.Context, req *pb.CountLogRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	count, err := models.SharedLogDAO.CountLogs(tx, req.DayFrom, req.DayTo, req.Keyword, req.UserType)
 	if err != nil {
@@ -49,12 +49,12 @@ func (this *LogService) CountLogs(ctx context.Context, req *pb.CountLogRequest) 
 // ListLogs 列出单页日志
 func (this *LogService) ListLogs(ctx context.Context, req *pb.ListLogsRequest) (*pb.ListLogsResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	logs, err := models.SharedLogDAO.ListLogs(tx, req.Offset, req.Size, req.DayFrom, req.DayTo, req.Keyword, req.UserType)
 	if err != nil {
@@ -96,14 +96,14 @@ func (this *LogService) ListLogs(ctx context.Context, req *pb.ListLogsRequest) (
 
 // DeleteLogPermanently 删除单条
 func (this *LogService) DeleteLogPermanently(ctx context.Context, req *pb.DeleteLogPermanentlyRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// TODO 校验权限
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 执行物理删除
 	err = models.SharedLogDAO.DeleteLogPermanently(tx, req.LogId)
@@ -116,14 +116,14 @@ func (this *LogService) DeleteLogPermanently(ctx context.Context, req *pb.Delete
 
 // DeleteLogsPermanently 批量删除
 func (this *LogService) DeleteLogsPermanently(ctx context.Context, req *pb.DeleteLogsPermanentlyRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// TODO 校验权限
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 执行物理删除
 	for _, logId := range req.LogIds {
@@ -138,14 +138,14 @@ func (this *LogService) DeleteLogsPermanently(ctx context.Context, req *pb.Delet
 
 // CleanLogsPermanently 清理日志
 func (this *LogService) CleanLogsPermanently(ctx context.Context, req *pb.CleanLogsPermanentlyRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// TODO 校验权限
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	if req.ClearAll {
 		err = models.SharedLogDAO.DeleteAllLogsPermanently(tx)
@@ -164,7 +164,7 @@ func (this *LogService) CleanLogsPermanently(ctx context.Context, req *pb.CleanL
 
 // SumLogsSize 计算日志容量大小
 func (this *LogService) SumLogsSize(ctx context.Context, req *pb.SumLogsSizeRequest) (*pb.SumLogsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

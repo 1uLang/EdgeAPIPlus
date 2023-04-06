@@ -8,7 +8,7 @@ import (
 	"github.com/go-acme/lego/v4/lego"
 	acmelog "github.com/go-acme/lego/v4/log"
 	"github.com/go-acme/lego/v4/registration"
-	"io/ioutil"
+	"io"
 	"log"
 )
 
@@ -40,6 +40,7 @@ func (this *Request) Run() (certData []byte, keyData []byte, err error) {
 	}
 	if this.task.Provider.RequireEAB && this.task.Account == nil {
 		err = errors.New("account should not be nil when provider require EAB")
+		return
 	}
 
 	switch this.task.AuthType {
@@ -55,7 +56,7 @@ func (this *Request) Run() (certData []byte, keyData []byte, err error) {
 
 func (this *Request) runDNS() (certData []byte, keyData []byte, err error) {
 	if !this.debug {
-		acmelog.Logger = log.New(ioutil.Discard, "", log.LstdFlags)
+		acmelog.Logger = log.New(io.Discard, "", log.LstdFlags)
 	}
 
 	if this.task.User == nil {
@@ -75,7 +76,7 @@ func (this *Request) runDNS() (certData []byte, keyData []byte, err error) {
 		return
 	}
 
-	config := lego.NewConfig(this.task.User)
+	var config = lego.NewConfig(this.task.User)
 	config.Certificate.KeyType = certcrypto.RSA2048
 	config.CADirURL = this.task.Provider.APIURL
 	config.UserAgent = teaconst.ProductName + "/" + teaconst.Version
@@ -86,7 +87,7 @@ func (this *Request) runDNS() (certData []byte, keyData []byte, err error) {
 	}
 
 	// 注册用户
-	resource := this.task.User.GetRegistration()
+	var resource = this.task.User.GetRegistration()
 	if resource != nil {
 		resource, err = client.Registration.QueryRegistration()
 		if err != nil {
@@ -124,7 +125,7 @@ func (this *Request) runDNS() (certData []byte, keyData []byte, err error) {
 	}
 
 	// 申请证书
-	request := certificate.ObtainRequest{
+	var request = certificate.ObtainRequest{
 		Domains: this.task.Domains,
 		Bundle:  true,
 	}
@@ -138,7 +139,7 @@ func (this *Request) runDNS() (certData []byte, keyData []byte, err error) {
 
 func (this *Request) runHTTP() (certData []byte, keyData []byte, err error) {
 	if !this.debug {
-		acmelog.Logger = log.New(ioutil.Discard, "", log.LstdFlags)
+		acmelog.Logger = log.New(io.Discard, "", log.LstdFlags)
 	}
 
 	if this.task.User == nil {
@@ -146,7 +147,7 @@ func (this *Request) runHTTP() (certData []byte, keyData []byte, err error) {
 		return
 	}
 
-	config := lego.NewConfig(this.task.User)
+	var config = lego.NewConfig(this.task.User)
 	config.Certificate.KeyType = certcrypto.RSA2048
 	config.CADirURL = this.task.Provider.APIURL
 	config.UserAgent = teaconst.ProductName + "/" + teaconst.Version
@@ -157,7 +158,7 @@ func (this *Request) runHTTP() (certData []byte, keyData []byte, err error) {
 	}
 
 	// 注册用户
-	resource := this.task.User.GetRegistration()
+	var resource = this.task.User.GetRegistration()
 	if resource != nil {
 		resource, err = client.Registration.QueryRegistration()
 		if err != nil {
@@ -195,7 +196,7 @@ func (this *Request) runHTTP() (certData []byte, keyData []byte, err error) {
 	}
 
 	// 申请证书
-	request := certificate.ObtainRequest{
+	var request = certificate.ObtainRequest{
 		Domains: this.task.Domains,
 		Bundle:  true,
 	}

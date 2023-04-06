@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
@@ -95,8 +96,8 @@ func (this *HTTPCachePolicyDAO) FindAllEnabledCachePolicies(tx *dbs.Tx) (result 
 }
 
 // CreateCachePolicy 创建缓存策略
-func (this *HTTPCachePolicyDAO) CreateCachePolicy(tx *dbs.Tx, isOn bool, name string, description string, capacityJSON []byte, maxKeys int64, maxSizeJSON []byte, storageType string, storageOptionsJSON []byte) (int64, error) {
-	op := NewHTTPCachePolicyOperator()
+func (this *HTTPCachePolicyDAO) CreateCachePolicy(tx *dbs.Tx, isOn bool, name string, description string, capacityJSON []byte, maxKeys int64, maxSizeJSON []byte, storageType string, storageOptionsJSON []byte, syncCompressionCache bool) (int64, error) {
+	var op = NewHTTPCachePolicyOperator()
 	op.State = HTTPCachePolicyStateEnabled
 	op.IsOn = isOn
 	op.Name = name
@@ -112,6 +113,7 @@ func (this *HTTPCachePolicyDAO) CreateCachePolicy(tx *dbs.Tx, isOn bool, name st
 	if len(storageOptionsJSON) > 0 {
 		op.Options = storageOptionsJSON
 	}
+	op.SyncCompressionCache = syncCompressionCache
 
 	// 默认的缓存条件
 	cacheRef := &serverconfigs.HTTPCacheRef{
@@ -123,25 +125,13 @@ func (this *HTTPCachePolicyDAO) CreateCachePolicy(tx *dbs.Tx, isOn bool, name st
 		MinSize:               &shared.SizeCapacity{Count: 0, Unit: shared.SizeCapacityUnitKB},
 		SkipResponseSetCookie: true,
 		AllowChunkedEncoding:  true,
-		Conds: &shared.HTTPRequestCondsConfig{
-			IsOn:      true,
-			Connector: "or",
-			Groups: []*shared.HTTPRequestCondGroup{
-				{
-					IsOn:      true,
-					Connector: "or",
-					Conds: []*shared.HTTPRequestCond{
-						{
-							Type:      "url-extension",
-							IsRequest: true,
-							Param:     "${requestPathExtension}",
-							Operator:  shared.RequestCondOperatorIn,
-							Value:     `[".html", ".js", ".css", ".gif", ".png", ".bmp", ".jpeg", ".jpg", ".webp", ".ico", ".pdf", ".ttf", ".eot", ".tiff", ".svg", ".svgz", ".eps", ".woff", ".otf", ".woff2", ".tif", ".csv", ".xls", ".xlsx", ".doc", ".docx", ".ppt", ".pptx", ".wav", ".mp3", ".mp4", ".ogg", ".mid", ".midi"]`,
-						},
-					},
-					Description: "初始化规则",
-				},
-			},
+		AllowPartialContent:   true,
+		SimpleCond: &shared.HTTPRequestCond{
+			Type:      "url-extension",
+			IsRequest: true,
+			Param:     "${requestPathExtension}",
+			Operator:  shared.RequestCondOperatorIn,
+			Value:     `[".html", ".js", ".css", ".gif", ".png", ".bmp", ".jpeg", ".jpg", ".webp", ".ico", ".pdf", ".ttf", ".eot", ".tiff", ".svg", ".svgz", ".eps", ".woff", ".otf", ".woff2", ".tif", ".csv", ".xls", ".xlsx", ".doc", ".docx", ".ppt", ".pptx", ".wav", ".mp3", ".mp4", ".ogg", ".mid", ".midi"]`,
 		},
 	}
 	refsJSON, err := json.Marshal([]*serverconfigs.HTTPCacheRef{cacheRef})
@@ -182,13 +172,19 @@ func (this *HTTPCachePolicyDAO) CreateDefaultCachePolicy(tx *dbs.Tx, name string
 
 	var storageOptions = &serverconfigs.HTTPFileCacheStorage{
 		Dir: "/opt/cache",
+		MemoryPolicy: &serverconfigs.HTTPCachePolicy{
+			Capacity: &shared.SizeCapacity{
+				Count: 1,
+				Unit:  shared.SizeCapacityUnitGB,
+			},
+		},
 	}
 	storageOptionsJSON, err := json.Marshal(storageOptions)
 	if err != nil {
 		return 0, err
 	}
 
-	policyId, err := this.CreateCachePolicy(tx, true, "\""+name+"\"缓存策略", "默认创建的缓存策略", capacityJSON, 0, maxSizeJSON, serverconfigs.CachePolicyStorageFile, storageOptionsJSON)
+	policyId, err := this.CreateCachePolicy(tx, true, "\""+name+"\"缓存策略", "默认创建的缓存策略", capacityJSON, 0, maxSizeJSON, serverconfigs.CachePolicyStorageFile, storageOptionsJSON, false)
 	if err != nil {
 		return 0, err
 	}
@@ -196,12 +192,12 @@ func (this *HTTPCachePolicyDAO) CreateDefaultCachePolicy(tx *dbs.Tx, name string
 }
 
 // UpdateCachePolicy 修改缓存策略
-func (this *HTTPCachePolicyDAO) UpdateCachePolicy(tx *dbs.Tx, policyId int64, isOn bool, name string, description string, capacityJSON []byte, maxKeys int64, maxSizeJSON []byte, storageType string, storageOptionsJSON []byte) error {
+func (this *HTTPCachePolicyDAO) UpdateCachePolicy(tx *dbs.Tx, policyId int64, isOn bool, name string, description string, capacityJSON []byte, maxKeys int64, maxSizeJSON []byte, storageType string, storageOptionsJSON []byte, syncCompressionCache bool) error {
 	if policyId <= 0 {
 		return errors.New("invalid policyId")
 	}
 
-	op := NewHTTPCachePolicyOperator()
+	var op = NewHTTPCachePolicyOperator()
 	op.Id = policyId
 	op.IsOn = isOn
 	op.Name = name
@@ -217,6 +213,7 @@ func (this *HTTPCachePolicyDAO) UpdateCachePolicy(tx *dbs.Tx, policyId int64, is
 	if len(storageOptionsJSON) > 0 {
 		op.Options = storageOptionsJSON
 	}
+	op.SyncCompressionCache = syncCompressionCache
 	err := this.Save(tx, op)
 	if err != nil {
 		return err
@@ -244,14 +241,15 @@ func (this *HTTPCachePolicyDAO) ComposeCachePolicy(tx *dbs.Tx, policyId int64, c
 	}
 	config := &serverconfigs.HTTPCachePolicy{}
 	config.Id = int64(policy.Id)
-	config.IsOn = policy.IsOn == 1
+	config.IsOn = policy.IsOn
 	config.Name = policy.Name
 	config.Description = policy.Description
+	config.SyncCompressionCache = policy.SyncCompressionCache == 1
 
 	// capacity
 	if IsNotNull(policy.Capacity) {
 		capacityConfig := &shared.SizeCapacity{}
-		err = json.Unmarshal([]byte(policy.Capacity), capacityConfig)
+		err = json.Unmarshal(policy.Capacity, capacityConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -263,7 +261,7 @@ func (this *HTTPCachePolicyDAO) ComposeCachePolicy(tx *dbs.Tx, policyId int64, c
 	// max size
 	if IsNotNull(policy.MaxSize) {
 		maxSizeConfig := &shared.SizeCapacity{}
-		err = json.Unmarshal([]byte(policy.MaxSize), maxSizeConfig)
+		err = json.Unmarshal(policy.MaxSize, maxSizeConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -275,7 +273,7 @@ func (this *HTTPCachePolicyDAO) ComposeCachePolicy(tx *dbs.Tx, policyId int64, c
 	// options
 	if IsNotNull(policy.Options) {
 		m := map[string]interface{}{}
-		err = json.Unmarshal([]byte(policy.Options), &m)
+		err = json.Unmarshal(policy.Options, &m)
 		if err != nil {
 			return nil, errors.Wrap(err)
 		}
@@ -285,7 +283,7 @@ func (this *HTTPCachePolicyDAO) ComposeCachePolicy(tx *dbs.Tx, policyId int64, c
 	// refs
 	if IsNotNull(policy.Refs) {
 		refs := []*serverconfigs.HTTPCacheRef{}
-		err = json.Unmarshal([]byte(policy.Refs), &refs)
+		err = json.Unmarshal(policy.Refs, &refs)
 		if err != nil {
 			return nil, err
 		}
@@ -300,23 +298,37 @@ func (this *HTTPCachePolicyDAO) ComposeCachePolicy(tx *dbs.Tx, policyId int64, c
 }
 
 // CountAllEnabledHTTPCachePolicies 计算可用缓存策略数量
-func (this *HTTPCachePolicyDAO) CountAllEnabledHTTPCachePolicies(tx *dbs.Tx, keyword string) (int64, error) {
+func (this *HTTPCachePolicyDAO) CountAllEnabledHTTPCachePolicies(tx *dbs.Tx, clusterId int64, keyword string, storageType string) (int64, error) {
 	query := this.Query(tx).
 		State(HTTPCachePolicyStateEnabled)
+	if clusterId > 0 {
+		query.Where("id IN (SELECT cachePolicyId FROM " + SharedNodeClusterDAO.Table + " WHERE id=:clusterId)")
+		query.Param("clusterId", clusterId)
+	}
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
+	}
+	if len(storageType) > 0 {
+		query.Attr("type", storageType)
 	}
 	return query.Count()
 }
 
 // ListEnabledHTTPCachePolicies 列出单页的缓存策略
-func (this *HTTPCachePolicyDAO) ListEnabledHTTPCachePolicies(tx *dbs.Tx, keyword string, offset int64, size int64) ([]*serverconfigs.HTTPCachePolicy, error) {
+func (this *HTTPCachePolicyDAO) ListEnabledHTTPCachePolicies(tx *dbs.Tx, clusterId int64, keyword string, storageType string, offset int64, size int64) ([]*serverconfigs.HTTPCachePolicy, error) {
 	query := this.Query(tx).
 		State(HTTPCachePolicyStateEnabled)
+	if clusterId > 0 {
+		query.Where("id IN (SELECT cachePolicyId FROM " + SharedNodeClusterDAO.Table + " WHERE id=:clusterId)")
+		query.Param("clusterId", clusterId)
+	}
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
+	}
+	if len(storageType) > 0 {
+		query.Attr("type", storageType)
 	}
 	ones, err := query.
 		ResultPk().

@@ -4,17 +4,16 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/1uLang/EdgeCommon/pkg/configutils"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeAPI/internal/db/models/regions"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/stats"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
-	"github.com/iwind/TeaGo/dbs"
-	"github.com/iwind/TeaGo/lists"
-	"github.com/iwind/TeaGo/types"
+	"github.com/TeaOSLab/EdgeAPI/internal/rpc/tasks"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	timeutil "github.com/iwind/TeaGo/utils/time"
 	"time"
 )
@@ -26,7 +25,7 @@ type ServerStatBoardService struct {
 
 // FindAllEnabledServerStatBoards 读取所有看板
 func (this *ServerStatBoardService) FindAllEnabledServerStatBoards(ctx context.Context, req *pb.FindAllEnabledServerStatBoardsRequest) (*pb.FindAllEnabledServerStatBoardsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +40,7 @@ func (this *ServerStatBoardService) FindAllEnabledServerStatBoards(ctx context.C
 		pbBoards = append(pbBoards, &pb.ServerStatBoard{
 			Id:   int64(board.Id),
 			Name: board.Name,
-			IsOn: board.IsOn == 1,
+			IsOn: board.IsOn,
 		})
 	}
 
@@ -52,7 +51,7 @@ func (this *ServerStatBoardService) FindAllEnabledServerStatBoards(ctx context.C
 
 // ComposeServerStatNodeClusterBoard 组合看板数据
 func (this *ServerStatBoardService) ComposeServerStatNodeClusterBoard(ctx context.Context, req *pb.ComposeServerStatNodeClusterBoardRequest) (*pb.ComposeServerStatNodeClusterBoardResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -61,19 +60,19 @@ func (this *ServerStatBoardService) ComposeServerStatNodeClusterBoard(ctx contex
 	var result = &pb.ComposeServerStatNodeClusterBoardResponse{}
 
 	// 统计数字
-	countActiveNodes, err := models.SharedNodeDAO.CountAllEnabledNodesMatch(tx, req.NodeClusterId, configutils.BoolStateAll, configutils.BoolStateYes, "", 0, 0, true)
+	countActiveNodes, err := models.SharedNodeDAO.CountAllEnabledNodesMatch(tx, req.NodeClusterId, configutils.BoolStateAll, configutils.BoolStateYes, "", 0, 0, 0, true)
 	if err != nil {
 		return nil, err
 	}
 	result.CountActiveNodes = countActiveNodes
 
-	countInactiveNodes, err := models.SharedNodeDAO.CountAllEnabledNodesMatch(tx, req.NodeClusterId, configutils.BoolStateAll, configutils.BoolStateNo, "", 0, 0, true)
+	countInactiveNodes, err := models.SharedNodeDAO.CountAllEnabledNodesMatch(tx, req.NodeClusterId, configutils.BoolStateAll, configutils.BoolStateNo, "", 0, 0, 0, true)
 	if err != nil {
 		return nil, err
 	}
 	result.CountInactiveNodes = countInactiveNodes
 
-	countUsers, err := models.SharedUserDAO.CountAllEnabledUsers(tx, req.NodeClusterId, "")
+	countUsers, err := models.SharedUserDAO.CountAllEnabledUsers(tx, req.NodeClusterId, "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +85,7 @@ func (this *ServerStatBoardService) ComposeServerStatNodeClusterBoard(ctx contex
 	result.CountServers = countServers
 
 	// 按日流量统计
-	dayFrom := timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
+	var dayFrom = timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
 	dailyTrafficStats, err := stats.SharedNodeClusterTrafficDailyStatDAO.FindDailyStats(tx, req.NodeClusterId, dayFrom, timeutil.Format("Ymd"))
 	if err != nil {
 		return nil, err
@@ -104,8 +103,8 @@ func (this *ServerStatBoardService) ComposeServerStatNodeClusterBoard(ctx contex
 	}
 
 	// 小时流量统计
-	hourFrom := timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
-	hourTo := timeutil.Format("YmdH")
+	var hourFrom = timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
+	var hourTo = timeutil.Format("YmdH")
 	hourlyTrafficStats, err := stats.SharedNodeTrafficHourlyStatDAO.FindHourlyStatsWithClusterId(tx, req.NodeClusterId, hourFrom, hourTo)
 	if err != nil {
 		return nil, err
@@ -145,34 +144,14 @@ func (this *ServerStatBoardService) ComposeServerStatNodeClusterBoard(ctx contex
 		})
 	}
 
-	// 域名排行
-	topDomainStats, err := stats.SharedServerDomainHourlyStatDAO.FindTopDomainStatsWithClusterId(tx, req.NodeClusterId, hourFrom, hourTo, 10)
-	if err != nil {
-		return nil, err
-	}
-	for _, stat := range topDomainStats {
-		result.TopDomainStats = append(result.TopDomainStats, &pb.ComposeServerStatNodeClusterBoardResponse_DomainStat{
-			ServerId:            int64(stat.ServerId),
-			Domain:              stat.Domain,
-			CountRequests:       int64(stat.CountRequests),
-			Bytes:               int64(stat.Bytes),
-			CountAttackRequests: int64(stat.CountAttackRequests),
-			AttackBytes:         int64(stat.AttackBytes),
-		})
-	}
-
 	// CPU、内存、负载
 	cpuValues, err := models.SharedNodeValueDAO.ListValuesWithClusterId(tx, "node", req.NodeClusterId, nodeconfigs.NodeValueItemCPU, "usage", nodeconfigs.NodeValueRangeMinute)
 	if err != nil {
 		return nil, err
 	}
 	for _, v := range cpuValues {
-		valueJSON, err := json.Marshal(types.Float32(v.Value))
-		if err != nil {
-			return nil, err
-		}
 		result.CpuNodeValues = append(result.CpuNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
@@ -182,43 +161,36 @@ func (this *ServerStatBoardService) ComposeServerStatNodeClusterBoard(ctx contex
 		return nil, err
 	}
 	for _, v := range memoryValues {
-		valueJSON, err := json.Marshal(types.Float32(v.Value))
-		if err != nil {
-			return nil, err
-		}
 		result.MemoryNodeValues = append(result.MemoryNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
 
-	loadValues, err := models.SharedNodeValueDAO.ListValuesWithClusterId(tx, "node", req.NodeClusterId, nodeconfigs.NodeValueItemLoad, "load5m", nodeconfigs.NodeValueRangeMinute)
+	loadValues, err := models.SharedNodeValueDAO.ListValuesWithClusterId(tx, "node", req.NodeClusterId, nodeconfigs.NodeValueItemLoad, "load1m", nodeconfigs.NodeValueRangeMinute)
 	if err != nil {
 		return nil, err
 	}
 	for _, v := range loadValues {
-		valueJSON, err := json.Marshal(types.Float32(v.Value))
-		if err != nil {
-			return nil, err
-		}
 		result.LoadNodeValues = append(result.LoadNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
 
-	charts, err := this.findNodeClusterMetricDataCharts(tx, req.NodeClusterId, 0, 0, serverconfigs.MetricItemCategoryHTTP)
-	if err != nil {
-		return nil, err
+	var pbCharts []*pb.MetricDataChart
+	charts, ok := tasks.SharedCacheTaskManager.GetCluster(tasks.CacheKeyFindNodeClusterMetricDataCharts, req.NodeClusterId, serverconfigs.MetricItemCategoryHTTP)
+	if ok {
+		pbCharts = charts.([]*pb.MetricDataChart)
 	}
-	result.MetricDataCharts = charts
+	result.MetricDataCharts = pbCharts
 
 	return result, nil
 }
 
 // ComposeServerStatNodeBoard 组合节点看板数据
 func (this *ServerStatBoardService) ComposeServerStatNodeBoard(ctx context.Context, req *pb.ComposeServerStatNodeBoardRequest) (*pb.ComposeServerStatNodeBoardResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +305,7 @@ func (this *ServerStatBoardService) ComposeServerStatNodeBoard(ctx context.Conte
 	}
 
 	// 按日流量统计
-	dayFrom := timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
+	var dayFrom = timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
 	dailyTrafficStats, err := stats.SharedNodeTrafficDailyStatDAO.FindDailyStats(tx, "node", req.NodeId, dayFrom, timeutil.Format("Ymd"))
 	if err != nil {
 		return nil, err
@@ -351,8 +323,8 @@ func (this *ServerStatBoardService) ComposeServerStatNodeBoard(ctx context.Conte
 	}
 
 	// 小时流量统计
-	hourFrom := timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
-	hourTo := timeutil.Format("YmdH")
+	var hourFrom = timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
+	var hourTo = timeutil.Format("YmdH")
 	hourlyTrafficStats, err := stats.SharedNodeTrafficHourlyStatDAO.FindHourlyStatsWithNodeId(tx, "node", req.NodeId, hourFrom, hourTo)
 	if err != nil {
 		return nil, err
@@ -369,32 +341,14 @@ func (this *ServerStatBoardService) ComposeServerStatNodeBoard(ctx context.Conte
 		})
 	}
 
-	// 域名排行
-	topDomainStats, err := stats.SharedServerDomainHourlyStatDAO.FindTopDomainStatsWithNodeId(tx, req.NodeId, hourFrom, hourTo, 10)
-	if err != nil {
-		return nil, err
-	}
-	for _, stat := range topDomainStats {
-		result.TopDomainStats = append(result.TopDomainStats, &pb.ComposeServerStatNodeBoardResponse_DomainStat{
-			ServerId:      int64(stat.ServerId),
-			Domain:        stat.Domain,
-			CountRequests: int64(stat.CountRequests),
-			Bytes:         int64(stat.Bytes),
-		})
-	}
-
 	// CPU、内存、负载
 	cpuValues, err := models.SharedNodeValueDAO.ListValues(tx, "node", req.NodeId, nodeconfigs.NodeValueItemCPU, nodeconfigs.NodeValueRangeMinute)
 	if err != nil {
 		return nil, err
 	}
 	for _, v := range cpuValues {
-		valueJSON, err := json.Marshal(types.Float32(v.DecodeMapValue().GetFloat32("usage")))
-		if err != nil {
-			return nil, err
-		}
 		result.CpuNodeValues = append(result.CpuNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
@@ -404,12 +358,8 @@ func (this *ServerStatBoardService) ComposeServerStatNodeBoard(ctx context.Conte
 		return nil, err
 	}
 	for _, v := range memoryValues {
-		valueJSON, err := json.Marshal(types.Float32(v.DecodeMapValue().GetFloat32("usage")))
-		if err != nil {
-			return nil, err
-		}
 		result.MemoryNodeValues = append(result.MemoryNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
@@ -419,12 +369,8 @@ func (this *ServerStatBoardService) ComposeServerStatNodeBoard(ctx context.Conte
 		return nil, err
 	}
 	for _, v := range loadValues {
-		valueJSON, err := json.Marshal(types.Float32(v.DecodeMapValue().GetFloat32("load5m")))
-		if err != nil {
-			return nil, err
-		}
 		result.LoadNodeValues = append(result.LoadNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
@@ -435,25 +381,26 @@ func (this *ServerStatBoardService) ComposeServerStatNodeBoard(ctx context.Conte
 	}
 	for _, v := range cacheDirValues {
 		result.CacheDirsValues = append(result.CacheDirsValues, &pb.NodeValue{
-			ValueJSON: []byte(v.Value),
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
 
 	// 指标
 	var clusterId = int64(node.ClusterId)
-	charts, err := this.findNodeClusterMetricDataCharts(tx, clusterId, req.NodeId, 0, serverconfigs.MetricItemCategoryHTTP)
-	if err != nil {
-		return nil, err
+	var pbCharts []*pb.MetricDataChart
+	charts, ok := tasks.SharedCacheTaskManager.GetNode(tasks.CacheKeyFindNodeMetricDataCharts, clusterId, req.NodeId, serverconfigs.MetricItemCategoryHTTP)
+	if ok {
+		pbCharts = charts.([]*pb.MetricDataChart)
 	}
-	result.MetricDataCharts = charts
+	result.MetricDataCharts = pbCharts
 
 	return result, nil
 }
 
 // ComposeServerStatBoard 组合服务看板数据
 func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, req *pb.ComposeServerStatBoardRequest) (*pb.ComposeServerStatBoardResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -461,8 +408,98 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 	var result = &pb.ComposeServerStatBoardResponse{}
 	var tx = this.NullTx()
 
+	// 带宽统计
+	{
+		var month = timeutil.Format("Ym")
+		var day = timeutil.Format("Ymd")
+
+		// 当前N分钟区间
+		{
+			// 查询最近的三个时段，以尽可能获取数据
+			var timestamp = time.Now().Unix() / 300 * 300
+			var minute1 = timeutil.FormatTime("Hi", timestamp)
+			var minute2 = timeutil.FormatTime("Hi", timestamp-300)
+			var minute3 = timeutil.FormatTime("Hi", timestamp-300*2)
+
+			for _, minute := range []string{minute1, minute2, minute3} {
+				bytes, err := models.SharedServerBandwidthStatDAO.FindMinutelyPeekBandwidthBytes(tx, req.ServerId, day, minute)
+				if err != nil {
+					return nil, err
+				}
+
+				if bytes > 0 {
+					result.MinutelyPeekBandwidthBytes = bytes
+					break
+				}
+			}
+		}
+
+		// 当天
+		{
+			bytes, err := models.SharedServerBandwidthStatDAO.FindDailyPeekBandwidthBytes(tx, req.ServerId, day)
+			if err != nil {
+				return nil, err
+			}
+			result.DailyPeekBandwidthBytes = bytes
+		}
+
+		// 当月
+		{
+			bytes, err := models.SharedServerBandwidthStatDAO.FindMonthlyPeekBandwidthBytes(tx, req.ServerId, month)
+			if err != nil {
+				return nil, err
+			}
+			result.MonthlyPeekBandwidthBytes = bytes
+		}
+
+		// 上月
+		{
+			bytes, err := models.SharedServerBandwidthStatDAO.FindMonthlyPeekBandwidthBytes(tx, req.ServerId, timeutil.Format("Ym", time.Now().AddDate(0, -1, 0)))
+			if err != nil {
+				return nil, err
+			}
+			result.LastMonthlyPeekBandwidthBytes = bytes
+		}
+	}
+
+	{
+		var bandwidthMinutes = utils.RangeMinutes(time.Now(), 12, 5)
+		var bandwidthStatMap = map[string]*pb.ServerBandwidthStat{}
+		for _, r := range utils.GroupMinuteRanges(bandwidthMinutes) {
+			bandwidthStats, err := models.SharedServerBandwidthStatDAO.FindServerStats(tx, req.ServerId, r.Day, r.MinuteFrom, r.MinuteTo)
+			if err != nil {
+				return nil, err
+			}
+			for _, stat := range bandwidthStats {
+				bandwidthStatMap[stat.Day+"@"+stat.TimeAt] = &pb.ServerBandwidthStat{
+					Id:       int64(stat.Id),
+					ServerId: int64(stat.ServerId),
+					Day:      stat.Day,
+					TimeAt:   stat.TimeAt,
+					Bytes:    int64(stat.Bytes),
+				}
+			}
+		}
+		var pbBandwidthStats = []*pb.ServerBandwidthStat{}
+		for _, minute := range bandwidthMinutes {
+			stat, ok := bandwidthStatMap[minute.Day+"@"+minute.Minute]
+			if ok {
+				pbBandwidthStats = append(pbBandwidthStats, stat)
+			} else {
+				pbBandwidthStats = append(pbBandwidthStats, &pb.ServerBandwidthStat{
+					Id:       0,
+					ServerId: req.ServerId,
+					Day:      minute.Day,
+					TimeAt:   minute.Minute,
+					Bytes:    ServerBandwidthGetCacheBytes(req.ServerId, minute.Day, minute.Minute), // 从当前缓存中读取
+				})
+			}
+		}
+		result.MinutelyBandwidthStats = pbBandwidthStats
+	}
+
 	// 按日流量统计
-	dayFrom := timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
+	var dayFrom = timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
 	dailyTrafficStats, err := models.SharedServerDailyStatDAO.FindDailyStats(tx, req.ServerId, dayFrom, timeutil.Format("Ymd"))
 	if err != nil {
 		return nil, err
@@ -480,8 +517,8 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 	}
 
 	// 小时流量统计
-	hourFrom := timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
-	hourTo := timeutil.Format("YmdH")
+	var hourFrom = timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
+	var hourTo = timeutil.Format("YmdH")
 	hourlyTrafficStats, err := models.SharedServerDailyStatDAO.FindHourlyStats(tx, req.ServerId, hourFrom, hourTo)
 	if err != nil {
 		return nil, err
@@ -498,20 +535,32 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 		})
 	}
 
-	// 域名排行
-	topDomainStats, err := stats.SharedServerDomainHourlyStatDAO.FindTopDomainStatsWithServerId(tx, req.ServerId, hourFrom, hourTo, 10)
+	// 地区流量排行
+	totalCountryBytes, err := stats.SharedServerRegionCountryDailyStatDAO.SumDailyTotalBytesWithServerId(tx, timeutil.Format("Ymd"), req.ServerId)
 	if err != nil {
 		return nil, err
 	}
-	for _, stat := range topDomainStats {
-		result.TopDomainStats = append(result.TopDomainStats, &pb.ComposeServerStatBoardResponse_DomainStat{
-			ServerId:            int64(stat.ServerId),
-			Domain:              stat.Domain,
-			CountRequests:       int64(stat.CountRequests),
-			Bytes:               int64(stat.Bytes),
-			CountAttackRequests: int64(stat.CountAttackRequests),
-			AttackBytes:         int64(stat.AttackBytes),
-		})
+
+	if totalCountryBytes > 0 {
+		topCountryStats, err := stats.SharedServerRegionCountryDailyStatDAO.ListServerStats(tx, req.ServerId, timeutil.Format("Ymd"), "bytes", 0, 100)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, stat := range topCountryStats {
+			countryName, err := regions.SharedRegionCountryDAO.FindRegionCountryName(tx, int64(stat.CountryId))
+			if err != nil {
+				return nil, err
+			}
+			result.TopCountryStats = append(result.TopCountryStats, &pb.ComposeServerStatBoardResponse_CountryStat{
+				CountryName:         countryName,
+				Bytes:               int64(stat.Bytes),
+				CountRequests:       int64(stat.CountRequests),
+				AttackBytes:         int64(stat.AttackBytes),
+				CountAttackRequests: int64(stat.CountAttackRequests),
+				Percent:             float32(stat.Bytes*100) / float32(totalCountryBytes),
+			})
+		}
 	}
 
 	// 指标
@@ -531,182 +580,13 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 	case serverconfigs.ServerTypeUDPProxy:
 		metricCategory = serverconfigs.MetricItemCategoryUDP
 	}
-	charts, err := this.findNodeClusterMetricDataCharts(tx, clusterId, 0, req.ServerId, metricCategory)
-	if err != nil {
-		return nil, err
+
+	var pbCharts []*pb.MetricDataChart
+	charts, ok := tasks.SharedCacheTaskManager.GetServer(tasks.CacheKeyFindServerMetricDataCharts, clusterId, req.ServerId, metricCategory)
+	if ok {
+		pbCharts = charts.([]*pb.MetricDataChart)
 	}
-	result.MetricDataCharts = charts
+	result.MetricDataCharts = pbCharts
 
 	return result, nil
-}
-
-// 查找集群、节点和服务的指标数据
-func (this *ServerStatBoardService) findNodeClusterMetricDataCharts(tx *dbs.Tx, clusterId int64, nodeId int64, serverId int64, category string) (result []*pb.MetricDataChart, err error) {
-	// 集群指标
-	clusterMetricItems, err := models.SharedNodeClusterMetricItemDAO.FindAllClusterItems(tx, clusterId, category)
-	if err != nil {
-		return nil, err
-	}
-	var pbMetricCharts = []*pb.MetricDataChart{}
-	var metricItemIds = []int64{}
-	var items = []*models.MetricItem{}
-	for _, clusterMetricItem := range clusterMetricItems {
-		if clusterMetricItem.IsOn != 1 {
-			continue
-		}
-		var itemId = int64(clusterMetricItem.ItemId)
-		item, err := models.SharedMetricItemDAO.FindEnabledMetricItem(tx, itemId)
-		if err != nil {
-			return nil, err
-		}
-		if item == nil || item.IsOn == 0 {
-			continue
-		}
-		items = append(items, item)
-		metricItemIds = append(metricItemIds, itemId)
-	}
-
-	publicMetricItems, err := models.SharedMetricItemDAO.FindAllPublicItems(tx, category, nil)
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range publicMetricItems {
-		if item.IsOn != 1 {
-			continue
-		}
-		if lists.ContainsInt64(metricItemIds, int64(item.Id)) {
-			continue
-		}
-		items = append(items, item)
-	}
-
-	for _, item := range items {
-		var itemId = int64(item.Id)
-		charts, err := models.SharedMetricChartDAO.FindAllEnabledCharts(tx, itemId)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, chart := range charts {
-			if chart.IsOn == 0 {
-				continue
-			}
-
-			var pbChart = &pb.MetricChart{
-				Id:         int64(chart.Id),
-				Name:       chart.Name,
-				Type:       chart.Type,
-				WidthDiv:   chart.WidthDiv,
-				ParamsJSON: nil,
-				IsOn:       chart.IsOn == 1,
-				MaxItems:   types.Int32(chart.MaxItems),
-				MetricItem: &pb.MetricItem{
-					Id:         itemId,
-					PeriodUnit: item.PeriodUnit,
-					Period:     types.Int32(item.Period),
-					Name:       item.Name,
-					Value:      item.Value,
-					Category:   item.Category,
-					Keys:       item.DecodeKeys(),
-					Code:       item.Code,
-					IsOn:       item.IsOn == 1,
-				},
-			}
-			var pbStats = []*pb.MetricStat{}
-			switch chart.Type {
-			case serverconfigs.MetricChartTypeTimeLine:
-				var itemStats []*models.MetricStat
-				if serverId > 0 {
-					itemStats, err = models.SharedMetricStatDAO.FindLatestItemStatsWithServerId(tx, serverId, itemId, chart.IgnoreEmptyKeys == 1, chart.DecodeIgnoredKeys(), types.Int32(item.Version), 10)
-				} else if nodeId > 0 {
-					itemStats, err = models.SharedMetricStatDAO.FindLatestItemStatsWithNodeId(tx, nodeId, itemId, chart.IgnoreEmptyKeys == 1, chart.DecodeIgnoredKeys(), types.Int32(item.Version), 10)
-				} else {
-					itemStats, err = models.SharedMetricStatDAO.FindLatestItemStatsWithClusterId(tx, clusterId, itemId, chart.IgnoreEmptyKeys == 1, chart.DecodeIgnoredKeys(), types.Int32(item.Version), 10)
-				}
-				if err != nil {
-					return nil, err
-				}
-
-				for _, stat := range itemStats {
-					// 当前时间总和
-					var count int64
-					var total float32
-					if serverId > 0 {
-						count, total, err = models.SharedMetricSumStatDAO.FindServerSum(tx, serverId, stat.Time, itemId, types.Int32(item.Version))
-					} else if nodeId > 0 {
-						count, total, err = models.SharedMetricSumStatDAO.FindNodeSum(tx, nodeId, stat.Time, itemId, types.Int32(item.Version))
-					} else {
-						count, total, err = models.SharedMetricSumStatDAO.FindClusterSum(tx, clusterId, stat.Time, itemId, types.Int32(item.Version))
-					}
-					if err != nil {
-						return nil, err
-					}
-
-					pbStats = append(pbStats, &pb.MetricStat{
-						Id:          int64(stat.Id),
-						Hash:        stat.Hash,
-						ServerId:    0,
-						ItemId:      0,
-						Keys:        stat.DecodeKeys(),
-						Value:       types.Float32(stat.Value),
-						Time:        stat.Time,
-						Version:     0,
-						NodeCluster: nil,
-						Node:        nil,
-						Server:      nil,
-						SumCount:    count,
-						SumTotal:    total,
-					})
-				}
-			default:
-				var itemStats []*models.MetricStat
-				if serverId > 0 {
-					itemStats, err = models.SharedMetricStatDAO.FindItemStatsWithServerIdAndLastTime(tx, serverId, itemId, chart.IgnoreEmptyKeys == 1, chart.DecodeIgnoredKeys(), types.Int32(item.Version), 10)
-				} else if nodeId > 0 {
-					itemStats, err = models.SharedMetricStatDAO.FindItemStatsWithNodeIdAndLastTime(tx, nodeId, itemId, chart.IgnoreEmptyKeys == 1, chart.DecodeIgnoredKeys(), types.Int32(item.Version), 10)
-				} else {
-					itemStats, err = models.SharedMetricStatDAO.FindItemStatsWithClusterIdAndLastTime(tx, clusterId, itemId, chart.IgnoreEmptyKeys == 1, chart.DecodeIgnoredKeys(), types.Int32(item.Version), 10)
-				}
-				if err != nil {
-					return nil, err
-				}
-				for _, stat := range itemStats {
-					// 当前时间总和
-					var count int64
-					var total float32
-					if serverId > 0 {
-						count, total, err = models.SharedMetricSumStatDAO.FindServerSum(tx, serverId, stat.Time, itemId, types.Int32(item.Version))
-					} else if nodeId > 0 {
-						count, total, err = models.SharedMetricSumStatDAO.FindNodeSum(tx, nodeId, stat.Time, itemId, types.Int32(item.Version))
-					} else {
-						count, total, err = models.SharedMetricSumStatDAO.FindClusterSum(tx, clusterId, stat.Time, itemId, types.Int32(item.Version))
-					}
-					if err != nil {
-						return nil, err
-					}
-
-					pbStats = append(pbStats, &pb.MetricStat{
-						Id:          int64(stat.Id),
-						Hash:        stat.Hash,
-						ServerId:    0,
-						ItemId:      0,
-						Keys:        stat.DecodeKeys(),
-						Value:       types.Float32(stat.Value),
-						Time:        stat.Time,
-						Version:     0,
-						NodeCluster: nil,
-						Node:        nil,
-						Server:      nil,
-						SumCount:    count,
-						SumTotal:    total,
-					})
-				}
-			}
-			pbMetricCharts = append(pbMetricCharts, &pb.MetricDataChart{
-				MetricChart: pbChart,
-				MetricStats: pbStats,
-			})
-		}
-	}
-	return pbMetricCharts, nil
 }

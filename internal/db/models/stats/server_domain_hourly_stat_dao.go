@@ -2,6 +2,7 @@ package stats
 
 import (
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
@@ -22,14 +23,14 @@ func init() {
 	dbs.OnReadyDone(func() {
 		// 清理数据任务
 		var ticker = time.NewTicker(time.Duration(rands.Int(24, 48)) * time.Hour)
-		go func() {
+		goman.New(func() {
 			for range ticker.C {
-				err := SharedServerDomainHourlyStatDAO.Clean(nil, 7) // 只保留7天
+				err := SharedServerDomainHourlyStatDAO.Clean(nil, 7) // 只保留 N 天
 				if err != nil {
 					remotelogs.Error("ServerDomainHourlyStatDAO", "clean expired data failed: "+err.Error())
 				}
 			}
-		}()
+		})
 	})
 }
 
@@ -333,7 +334,7 @@ func (this *ServerDomainHourlyStatDAO) FindTopDomainStatsWithServerId(tx *dbs.Tx
 				Table(table).
 				Attr("serverId", serverId).
 				Between("hour", hourFrom, hourTo).
-				UseIndex("hour").
+				UseIndex("serverId", "hour").
 				Result("domain, MIN(serverId) AS serverId, SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes").
 				Group("domain").
 				Desc("countRequests").
@@ -373,7 +374,9 @@ func (this *ServerDomainHourlyStatDAO) Clean(tx *dbs.Tx, days int) error {
 			Table(table).
 			Lt("hour", hour).
 			Delete()
-		return err
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

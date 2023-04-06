@@ -2,6 +2,7 @@ package stats
 
 import (
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
@@ -19,14 +20,14 @@ func init() {
 	dbs.OnReadyDone(func() {
 		// 清理数据任务
 		var ticker = time.NewTicker(time.Duration(rands.Int(24, 48)) * time.Hour)
-		go func() {
+		goman.New(func() {
 			for range ticker.C {
-				err := SharedTrafficHourlyStatDAO.Clean(nil, 60) // 只保留60天
+				err := SharedTrafficHourlyStatDAO.Clean(nil, 15) // 只保留N天
 				if err != nil {
 					remotelogs.Error("TrafficHourlyStatDAO", "clean expired data failed: "+err.Error())
 				}
 			}
-		}()
+		})
 	})
 }
 
@@ -109,6 +110,31 @@ func (this *TrafficHourlyStatDAO) FindHourlyStats(tx *dbs.Tx, hourFrom string, h
 		}
 	}
 	return result, nil
+}
+
+// FindHourlyStat 查FindHourlyStat 找单个小时的统计
+func (this *TrafficHourlyStatDAO) FindHourlyStat(tx *dbs.Tx, hour string) (*TrafficHourlyStat, error) {
+	one, err := this.Query(tx).
+		Attr("hour", hour).
+		Find()
+	if err != nil || one == nil {
+		return nil, err
+	}
+
+	return one.(*TrafficHourlyStat), err
+}
+
+// SumHourlyStats 计算多个小时的统计总和
+func (this *TrafficHourlyStatDAO) SumHourlyStats(tx *dbs.Tx, hourFrom string, hourTo string) (*TrafficHourlyStat, error) {
+	one, err := this.Query(tx).
+		Result("SUM(bytes) AS bytes", "SUM(cachedBytes) AS cachedBytes", "SUM(countRequests) AS countRequests", "SUM(countCachedRequests) AS countCachedRequests", "SUM(countAttackRequests) AS countAttackRequests", "SUM(attackBytes) AS attackBytes").
+		Between("hour", hourFrom, hourTo).
+		Find()
+	if err != nil || one == nil {
+		return nil, err
+	}
+
+	return one.(*TrafficHourlyStat), nil
 }
 
 // Clean 清理历史数据

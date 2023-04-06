@@ -86,8 +86,8 @@ func (this *HTTPLocationDAO) FindHTTPLocationName(tx *dbs.Tx, id int64) (string,
 }
 
 // CreateLocation 创建路由规则
-func (this *HTTPLocationDAO) CreateLocation(tx *dbs.Tx, parentId int64, name string, pattern string, description string, isBreak bool, condsJSON []byte) (int64, error) {
-	op := NewHTTPLocationOperator()
+func (this *HTTPLocationDAO) CreateLocation(tx *dbs.Tx, parentId int64, name string, pattern string, description string, isBreak bool, condsJSON []byte, domains []string) (int64, error) {
+	var op = NewHTTPLocationOperator()
 	op.IsOn = true
 	op.State = HTTPLocationStateEnabled
 	op.ParentId = parentId
@@ -100,7 +100,16 @@ func (this *HTTPLocationDAO) CreateLocation(tx *dbs.Tx, parentId int64, name str
 		op.Conds = condsJSON
 	}
 
-	err := this.Save(tx, op)
+	if domains == nil {
+		domains = []string{}
+	}
+	domainsJSON, err := json.Marshal(domains)
+	if err != nil {
+		return 0, err
+	}
+	op.Domains = domainsJSON
+
+	err = this.Save(tx, op)
 	if err != nil {
 		return 0, err
 	}
@@ -108,11 +117,11 @@ func (this *HTTPLocationDAO) CreateLocation(tx *dbs.Tx, parentId int64, name str
 }
 
 // UpdateLocation 修改路由规则
-func (this *HTTPLocationDAO) UpdateLocation(tx *dbs.Tx, locationId int64, name string, pattern string, description string, isOn bool, isBreak bool, condsJSON []byte) error {
+func (this *HTTPLocationDAO) UpdateLocation(tx *dbs.Tx, locationId int64, name string, pattern string, description string, isOn bool, isBreak bool, condsJSON []byte, domains []string) error {
 	if locationId <= 0 {
 		return errors.New("invalid locationId")
 	}
-	op := NewHTTPLocationOperator()
+	var op = NewHTTPLocationOperator()
 	op.Id = locationId
 	op.Name = name
 	op.Pattern = pattern
@@ -124,7 +133,16 @@ func (this *HTTPLocationDAO) UpdateLocation(tx *dbs.Tx, locationId int64, name s
 		op.Conds = condsJSON
 	}
 
-	err := this.Save(tx, op)
+	if domains == nil {
+		domains = []string{}
+	}
+	domainsJSON, err := json.Marshal(domains)
+	if err != nil {
+		return err
+	}
+	op.Domains = domainsJSON
+
+	err = this.Save(tx, op)
 	if err != nil {
 		return err
 	}
@@ -152,12 +170,12 @@ func (this *HTTPLocationDAO) ComposeLocationConfig(tx *dbs.Tx, locationId int64,
 
 	config := &serverconfigs.HTTPLocationConfig{}
 	config.Id = int64(location.Id)
-	config.IsOn = location.IsOn == 1
+	config.IsOn = location.IsOn
 	config.Description = location.Description
 	config.Name = location.Name
 	config.Pattern = location.Pattern
 	config.URLPrefix = location.UrlPrefix
-	config.IsBreak = location.IsBreak == 1
+	config.IsBreak = location.IsBreak
 
 	// web
 	if location.WebId > 0 {
@@ -171,7 +189,7 @@ func (this *HTTPLocationDAO) ComposeLocationConfig(tx *dbs.Tx, locationId int64,
 	// reverse proxy
 	if IsNotNull(location.ReverseProxy) {
 		ref := &serverconfigs.ReverseProxyRef{}
-		err = json.Unmarshal([]byte(location.ReverseProxy), ref)
+		err = json.Unmarshal(location.ReverseProxy, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -186,13 +204,25 @@ func (this *HTTPLocationDAO) ComposeLocationConfig(tx *dbs.Tx, locationId int64,
 	}
 
 	// conds
-	if len(location.Conds) > 0 {
+	if IsNotNull(location.Conds) {
 		conds := &shared.HTTPRequestCondsConfig{}
-		err = json.Unmarshal([]byte(location.Conds), conds)
+		err = json.Unmarshal(location.Conds, conds)
 		if err != nil {
 			return nil, err
 		}
 		config.Conds = conds
+	}
+
+	// domains
+	if IsNotNull(location.Domains) {
+		var domains = []string{}
+		err = json.Unmarshal(location.Domains, &domains)
+		if err != nil {
+			return nil, err
+		}
+		if len(domains) > 0 {
+			config.Domains = domains
+		}
 	}
 
 	if cacheMap != nil {
@@ -211,7 +241,7 @@ func (this *HTTPLocationDAO) FindLocationReverseProxy(tx *dbs.Tx, locationId int
 	if err != nil {
 		return nil, err
 	}
-	if IsNotNull(refString) {
+	if IsNotNull([]byte(refString)) {
 		ref := &serverconfigs.ReverseProxyRef{}
 		err = json.Unmarshal([]byte(refString), ref)
 		if err != nil {
@@ -227,7 +257,7 @@ func (this *HTTPLocationDAO) UpdateLocationReverseProxy(tx *dbs.Tx, locationId i
 	if locationId <= 0 {
 		return errors.New("invalid locationId")
 	}
-	op := NewHTTPLocationOperator()
+	var op = NewHTTPLocationOperator()
 	op.Id = locationId
 	op.ReverseProxy = JSONBytes(reverseProxyJSON)
 	err := this.Save(tx, op)
@@ -251,7 +281,7 @@ func (this *HTTPLocationDAO) UpdateLocationWeb(tx *dbs.Tx, locationId int64, web
 	if locationId <= 0 {
 		return errors.New("invalid locationId")
 	}
-	op := NewHTTPLocationOperator()
+	var op = NewHTTPLocationOperator()
 	op.Id = locationId
 	op.WebId = webId
 	err := this.Save(tx, op)

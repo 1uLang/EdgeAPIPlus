@@ -29,9 +29,13 @@ type UserPlanService struct {
 
 // BuyUserPlan 添加已购套餐
 func (this *UserPlanService) BuyUserPlan(ctx context.Context, req *pb.BuyUserPlanRequest) (*pb.BuyUserPlanResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
+	}
+
+	if userId > 0 {
+		req.UserId = userId
 	}
 
 	if req.CountPeriod <= 0 {
@@ -91,11 +95,13 @@ func (this *UserPlanService) BuyUserPlan(ctx context.Context, req *pb.BuyUserPla
 			}
 		} else if plan.PriceType == serverconfigs.PlanPriceTypeTraffic {
 			// DO NOTHING
+		} else if plan.PriceType == serverconfigs.PlanPriceTypeBandwidth {
+			// DO NOTHING
 		} else {
 			return errors.New("price type '" + plan.PriceType + "' is not supported yet")
 		}
 
-		userPlanId, err = models.SharedUserPlanDAO.CreateUserPlan(tx, req.UserId, req.PlanId, dayTo)
+		userPlanId, err = models.SharedUserPlanDAO.CreateUserPlan(tx, req.UserId, req.PlanId, req.Name, dayTo)
 		if err != nil {
 			return err
 		}
@@ -110,7 +116,7 @@ func (this *UserPlanService) BuyUserPlan(ctx context.Context, req *pb.BuyUserPla
 
 // RenewUserPlan 续费套餐
 func (this *UserPlanService) RenewUserPlan(ctx context.Context, req *pb.RenewUserPlanRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +126,14 @@ func (this *UserPlanService) RenewUserPlan(ctx context.Context, req *pb.RenewUse
 	}
 
 	var tx = this.NullTx()
+
+	if userId > 0 {
+		err = models.SharedUserPlanDAO.CheckUserPlan(tx, userId, req.UserPlanId)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	userPlan, err := models.SharedUserPlanDAO.FindEnabledUserPlan(tx, req.UserPlanId, nil)
 	if err != nil {
 		return nil, err
@@ -129,7 +143,7 @@ func (this *UserPlanService) RenewUserPlan(ctx context.Context, req *pb.RenewUse
 	}
 
 	var planId = int64(userPlan.PlanId)
-	var userId = int64(userPlan.UserId)
+	userId = int64(userPlan.UserId)
 
 	// 套餐
 	plan, err := models.SharedPlanDAO.FindEnabledPlan(tx, planId)
@@ -195,6 +209,8 @@ func (this *UserPlanService) RenewUserPlan(ctx context.Context, req *pb.RenewUse
 			}
 		} else if plan.PriceType == serverconfigs.PlanPriceTypeTraffic {
 			// DO NOTHING
+		} else if plan.PriceType == serverconfigs.PlanPriceTypeBandwidth {
+			// DO NOTHING
 		} else {
 			return errors.New("price type '" + plan.PriceType + "' is not supported yet")
 		}
@@ -214,12 +230,20 @@ func (this *UserPlanService) RenewUserPlan(ctx context.Context, req *pb.RenewUse
 
 // FindEnabledUserPlan 查找单个已购套餐信息
 func (this *UserPlanService) FindEnabledUserPlan(ctx context.Context, req *pb.FindEnabledUserPlanRequest) (*pb.FindEnabledUserPlanResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
+
+	if userId > 0 {
+		err = models.SharedUserPlanDAO.CheckUserPlan(tx, userId, req.UserPlanId)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	userPlan, err := models.SharedUserPlanDAO.FindEnabledUserPlan(tx, req.UserPlanId, nil)
 	if err != nil {
 		return nil, err
@@ -260,7 +284,8 @@ func (this *UserPlanService) FindEnabledUserPlan(ctx context.Context, req *pb.Fi
 		Id:     int64(userPlan.Id),
 		UserId: int64(userPlan.UserId),
 		PlanId: int64(userPlan.PlanId),
-		IsOn:   userPlan.IsOn == 1,
+		IsOn:   userPlan.IsOn,
+		Name:   userPlan.Name,
 		DayTo:  userPlan.DayTo,
 		User:   pbUser,
 		Plan:   pbPlan,
@@ -269,13 +294,13 @@ func (this *UserPlanService) FindEnabledUserPlan(ctx context.Context, req *pb.Fi
 
 // UpdateUserPlan 修改已购套餐
 func (this *UserPlanService) UpdateUserPlan(ctx context.Context, req *pb.UpdateUserPlanRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
-	err = models.SharedUserPlanDAO.UpdateUserPlan(tx, req.UserPlanId, req.PlanId, req.DayTo, req.IsOn)
+	err = models.SharedUserPlanDAO.UpdateUserPlan(tx, req.UserPlanId, req.PlanId, req.Name, req.DayTo, req.IsOn)
 	if err != nil {
 		return nil, err
 	}
@@ -285,28 +310,42 @@ func (this *UserPlanService) UpdateUserPlan(ctx context.Context, req *pb.UpdateU
 
 // DeleteUserPlan 删除已购套餐
 func (this *UserPlanService) DeleteUserPlan(ctx context.Context, req *pb.DeleteUserPlanRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
+
+	if userId > 0 {
+		// 检查用户套餐
+		err = models.SharedUserPlanDAO.CheckUserPlan(tx, userId, req.UserPlanId)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	err = models.SharedUserPlanDAO.DisableUserPlan(tx, req.UserPlanId)
 	if err != nil {
 		return nil, err
 	}
+
 	return this.Success()
 }
 
 // CountAllEnabledUserPlans 计算已购套餐数
 func (this *UserPlanService) CountAllEnabledUserPlans(ctx context.Context, req *pb.CountAllEnabledUserPlansRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
+	if userId > 0 {
+		req.UserId = userId
+	}
+
 	var tx = this.NullTx()
-	count, err := models.SharedUserPlanDAO.CountAllEnabledUserPlans(tx, req.IsAvailable, req.IsExpired, req.ExpiringDays)
+	count, err := models.SharedUserPlanDAO.CountAllEnabledUserPlans(tx, req.UserId, req.IsAvailable, req.IsExpired, req.ExpiringDays)
 	if err != nil {
 		return nil, err
 	}
@@ -316,9 +355,13 @@ func (this *UserPlanService) CountAllEnabledUserPlans(ctx context.Context, req *
 
 // ListEnabledUserPlans 列出单页已购套餐
 func (this *UserPlanService) ListEnabledUserPlans(ctx context.Context, req *pb.ListEnabledUserPlansRequest) (*pb.ListEnabledUserPlansResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
+	}
+
+	if userId > 0 {
+		req.UserId = userId
 	}
 
 	var tx = this.NullTx()
@@ -352,8 +395,30 @@ func (this *UserPlanService) ListEnabledUserPlans(ctx context.Context, req *pb.L
 		}
 		if plan != nil {
 			pbPlan = &pb.Plan{
-				Id:   int64(plan.Id),
-				Name: plan.Name,
+				Id:                 int64(plan.Id),
+				Name:               plan.Name,
+				PriceType:          plan.PriceType,
+				TrafficLimitJSON:   plan.TrafficLimit,
+				TrafficPriceJSON:   plan.TrafficPrice,
+				BandwidthPriceJSON: plan.BandwidthPrice,
+				MonthlyPrice:       types.Float32(plan.MonthlyPrice),
+				SeasonallyPrice:    types.Float32(plan.SeasonallyPrice),
+				YearlyPrice:        types.Float32(plan.YearlyPrice),
+			}
+		}
+
+		// server
+		var pbServer *pb.Server
+		server, err := models.SharedServerDAO.FindEnabledServerWithUserPlanId(tx, int64(userPlan.Id))
+		if err != nil {
+			return nil, err
+		}
+		if server != nil {
+			pbServer = &pb.Server{
+				Id:              int64(server.Id),
+				Name:            server.Name,
+				ServerNamesJSON: server.ServerNames,
+				Type:            server.Type,
 			}
 		}
 
@@ -361,10 +426,12 @@ func (this *UserPlanService) ListEnabledUserPlans(ctx context.Context, req *pb.L
 			Id:     int64(userPlan.Id),
 			UserId: int64(userPlan.UserId),
 			PlanId: int64(userPlan.PlanId),
-			IsOn:   userPlan.IsOn == 1,
+			IsOn:   userPlan.IsOn,
+			Name:   userPlan.Name,
 			DayTo:  userPlan.DayTo,
 			User:   pbUser,
 			Plan:   pbPlan,
+			Server: pbServer,
 		})
 	}
 
@@ -373,12 +440,23 @@ func (this *UserPlanService) ListEnabledUserPlans(ctx context.Context, req *pb.L
 
 // FindAllEnabledUserPlansForServer 查找所有服务可用的套餐
 func (this *UserPlanService) FindAllEnabledUserPlansForServer(ctx context.Context, req *pb.FindAllEnabledUserPlansForServerRequest) (*pb.FindAllEnabledUserPlansForServerResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
+
+	if userId > 0 && req.ServerId > 0 {
+		// 检查服务
+		err = models.SharedServerDAO.CheckUserServer(tx, userId, req.ServerId)
+		if err != nil {
+			return nil, err
+		}
+
+		req.UserId = userId
+	}
+
 	userPlans, err := models.SharedUserPlanDAO.FindAllEnabledPlansForServer(tx, req.UserId, req.ServerId)
 	if err != nil {
 		return nil, err
@@ -418,7 +496,8 @@ func (this *UserPlanService) FindAllEnabledUserPlansForServer(ctx context.Contex
 			Id:     int64(userPlan.Id),
 			UserId: int64(userPlan.UserId),
 			PlanId: int64(userPlan.PlanId),
-			IsOn:   userPlan.IsOn == 1,
+			Name:   userPlan.Name,
+			IsOn:   userPlan.IsOn,
 			DayTo:  userPlan.DayTo,
 			User:   pbUser,
 			Plan:   pbPlan,

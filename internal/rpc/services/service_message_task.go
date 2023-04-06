@@ -17,7 +17,7 @@ type MessageTaskService struct {
 
 // CreateMessageTask 创建任务
 func (this *MessageTaskService) CreateMessageTask(ctx context.Context, req *pb.CreateMessageTaskRequest) (*pb.CreateMessageTaskResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (this *MessageTaskService) FindSendingMessageTasks(ctx context.Context, req
 			if err != nil {
 				return nil, err
 			}
-			if recipient == nil || recipient.IsOn == 0 {
+			if recipient == nil || !recipient.IsOn {
 				// 如果发送人已经删除或者禁用，则删除此消息
 				err = models.SharedMessageTaskDAO.DisableMessageTask(tx, int64(task.Id))
 				if err != nil {
@@ -65,7 +65,7 @@ func (this *MessageTaskService) FindSendingMessageTasks(ctx context.Context, req
 			if err != nil {
 				return nil, err
 			}
-			if instance == nil || instance.IsOn == 0 {
+			if instance == nil || !instance.IsOn {
 				// 如果媒介实例已经删除或者禁用，则删除此消息
 				err = models.SharedMessageTaskDAO.DisableMessageTask(tx, int64(task.Id))
 				if err != nil {
@@ -82,8 +82,8 @@ func (this *MessageTaskService) FindSendingMessageTasks(ctx context.Context, req
 					MessageMedia: &pb.MessageMedia{
 						Type: instance.MediaType,
 					},
-					ParamsJSON: []byte(instance.Params),
-					RateJSON:   []byte(instance.Rate),
+					ParamsJSON: instance.Params,
+					RateJSON:   instance.Rate,
 				},
 			}
 		} else { // 没有指定既定的接收人
@@ -92,7 +92,7 @@ func (this *MessageTaskService) FindSendingMessageTasks(ctx context.Context, req
 			if err != nil {
 				return nil, err
 			}
-			if instance == nil || instance.IsOn == 0 {
+			if instance == nil || !instance.IsOn {
 				// 如果媒介实例已经删除或者禁用，则删除此消息
 				err = models.SharedMessageTaskDAO.DisableMessageTask(tx, int64(task.Id))
 				if err != nil {
@@ -107,8 +107,8 @@ func (this *MessageTaskService) FindSendingMessageTasks(ctx context.Context, req
 					MessageMedia: &pb.MessageMedia{
 						Type: instance.MediaType,
 					},
-					ParamsJSON: []byte(instance.Params),
-					RateJSON:   []byte(instance.Rate),
+					ParamsJSON: instance.Params,
+					RateJSON:   instance.Rate,
 				},
 			}
 		}
@@ -165,7 +165,7 @@ func (this *MessageTaskService) UpdateMessageTaskStatus(ctx context.Context, req
 
 // DeleteMessageTask 删除消息任务
 func (this *MessageTaskService) DeleteMessageTask(ctx context.Context, req *pb.DeleteMessageTaskRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (this *MessageTaskService) DeleteMessageTask(ctx context.Context, req *pb.D
 
 // FindEnabledMessageTask 读取消息任务状态
 func (this *MessageTaskService) FindEnabledMessageTask(ctx context.Context, req *pb.FindEnabledMessageTaskRequest) (*pb.FindEnabledMessageTaskResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +202,7 @@ func (this *MessageTaskService) FindEnabledMessageTask(ctx context.Context, req 
 		if err != nil {
 			return nil, err
 		}
-		if recipient == nil || recipient.IsOn == 0 {
+		if recipient == nil || !recipient.IsOn {
 			// 如果发送人已经删除或者禁用，则删除此消息
 			err = models.SharedMessageTaskDAO.DisableMessageTask(tx, int64(task.Id))
 			if err != nil {
@@ -216,7 +216,7 @@ func (this *MessageTaskService) FindEnabledMessageTask(ctx context.Context, req 
 		if err != nil {
 			return nil, err
 		}
-		if instance == nil || instance.IsOn == 0 {
+		if instance == nil || !instance.IsOn {
 			// 如果媒介实例已经删除或者禁用，则删除此消息
 			err = models.SharedMessageTaskDAO.DisableMessageTask(tx, int64(task.Id))
 			if err != nil {
@@ -232,7 +232,7 @@ func (this *MessageTaskService) FindEnabledMessageTask(ctx context.Context, req 
 				MessageMedia: &pb.MessageMedia{
 					Type: instance.MediaType,
 				},
-				ParamsJSON: []byte(instance.Params),
+				ParamsJSON: instance.Params,
 			},
 		}
 	} else { // 没有指定既定的接收人
@@ -241,7 +241,7 @@ func (this *MessageTaskService) FindEnabledMessageTask(ctx context.Context, req 
 		if err != nil {
 			return nil, err
 		}
-		if instance == nil || instance.IsOn == 0 {
+		if instance == nil || !instance.IsOn {
 			// 如果媒介实例已经删除或者禁用，则删除此消息
 			err = models.SharedMessageTaskDAO.DisableMessageTask(tx, int64(task.Id))
 			if err != nil {
@@ -256,14 +256,14 @@ func (this *MessageTaskService) FindEnabledMessageTask(ctx context.Context, req 
 				MessageMedia: &pb.MessageMedia{
 					Type: instance.MediaType,
 				},
-				ParamsJSON: []byte(instance.Params),
+				ParamsJSON: instance.Params,
 			},
 		}
 	}
 
 	var result = &pb.MessageTaskResult{}
 	if len(task.Result) > 0 {
-		err = json.Unmarshal([]byte(task.Result), result)
+		err = json.Unmarshal(task.Result, result)
 		if err != nil {
 			return nil, err
 		}
@@ -284,7 +284,7 @@ func (this *MessageTaskService) FindEnabledMessageTask(ctx context.Context, req 
 
 // CountMessageTasksWithStatus 计算某个状态的消息任务数量
 func (this *MessageTaskService) CountMessageTasksWithStatus(ctx context.Context, req *pb.CountMessageTasksWithStatusRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +300,7 @@ func (this *MessageTaskService) CountMessageTasksWithStatus(ctx context.Context,
 
 // ListMessageTasksWithStatus 根据状态列出某页任务
 func (this *MessageTaskService) ListMessageTasksWithStatus(ctx context.Context, req *pb.ListMessageTasksWithStatusRequest) (*pb.ListMessageTasksWithStatusResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +320,7 @@ func (this *MessageTaskService) ListMessageTasksWithStatus(ctx context.Context, 
 			if err != nil {
 				return nil, err
 			}
-			if recipient == nil || recipient.IsOn == 0 {
+			if recipient == nil || !recipient.IsOn {
 				// 如果发送人已经删除或者禁用，则删除此消息
 				err = models.SharedMessageTaskDAO.DisableMessageTask(tx, int64(task.Id))
 				if err != nil {
@@ -334,7 +334,7 @@ func (this *MessageTaskService) ListMessageTasksWithStatus(ctx context.Context, 
 			if err != nil {
 				return nil, err
 			}
-			if instance == nil || instance.IsOn == 0 {
+			if instance == nil || !instance.IsOn {
 				// 如果媒介实例已经删除或者禁用，则删除此消息
 				err = models.SharedMessageTaskDAO.DisableMessageTask(tx, int64(task.Id))
 				if err != nil {
@@ -352,8 +352,8 @@ func (this *MessageTaskService) ListMessageTasksWithStatus(ctx context.Context, 
 					MessageMedia: &pb.MessageMedia{
 						Type: instance.MediaType,
 					},
-					ParamsJSON: []byte(instance.Params),
-					RateJSON:   []byte(instance.Rate),
+					ParamsJSON: instance.Params,
+					RateJSON:   instance.Rate,
 				},
 			}
 		} else { // 没有指定既定的接收人
@@ -362,7 +362,7 @@ func (this *MessageTaskService) ListMessageTasksWithStatus(ctx context.Context, 
 			if err != nil {
 				return nil, err
 			}
-			if instance == nil || instance.IsOn == 0 {
+			if instance == nil || !instance.IsOn {
 				// 如果媒介实例已经删除或者禁用，则删除此消息
 				err = models.SharedMessageTaskDAO.DisableMessageTask(tx, int64(task.Id))
 				if err != nil {
@@ -378,15 +378,15 @@ func (this *MessageTaskService) ListMessageTasksWithStatus(ctx context.Context, 
 					MessageMedia: &pb.MessageMedia{
 						Type: instance.MediaType,
 					},
-					ParamsJSON: []byte(instance.Params),
-					RateJSON:   []byte(instance.Rate),
+					ParamsJSON: instance.Params,
+					RateJSON:   instance.Rate,
 				},
 			}
 		}
 
 		var result = &pb.MessageTaskResult{}
 		if len(task.Result) > 0 {
-			err = json.Unmarshal([]byte(task.Result), result)
+			err = json.Unmarshal(task.Result, result)
 			if err != nil {
 				return nil, err
 			}

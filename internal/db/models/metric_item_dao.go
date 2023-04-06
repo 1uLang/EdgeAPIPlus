@@ -12,6 +12,7 @@ import (
 	"github.com/iwind/TeaGo/types"
 	"sort"
 	"strings"
+	"sync"
 )
 
 const (
@@ -33,6 +34,9 @@ func NewMetricItemDAO() *MetricItemDAO {
 }
 
 var SharedMetricItemDAO *MetricItemDAO
+
+var metricItemLastTimeCacheMap = map[int64]string{} // itemId => time
+var metricItemLastTimeCacheLocker = &sync.Mutex{}
 
 func init() {
 	dbs.OnReady(func() {
@@ -78,6 +82,12 @@ func (this *MetricItemDAO) DisableMetricItem(tx *dbs.Tx, itemId int64) error {
 	if err != nil {
 		return err
 	}
+
+	err = SharedMetricSumStatDAO.DeleteItemStats(tx, itemId)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -102,10 +112,10 @@ func (this *MetricItemDAO) FindMetricItemName(tx *dbs.Tx, id int64) (string, err
 }
 
 // CreateItem 创建指标
-func (this *MetricItemDAO) CreateItem(tx *dbs.Tx, code string, category string, name string, keys []string, period int32, periodUnit string, value string, isPublic bool) (int64, error) {
+func (this *MetricItemDAO) CreateItem(tx *dbs.Tx, code string, category string, name string, keys []string, period int32, periodUnit string, expiresPeriod int32, value string, isPublic bool) (int64, error) {
 	sort.Strings(keys)
 
-	op := NewMetricItemOperator()
+	var op = NewMetricItemOperator()
 	op.Code = code
 	op.Category = category
 	op.Name = name
@@ -120,6 +130,7 @@ func (this *MetricItemDAO) CreateItem(tx *dbs.Tx, code string, category string, 
 	}
 	op.Period = period
 	op.PeriodUnit = periodUnit
+	op.ExpiresPeriod = expiresPeriod
 	op.Value = value
 	op.IsPublic = isPublic
 	op.IsOn = true
@@ -140,7 +151,7 @@ func (this *MetricItemDAO) CreateItem(tx *dbs.Tx, code string, category string, 
 }
 
 // UpdateItem 修改\指标
-func (this *MetricItemDAO) UpdateItem(tx *dbs.Tx, itemId int64, name string, keys []string, period int32, periodUnit string, value string, isOn bool, isPublic bool) error {
+func (this *MetricItemDAO) UpdateItem(tx *dbs.Tx, itemId int64, name string, keys []string, period int32, periodUnit string, expiresPeriod int32, value string, isOn bool, isPublic bool) error {
 	if itemId <= 0 {
 		return errors.New("invalid itemId")
 	}
@@ -155,14 +166,14 @@ func (this *MetricItemDAO) UpdateItem(tx *dbs.Tx, itemId int64, name string, key
 	if oldItem == nil {
 		return nil
 	}
-	oldIsPublic := oldItem.IsPublic == 1
+	oldIsPublic := oldItem.IsPublic
 	var versionChanged = false
 	if strings.Join(oldItem.DecodeKeys(), "&") != strings.Join(keys, "&") || types.Int32(oldItem.Period) != period || oldItem.PeriodUnit != periodUnit || oldItem.Value != value {
 		versionChanged = true
 	}
 
 	// 保存
-	op := NewMetricItemOperator()
+	var op = NewMetricItemOperator()
 	op.Id = itemId
 	op.Name = name
 	if len(keys) > 0 {
@@ -176,6 +187,7 @@ func (this *MetricItemDAO) UpdateItem(tx *dbs.Tx, itemId int64, name string, key
 	}
 	op.Period = period
 	op.PeriodUnit = periodUnit
+	op.ExpiresPeriod = expiresPeriod
 	op.Value = value
 	op.IsOn = isOn
 	if versionChanged {
@@ -188,7 +200,7 @@ func (this *MetricItemDAO) UpdateItem(tx *dbs.Tx, itemId int64, name string, key
 	}
 
 	// 通知更新
-	if versionChanged || (oldItem.IsOn == 0 && isOn) || (oldItem.IsOn == 1 && !isOn) || oldIsPublic != isPublic {
+	if versionChanged || (!oldItem.IsOn && isOn) || (oldItem.IsOn && !isOn) || oldIsPublic != isPublic {
 		err := this.NotifyUpdate(tx, itemId, isPublic || oldIsPublic)
 		if err != nil {
 			return err
@@ -276,14 +288,15 @@ func (this *MetricItemDAO) ComposeItemConfig(tx *dbs.Tx, itemId int64) (*serverc
 	}
 	var item = one.(*MetricItem)
 	var config = &serverconfigs.MetricItemConfig{
-		Id:         int64(item.Id),
-		IsOn:       item.IsOn == 1,
-		Period:     types.Int(item.Period),
-		PeriodUnit: item.PeriodUnit,
-		Category:   item.Category,
-		Value:      item.Value,
-		Keys:       item.DecodeKeys(),
-		Version:    types.Int32(item.Version),
+		Id:            int64(item.Id),
+		IsOn:          item.IsOn,
+		Period:        types.Int(item.Period),
+		PeriodUnit:    item.PeriodUnit,
+		ExpiresPeriod: types.Int(item.ExpiresPeriod),
+		Category:      item.Category,
+		Value:         item.Value,
+		Keys:          item.DecodeKeys(),
+		Version:       types.Int32(item.Version),
 	}
 
 	return config, nil
@@ -295,14 +308,15 @@ func (this *MetricItemDAO) ComposeItemConfigWithItem(item *MetricItem) *serverco
 		return nil
 	}
 	var config = &serverconfigs.MetricItemConfig{
-		Id:         int64(item.Id),
-		IsOn:       item.IsOn == 1,
-		Period:     types.Int(item.Period),
-		PeriodUnit: item.PeriodUnit,
-		Category:   item.Category,
-		Value:      item.Value,
-		Keys:       item.DecodeKeys(),
-		Version:    types.Int32(item.Version),
+		Id:            int64(item.Id),
+		IsOn:          item.IsOn,
+		Period:        types.Int(item.Period),
+		PeriodUnit:    item.PeriodUnit,
+		ExpiresPeriod: types.Int(item.ExpiresPeriod),
+		Category:      item.Category,
+		Value:         item.Value,
+		Keys:          item.DecodeKeys(),
+		Version:       types.Int32(item.Version),
 	}
 
 	return config
@@ -320,6 +334,32 @@ func (this *MetricItemDAO) FindItemVersion(tx *dbs.Tx, itemId int64) (int32, err
 	return types.Int32(version), nil
 }
 
+// UpdateMetricLastTime 更新指标最新数据的时间
+func (this *MetricItemDAO) UpdateMetricLastTime(tx *dbs.Tx, itemId int64, lastTime string) error {
+	metricItemLastTimeCacheLocker.Lock()
+	cachedTime, ok := metricItemLastTimeCacheMap[itemId]
+	if ok && cachedTime == lastTime {
+		metricItemLastTimeCacheLocker.Unlock()
+		return nil
+	}
+
+	metricItemLastTimeCacheMap[itemId] = lastTime
+	metricItemLastTimeCacheLocker.Unlock()
+
+	return this.Query(tx).
+		Pk(itemId).
+		Set("lastTime", lastTime).
+		UpdateQuickly()
+}
+
+// FindMetricLastTime 读取指标最新数据的时间
+func (this *MetricItemDAO) FindMetricLastTime(tx *dbs.Tx, itemId int64) (string, error) {
+	return this.Query(tx).
+		Result("lastTime").
+		Pk(itemId).
+		FindStringCol("")
+}
+
 // NotifyUpdate 通知更新
 func (this *MetricItemDAO) NotifyUpdate(tx *dbs.Tx, itemId int64, isPublic bool) error {
 	if isPublic {
@@ -328,7 +368,7 @@ func (this *MetricItemDAO) NotifyUpdate(tx *dbs.Tx, itemId int64, isPublic bool)
 			return err
 		}
 		for _, clusterId := range clusterIds {
-			err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, NodeTaskTypeConfigChanged)
+			err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, NodeTaskTypeConfigChanged)
 			if err != nil {
 				return err
 			}
@@ -340,7 +380,7 @@ func (this *MetricItemDAO) NotifyUpdate(tx *dbs.Tx, itemId int64, isPublic bool)
 		return err
 	}
 	for _, clusterId := range clusterIds {
-		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, NodeTaskTypeConfigChanged)
+		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, NodeTaskTypeConfigChanged)
 		if err != nil {
 			return err
 		}

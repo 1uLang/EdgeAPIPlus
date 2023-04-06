@@ -2,11 +2,14 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"google.golang.org/grpc/metadata"
+	"time"
 )
 
 type UserNodeService struct {
@@ -15,12 +18,12 @@ type UserNodeService struct {
 
 // CreateUserNode 创建用户节点
 func (this *UserNodeService) CreateUserNode(ctx context.Context, req *pb.CreateUserNodeRequest) (*pb.CreateUserNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodeId, err := models.SharedUserNodeDAO.CreateUserNode(tx, req.Name, req.Description, req.HttpJSON, req.HttpsJSON, req.AccessAddrsJSON, req.IsOn)
 	if err != nil {
@@ -32,12 +35,12 @@ func (this *UserNodeService) CreateUserNode(ctx context.Context, req *pb.CreateU
 
 // UpdateUserNode 修改用户节点
 func (this *UserNodeService) UpdateUserNode(ctx context.Context, req *pb.UpdateUserNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedUserNodeDAO.UpdateUserNode(tx, req.UserNodeId, req.Name, req.Description, req.HttpJSON, req.HttpsJSON, req.AccessAddrsJSON, req.IsOn)
 	if err != nil {
@@ -49,12 +52,12 @@ func (this *UserNodeService) UpdateUserNode(ctx context.Context, req *pb.UpdateU
 
 // DeleteUserNode 删除用户节点
 func (this *UserNodeService) DeleteUserNode(ctx context.Context, req *pb.DeleteUserNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedUserNodeDAO.DisableUserNode(tx, req.UserNodeId)
 	if err != nil {
@@ -66,12 +69,12 @@ func (this *UserNodeService) DeleteUserNode(ctx context.Context, req *pb.DeleteU
 
 // FindAllEnabledUserNodes 列出所有可用用户节点
 func (this *UserNodeService) FindAllEnabledUserNodes(ctx context.Context, req *pb.FindAllEnabledUserNodesRequest) (*pb.FindAllEnabledUserNodesResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodes, err := models.SharedUserNodeDAO.FindAllEnabledUserNodes(tx)
 	if err != nil {
@@ -87,14 +90,14 @@ func (this *UserNodeService) FindAllEnabledUserNodes(ctx context.Context, req *p
 
 		result = append(result, &pb.UserNode{
 			Id:              int64(node.Id),
-			IsOn:            node.IsOn == 1,
+			IsOn:            node.IsOn,
 			UniqueId:        node.UniqueId,
 			Secret:          node.Secret,
 			Name:            node.Name,
 			Description:     node.Description,
-			HttpJSON:        []byte(node.Http),
-			HttpsJSON:       []byte(node.Https),
-			AccessAddrsJSON: []byte(node.AccessAddrs),
+			HttpJSON:        node.Http,
+			HttpsJSON:       node.Https,
+			AccessAddrsJSON: node.AccessAddrs,
 			AccessAddrs:     accessAddrs,
 		})
 	}
@@ -104,12 +107,12 @@ func (this *UserNodeService) FindAllEnabledUserNodes(ctx context.Context, req *p
 
 // CountAllEnabledUserNodes 计算用户节点数量
 func (this *UserNodeService) CountAllEnabledUserNodes(ctx context.Context, req *pb.CountAllEnabledUserNodesRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	count, err := models.SharedUserNodeDAO.CountAllEnabledUserNodes(tx)
 	if err != nil {
@@ -121,12 +124,12 @@ func (this *UserNodeService) CountAllEnabledUserNodes(ctx context.Context, req *
 
 // ListEnabledUserNodes 列出单页的用户节点
 func (this *UserNodeService) ListEnabledUserNodes(ctx context.Context, req *pb.ListEnabledUserNodesRequest) (*pb.ListEnabledUserNodesResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodes, err := models.SharedUserNodeDAO.ListEnabledUserNodes(tx, req.Offset, req.Size)
 	if err != nil {
@@ -142,16 +145,16 @@ func (this *UserNodeService) ListEnabledUserNodes(ctx context.Context, req *pb.L
 
 		result = append(result, &pb.UserNode{
 			Id:              int64(node.Id),
-			IsOn:            node.IsOn == 1,
+			IsOn:            node.IsOn,
 			UniqueId:        node.UniqueId,
 			Secret:          node.Secret,
 			Name:            node.Name,
 			Description:     node.Description,
-			HttpJSON:        []byte(node.Http),
-			HttpsJSON:       []byte(node.Https),
-			AccessAddrsJSON: []byte(node.AccessAddrs),
+			HttpJSON:        node.Http,
+			HttpsJSON:       node.Https,
+			AccessAddrsJSON: node.AccessAddrs,
 			AccessAddrs:     accessAddrs,
-			StatusJSON:      []byte(node.Status),
+			StatusJSON:      node.Status,
 		})
 	}
 
@@ -160,12 +163,12 @@ func (this *UserNodeService) ListEnabledUserNodes(ctx context.Context, req *pb.L
 
 // FindEnabledUserNode 根据ID查找节点
 func (this *UserNodeService) FindEnabledUserNode(ctx context.Context, req *pb.FindEnabledUserNodeRequest) (*pb.FindEnabledUserNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	node, err := models.SharedUserNodeDAO.FindEnabledUserNode(tx, req.UserNodeId)
 	if err != nil {
@@ -183,14 +186,14 @@ func (this *UserNodeService) FindEnabledUserNode(ctx context.Context, req *pb.Fi
 
 	result := &pb.UserNode{
 		Id:              int64(node.Id),
-		IsOn:            node.IsOn == 1,
+		IsOn:            node.IsOn,
 		UniqueId:        node.UniqueId,
 		Secret:          node.Secret,
 		Name:            node.Name,
 		Description:     node.Description,
-		HttpJSON:        []byte(node.Http),
-		HttpsJSON:       []byte(node.Https),
-		AccessAddrsJSON: []byte(node.AccessAddrs),
+		HttpJSON:        node.Http,
+		HttpsJSON:       node.Https,
+		AccessAddrsJSON: node.AccessAddrs,
 		AccessAddrs:     accessAddrs,
 	}
 	return &pb.FindEnabledUserNodeResponse{UserNode: result}, nil
@@ -198,12 +201,12 @@ func (this *UserNodeService) FindEnabledUserNode(ctx context.Context, req *pb.Fi
 
 // FindCurrentUserNode 获取当前用户节点的版本
 func (this *UserNodeService) FindCurrentUserNode(ctx context.Context, req *pb.FindCurrentUserNodeRequest) (*pb.FindCurrentUserNodeResponse, error) {
-	_, err := this.ValidateUserNode(ctx)
+	_, err := this.ValidateUserNode(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -230,14 +233,14 @@ func (this *UserNodeService) FindCurrentUserNode(ctx context.Context, req *pb.Fi
 
 	result := &pb.UserNode{
 		Id:              int64(node.Id),
-		IsOn:            node.IsOn == 1,
+		IsOn:            node.IsOn,
 		UniqueId:        node.UniqueId,
 		Secret:          node.Secret,
 		Name:            node.Name,
 		Description:     node.Description,
-		HttpJSON:        []byte(node.Http),
-		HttpsJSON:       []byte(node.Https),
-		AccessAddrsJSON: []byte(node.AccessAddrs),
+		HttpJSON:        node.Http,
+		HttpsJSON:       node.Https,
+		AccessAddrsJSON: node.AccessAddrs,
 		AccessAddrs:     accessAddrs,
 	}
 	return &pb.FindCurrentUserNodeResponse{UserNode: result}, nil
@@ -259,9 +262,18 @@ func (this *UserNodeService) UpdateUserNodeStatus(ctx context.Context, req *pb.U
 		return nil, errors.New("'nodeId' should be greater than 0")
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	err = models.SharedUserNodeDAO.UpdateNodeStatus(tx, nodeId, req.StatusJSON)
+	// 修改时间戳
+	var nodeStatus = &nodeconfigs.NodeStatus{}
+	err = json.Unmarshal(req.StatusJSON, nodeStatus)
+	if err != nil {
+		return nil, errors.New("decode node status json failed: " + err.Error())
+	}
+	nodeStatus.UpdatedAt = time.Now().Unix()
+
+	// 保存
+	err = models.SharedUserNodeDAO.UpdateNodeStatus(tx, nodeId, nodeStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +282,7 @@ func (this *UserNodeService) UpdateUserNodeStatus(ctx context.Context, req *pb.U
 
 // CountAllEnabledUserNodesWithSSLCertId 计算使用某个SSL证书的用户节点数量
 func (this *UserNodeService) CountAllEnabledUserNodesWithSSLCertId(ctx context.Context, req *pb.CountAllEnabledUserNodesWithSSLCertIdRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

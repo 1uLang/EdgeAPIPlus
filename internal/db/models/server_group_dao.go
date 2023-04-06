@@ -77,10 +77,11 @@ func (this *ServerGroupDAO) FindServerGroupName(tx *dbs.Tx, id int64) (string, e
 }
 
 // CreateGroup 创建分组
-func (this *ServerGroupDAO) CreateGroup(tx *dbs.Tx, name string) (groupId int64, err error) {
-	op := NewServerGroupOperator()
+func (this *ServerGroupDAO) CreateGroup(tx *dbs.Tx, name string, userId int64) (groupId int64, err error) {
+	var op = NewServerGroupOperator()
 	op.State = ServerGroupStateEnabled
 	op.Name = name
+	op.UserId = userId
 	op.IsOn = true
 	err = this.Save(tx, op)
 	if err != nil {
@@ -94,7 +95,7 @@ func (this *ServerGroupDAO) UpdateGroup(tx *dbs.Tx, groupId int64, name string) 
 	if groupId <= 0 {
 		return errors.New("invalid groupId")
 	}
-	op := NewServerGroupOperator()
+	var op = NewServerGroupOperator()
 	op.Id = groupId
 	op.Name = name
 	err := this.Save(tx, op)
@@ -102,9 +103,15 @@ func (this *ServerGroupDAO) UpdateGroup(tx *dbs.Tx, groupId int64, name string) 
 }
 
 // FindAllEnabledGroups 查找所有分组
-func (this *ServerGroupDAO) FindAllEnabledGroups(tx *dbs.Tx) (result []*ServerGroup, err error) {
-	_, err = this.Query(tx).
-		State(ServerGroupStateEnabled).
+func (this *ServerGroupDAO) FindAllEnabledGroups(tx *dbs.Tx, userId int64) (result []*ServerGroup, err error) {
+	var query = this.Query(tx).
+		State(ServerGroupStateEnabled)
+	if userId > 0 {
+		query.Attr("userId", userId)
+	} else {
+		query.Attr("userId", 0)
+	}
+	_, err = query.
 		Desc("order").
 		AscPk().
 		Slice(&result).
@@ -113,9 +120,13 @@ func (this *ServerGroupDAO) FindAllEnabledGroups(tx *dbs.Tx) (result []*ServerGr
 }
 
 // UpdateGroupOrders 修改分组排序
-func (this *ServerGroupDAO) UpdateGroupOrders(tx *dbs.Tx, groupIds []int64) error {
+func (this *ServerGroupDAO) UpdateGroupOrders(tx *dbs.Tx, groupIds []int64, userId int64) error {
 	for index, groupId := range groupIds {
-		_, err := this.Query(tx).
+		var query = this.Query(tx)
+		if userId > 0 {
+			query.Attr("userId", userId)
+		}
+		_, err := query.
 			Pk(groupId).
 			Set("order", len(groupIds)-index).
 			Update()
@@ -182,7 +193,7 @@ func (this *ServerGroupDAO) UpdateHTTPReverseProxy(tx *dbs.Tx, groupId int64, co
 	if groupId <= 0 {
 		return errors.New("groupId should not be smaller than 0")
 	}
-	op := NewServerGroupOperator()
+	var op = NewServerGroupOperator()
 	op.Id = groupId
 	op.HttpReverseProxy = JSONBytes(config)
 	err := this.Save(tx, op)
@@ -198,7 +209,7 @@ func (this *ServerGroupDAO) UpdateTCPReverseProxy(tx *dbs.Tx, groupId int64, con
 	if groupId <= 0 {
 		return errors.New("groupId should not be smaller than 0")
 	}
-	op := NewServerGroupOperator()
+	var op = NewServerGroupOperator()
 	op.Id = groupId
 	op.TcpReverseProxy = JSONBytes(config)
 	err := this.Save(tx, op)
@@ -214,7 +225,7 @@ func (this *ServerGroupDAO) UpdateUDPReverseProxy(tx *dbs.Tx, groupId int64, con
 	if groupId <= 0 {
 		return errors.New("groupId should not be smaller than 0")
 	}
-	op := NewServerGroupOperator()
+	var op = NewServerGroupOperator()
 	op.Id = groupId
 	op.UdpReverseProxy = JSONBytes(config)
 	err := this.Save(tx, op)
@@ -301,12 +312,12 @@ func (this *ServerGroupDAO) ComposeGroupConfig(tx *dbs.Tx, groupId int64, cacheM
 	var config = &serverconfigs.ServerGroupConfig{
 		Id:   int64(group.Id),
 		Name: group.Name,
-		IsOn: group.IsOn == 1,
+		IsOn: group.IsOn,
 	}
 
-	if len(group.HttpReverseProxy) > 0 {
+	if IsNotNull(group.HttpReverseProxy) {
 		reverseProxyRef := &serverconfigs.ReverseProxyRef{}
-		err := json.Unmarshal([]byte(group.HttpReverseProxy), reverseProxyRef)
+		err := json.Unmarshal(group.HttpReverseProxy, reverseProxyRef)
 		if err != nil {
 			return nil, err
 		}
@@ -321,9 +332,9 @@ func (this *ServerGroupDAO) ComposeGroupConfig(tx *dbs.Tx, groupId int64, cacheM
 		}
 	}
 
-	if len(group.TcpReverseProxy) > 0 {
+	if IsNotNull(group.TcpReverseProxy) {
 		reverseProxyRef := &serverconfigs.ReverseProxyRef{}
-		err := json.Unmarshal([]byte(group.TcpReverseProxy), reverseProxyRef)
+		err := json.Unmarshal(group.TcpReverseProxy, reverseProxyRef)
 		if err != nil {
 			return nil, err
 		}
@@ -338,9 +349,9 @@ func (this *ServerGroupDAO) ComposeGroupConfig(tx *dbs.Tx, groupId int64, cacheM
 		}
 	}
 
-	if len(group.UdpReverseProxy) > 0 {
+	if IsNotNull(group.UdpReverseProxy) {
 		reverseProxyRef := &serverconfigs.ReverseProxyRef{}
-		err := json.Unmarshal([]byte(group.UdpReverseProxy), reverseProxyRef)
+		err := json.Unmarshal(group.UdpReverseProxy, reverseProxyRef)
 		if err != nil {
 			return nil, err
 		}
@@ -381,6 +392,33 @@ func (this *ServerGroupDAO) FindEnabledGroupIdWithReverseProxyId(tx *dbs.Tx, rev
 		Param("jsonQuery", maps.Map{"reverseProxyId": reverseProxyId}.AsJSON()).
 		ResultPk().
 		FindInt64Col(0)
+}
+
+// CheckUserGroup 检查用户分组
+func (this *ServerGroupDAO) CheckUserGroup(tx *dbs.Tx, userId int64, groupId int64) error {
+	b, err := this.Query(tx).
+		Pk(groupId).
+		Attr("userId", userId).
+		State(ServerGroupStateEnabled).
+		Exist()
+	if err != nil {
+		return err
+	}
+	if !b {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ExistsGroup 检查分组ID是否存在
+func (this *ServerGroupDAO) ExistsGroup(tx *dbs.Tx, groupId int64) (bool, error) {
+	if groupId <= 0 {
+		return false, nil
+	}
+	return this.Query(tx).
+		Pk(groupId).
+		State(ServerGroupStateEnabled).
+		Exist()
 }
 
 // NotifyUpdate 通知更新

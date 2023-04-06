@@ -15,7 +15,7 @@ type NodeIPAddressLogService struct {
 
 // CountAllNodeIPAddressLogs 计算日志数量
 func (this *NodeIPAddressLogService) CountAllNodeIPAddressLogs(ctx context.Context, req *pb.CountAllNodeIPAddressLogsRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func (this *NodeIPAddressLogService) CountAllNodeIPAddressLogs(ctx context.Conte
 
 // ListNodeIPAddressLogs 列出单页日志
 func (this *NodeIPAddressLogService) ListNodeIPAddressLogs(ctx context.Context, req *pb.ListNodeIPAddressLogsRequest) (*pb.ListNodeIPAddressLogsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -78,9 +78,9 @@ func (this *NodeIPAddressLogService) ListNodeIPAddressLogs(ctx context.Context, 
 			Id:            int64(log.Id),
 			Description:   log.Description,
 			CreatedAt:     int64(log.CreatedAt),
-			IsOn:          log.IsOn == 1,
-			IsUp:          log.IsUp == 1,
-			CanAccess:     log.CanAccess == 1,
+			IsOn:          log.IsOn,
+			IsUp:          log.IsUp,
+			CanAccess:     log.CanAccess,
 			BackupIP:      log.BackupIP,
 			NodeIPAddress: pbAddr,
 			Admin:         pbAdmin,

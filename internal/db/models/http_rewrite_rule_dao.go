@@ -97,19 +97,19 @@ func (this *HTTPRewriteRuleDAO) ComposeRewriteRule(tx *dbs.Tx, rewriteRuleId int
 
 	config := &serverconfigs.HTTPRewriteRule{}
 	config.Id = int64(rule.Id)
-	config.IsOn = rule.IsOn == 1
+	config.IsOn = rule.IsOn
 	config.Pattern = rule.Pattern
 	config.Replace = rule.Replace
 	config.Mode = rule.Mode
 	config.RedirectStatus = types.Int(rule.RedirectStatus)
 	config.ProxyHost = rule.ProxyHost
-	config.IsBreak = rule.IsBreak == 1
+	config.IsBreak = rule.IsBreak
 	config.WithQuery = rule.WithQuery == 1
 
 	// conds
 	if len(rule.Conds) > 0 {
 		conds := &shared.HTTPRequestCondsConfig{}
-		err = json.Unmarshal([]byte(rule.Conds), conds)
+		err = json.Unmarshal(rule.Conds, conds)
 		if err != nil {
 			return nil, err
 		}
@@ -125,7 +125,7 @@ func (this *HTTPRewriteRuleDAO) ComposeRewriteRule(tx *dbs.Tx, rewriteRuleId int
 
 // CreateRewriteRule 创建规则
 func (this *HTTPRewriteRuleDAO) CreateRewriteRule(tx *dbs.Tx, pattern string, replace string, mode string, redirectStatus int, isBreak bool, proxyHost string, withQuery bool, isOn bool, condsJSON []byte) (int64, error) {
-	op := NewHTTPRewriteRuleOperator()
+	var op = NewHTTPRewriteRuleOperator()
 	op.State = HTTPRewriteRuleStateEnabled
 	op.IsOn = isOn
 
@@ -150,7 +150,7 @@ func (this *HTTPRewriteRuleDAO) UpdateRewriteRule(tx *dbs.Tx, rewriteRuleId int6
 	if rewriteRuleId <= 0 {
 		return errors.New("invalid rewriteRuleId")
 	}
-	op := NewHTTPRewriteRuleOperator()
+	var op = NewHTTPRewriteRuleOperator()
 	op.Id = rewriteRuleId
 	op.IsOn = isOn
 	op.Pattern = pattern

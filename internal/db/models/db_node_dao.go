@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/base64"
+	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/encrypt"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	_ "github.com/go-sql-driver/mysql"
@@ -49,12 +50,17 @@ func (this *DBNodeDAO) EnableDBNode(tx *dbs.Tx, id int64) error {
 }
 
 // DisableDBNode 禁用条目
-func (this *DBNodeDAO) DisableDBNode(tx *dbs.Tx, id int64) error {
+func (this *DBNodeDAO) DisableDBNode(tx *dbs.Tx, nodeId int64) error {
 	_, err := this.Query(tx).
-		Pk(id).
+		Pk(nodeId).
 		Set("state", DBNodeStateDisabled).
 		Update()
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 删除运行日志
+	return SharedNodeLogDAO.DeleteNodeLogs(tx, nodeconfigs.NodeRoleDatabase, nodeId)
 }
 
 // FindEnabledDBNode 查找启用中的条目
@@ -103,7 +109,7 @@ func (this *DBNodeDAO) ListEnabledNodes(tx *dbs.Tx, offset int64, size int64) (r
 
 // CreateDBNode 创建节点
 func (this *DBNodeDAO) CreateDBNode(tx *dbs.Tx, isOn bool, name string, description string, host string, port int32, database string, username string, password string, charset string) (int64, error) {
-	op := NewDBNodeOperator()
+	var op = NewDBNodeOperator()
 	op.State = NodeStateEnabled
 	op.IsOn = isOn
 	op.Name = name
@@ -126,7 +132,7 @@ func (this *DBNodeDAO) UpdateNode(tx *dbs.Tx, nodeId int64, isOn bool, name stri
 	if nodeId <= 0 {
 		return errors.New("invalid nodeId")
 	}
-	op := NewDBNodeOperator()
+	var op = NewDBNodeOperator()
 	op.Id = nodeId
 	op.IsOn = isOn
 	op.Name = name

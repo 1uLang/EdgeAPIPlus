@@ -1,9 +1,11 @@
 package accesslogs
 
 import (
+	"bytes"
 	"errors"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/iwind/TeaGo/logs"
 	"os/exec"
 	"runtime"
@@ -95,7 +97,10 @@ func (this *SyslogStorage) Write(accessLogs []*pb.HTTPAccessLog) error {
 
 	args = append(args, "-S", "10240")
 
-	cmd := exec.Command(this.exe, args...)
+	var cmd = exec.Command(this.exe, args...)
+	var stderrBuffer = &bytes.Buffer{}
+	cmd.Stderr = stderrBuffer
+
 	w, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -106,9 +111,12 @@ func (this *SyslogStorage) Write(accessLogs []*pb.HTTPAccessLog) error {
 	}
 
 	for _, accessLog := range accessLogs {
+		if this.firewallOnly && accessLog.FirewallPolicyId == 0 {
+			continue
+		}
 		data, err := this.Marshal(accessLog)
 		if err != nil {
-			logs.Error(err)
+			remotelogs.Error("ACCESS_LOG_POLICY_SYSLOG", "marshal accesslog failed: "+err.Error())
 			continue
 		}
 		_, err = w.Write(data)
@@ -118,14 +126,15 @@ func (this *SyslogStorage) Write(accessLogs []*pb.HTTPAccessLog) error {
 
 		_, err = w.Write([]byte("\n"))
 		if err != nil {
-			logs.Error(err)
+			remotelogs.Error("ACCESS_LOG_POLICY_SYSLOG", "write accesslog failed: "+err.Error())
 		}
 	}
 
 	_ = w.Close()
+
 	err = cmd.Wait()
 	if err != nil {
-		return err
+		return errors.New("send syslog failed: " + err.Error() + ", stderr: " + stderrBuffer.String())
 	}
 
 	return nil

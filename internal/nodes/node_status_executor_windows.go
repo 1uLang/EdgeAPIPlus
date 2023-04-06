@@ -1,11 +1,12 @@
+//go:build windows
 // +build windows
 
 package nodes
 
 import (
 	"context"
-	"github.com/shirou/gopsutil/cpu"
-	"github.com/shirou/gopsutil/mem"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 	"math"
 	"sync"
 	"time"

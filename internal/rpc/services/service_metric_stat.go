@@ -6,8 +6,105 @@ import (
 	"context"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
+	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
+	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
+	"strings"
+	"sync"
+	"time"
 )
+
+// 队列相关数据
+var metricStatsMap = map[string]*pb.UploadMetricStatsRequest{} // key (clusterId@nodeId@serverId@itemId) => UploadMetricStatsRequest
+var metricStatKeysQueue = make(chan string, 100_000)
+var metricStatsLocker = &sync.Mutex{}
+
+func init() {
+	dbs.OnReadyDone(func() {
+		goman.New(func() {
+			// 将队列导入数据库
+			var countKeys = 0
+			var useTx = true
+
+			for key := range metricStatKeysQueue {
+				err := func(key string) error {
+					metricStatsLocker.Lock()
+					req, ok := metricStatsMap[key]
+					if !ok {
+						metricStatsLocker.Unlock()
+						return nil
+					}
+					delete(metricStatsMap, key)
+					metricStatsLocker.Unlock()
+
+					var pieces = strings.Split(key, "@")
+					var clusterId = types.Int64(pieces[0])
+					var nodeId = types.Int64(pieces[1])
+					var serverId = types.Int64(pieces[2])
+					var itemId = types.Int64(pieces[3])
+
+					// 删除旧的数据
+					var tx *dbs.Tx
+					var err error
+					if useTx {
+						var before = time.Now()
+
+						tx, err = models.SharedMetricStatDAO.Instance.Begin()
+						if err != nil {
+							return err
+						}
+
+						defer func() {
+							// 失败时不需要rollback
+							if tx != nil {
+								commitErr := tx.Commit()
+								if commitErr != nil {
+									remotelogs.Error("METRIC_STAT", "commit metric stats failed: "+commitErr.Error())
+								}
+							}
+
+							// 如果运行时间过长，则不使用事务
+							if time.Since(before) > 1*time.Second {
+								useTx = false
+							}
+						}()
+					}
+
+					err = models.SharedMetricStatDAO.DeleteNodeItemStats(tx, nodeId, serverId, itemId, req.Time)
+					if err != nil {
+						return err
+					}
+
+					for _, stat := range req.MetricStats {
+						err := models.SharedMetricStatDAO.CreateStat(tx, stat.Hash, clusterId, nodeId, req.ServerId, req.ItemId, stat.Keys, float64(stat.Value), req.Time, req.Version)
+						if err != nil {
+							return err
+						}
+					}
+
+					// 保存总和
+					err = models.SharedMetricSumStatDAO.UpdateSum(tx, clusterId, nodeId, req.ServerId, req.Time, req.ItemId, req.Version, req.Count, req.Total)
+					if err != nil {
+						return err
+					}
+
+					return nil
+				}(key)
+				if err != nil {
+					remotelogs.Error("METRIC_STAT", "upload metric stats failed: "+err.Error())
+				}
+
+				// 人为限速
+				countKeys++
+				if countKeys >= 100 {
+					countKeys = 0
+					time.Sleep(1 * time.Second)
+				}
+			}
+		})
+	})
+}
 
 // MetricStatService 指标统计数据相关服务
 type MetricStatService struct {
@@ -27,31 +124,25 @@ func (this *MetricStatService) UploadMetricStats(ctx context.Context, req *pb.Up
 		return nil, err
 	}
 
-	// 删除旧的数据
-	err = models.SharedMetricStatDAO.DeleteNodeItemStats(tx, nodeId, req.ServerId, req.ItemId, req.Time)
-	if err != nil {
-		return nil, err
+	var key = types.String(clusterId) + "@" + types.String(nodeId) + "@" + types.String(req.ServerId) + "@" + types.String(req.ItemId)
+	metricStatsLocker.Lock()
+	metricStatsMap[key] = req
+
+	select {
+	case metricStatKeysQueue <- key:
+	default:
+		// 如果满了就删除
+		delete(metricStatsMap, key)
 	}
 
-	for _, stat := range req.MetricStats {
-		err := models.SharedMetricStatDAO.CreateStat(tx, stat.Hash, clusterId, nodeId, req.ServerId, req.ItemId, stat.Keys, float64(stat.Value), req.Time, req.Version)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// 保存总和
-	err = models.SharedMetricSumStatDAO.UpdateSum(tx, clusterId, nodeId, req.ServerId, req.Time, req.ItemId, req.Version, req.Count, req.Total)
-	if err != nil {
-		return nil, err
-	}
+	metricStatsLocker.Unlock()
 
 	return this.Success()
 }
 
 // CountMetricStats 计算指标数据数量
 func (this *MetricStatService) CountMetricStats(ctx context.Context, req *pb.CountMetricStatsRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +160,7 @@ func (this *MetricStatService) CountMetricStats(ctx context.Context, req *pb.Cou
 
 // ListMetricStats 读取单页指标数据
 func (this *MetricStatService) ListMetricStats(ctx context.Context, req *pb.ListMetricStatsRequest) (*pb.ListMetricStatsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

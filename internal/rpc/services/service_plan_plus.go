@@ -17,13 +17,13 @@ type PlanService struct {
 
 // CreatePlan 创建套餐
 func (this *PlanService) CreatePlan(ctx context.Context, req *pb.CreatePlanRequest) (*pb.CreatePlanResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
-	planId, err := models.SharedPlanDAO.CreatePlan(tx, req.Name, req.ClusterId, req.TrafficLimitJSON, req.FeaturesJSON, req.PriceType, req.TrafficPriceJSON, req.MonthlyPrice, req.SeasonallyPrice, req.YearlyPrice)
+	planId, err := models.SharedPlanDAO.CreatePlan(tx, req.Name, req.ClusterId, req.TrafficLimitJSON, req.FeaturesJSON, req.PriceType, req.TrafficPriceJSON, req.BandwidthPriceJSON, req.MonthlyPrice, req.SeasonallyPrice, req.YearlyPrice)
 	if err != nil {
 		return nil, err
 	}
@@ -32,13 +32,13 @@ func (this *PlanService) CreatePlan(ctx context.Context, req *pb.CreatePlanReque
 
 // UpdatePlan 修改套餐
 func (this *PlanService) UpdatePlan(ctx context.Context, req *pb.UpdatePlanRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
-	err = models.SharedPlanDAO.UpdatePlan(tx, req.PlanId, req.Name, req.IsOn, req.ClusterId, req.TrafficLimitJSON, req.FeaturesJSON, req.PriceType, req.TrafficPriceJSON, req.MonthlyPrice, req.SeasonallyPrice, req.YearlyPrice)
+	err = models.SharedPlanDAO.UpdatePlan(tx, req.PlanId, req.Name, req.IsOn, req.ClusterId, req.TrafficLimitJSON, req.FeaturesJSON, req.PriceType, req.TrafficPriceJSON, req.BandwidthPriceJSON, req.MonthlyPrice, req.SeasonallyPrice, req.YearlyPrice)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func (this *PlanService) UpdatePlan(ctx context.Context, req *pb.UpdatePlanReque
 
 // DeletePlan 删除套餐
 func (this *PlanService) DeletePlan(ctx context.Context, req *pb.DeletePlanRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (this *PlanService) DeletePlan(ctx context.Context, req *pb.DeletePlanReque
 
 // FindEnabledPlan 查找单个套餐
 func (this *PlanService) FindEnabledPlan(ctx context.Context, req *pb.FindEnabledPlanRequest) (*pb.FindEnabledPlanResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, _, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -72,26 +72,30 @@ func (this *PlanService) FindEnabledPlan(ctx context.Context, req *pb.FindEnable
 	if err != nil {
 		return nil, err
 	}
+	if plan == nil {
+		return &pb.FindEnabledPlanResponse{Plan: nil}, nil
+	}
 	return &pb.FindEnabledPlanResponse{
 		Plan: &pb.Plan{
-			Id:               int64(plan.Id),
-			IsOn:             plan.IsOn == 1,
-			Name:             plan.Name,
-			ClusterId:        int64(plan.ClusterId),
-			TrafficLimitJSON: []byte(plan.TrafficLimit),
-			FeaturesJSON:     []byte(plan.Features),
-			PriceType:        plan.PriceType,
-			TrafficPriceJSON: []byte(plan.TrafficPrice),
-			MonthlyPrice:     float32(plan.MonthlyPrice),
-			SeasonallyPrice:  float32(plan.SeasonallyPrice),
-			YearlyPrice:      float32(plan.YearlyPrice),
+			Id:                 int64(plan.Id),
+			IsOn:               plan.IsOn,
+			Name:               plan.Name,
+			ClusterId:          int64(plan.ClusterId),
+			TrafficLimitJSON:   plan.TrafficLimit,
+			FeaturesJSON:       plan.Features,
+			PriceType:          plan.PriceType,
+			TrafficPriceJSON:   plan.TrafficPrice,
+			BandwidthPriceJSON: plan.BandwidthPrice,
+			MonthlyPrice:       float32(plan.MonthlyPrice),
+			SeasonallyPrice:    float32(plan.SeasonallyPrice),
+			YearlyPrice:        float32(plan.YearlyPrice),
 		},
 	}, nil
 }
 
 // CountAllEnabledPlans 计算套餐数量
 func (this *PlanService) CountAllEnabledPlans(ctx context.Context, req *pb.CountAllEnabledPlansRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +110,7 @@ func (this *PlanService) CountAllEnabledPlans(ctx context.Context, req *pb.Count
 
 // ListEnabledPlans 列出单页套餐
 func (this *PlanService) ListEnabledPlans(ctx context.Context, req *pb.ListEnabledPlansRequest) (*pb.ListEnabledPlansResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, _, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -119,17 +123,18 @@ func (this *PlanService) ListEnabledPlans(ctx context.Context, req *pb.ListEnabl
 	var pbPlans = []*pb.Plan{}
 	for _, plan := range plans {
 		pbPlans = append(pbPlans, &pb.Plan{
-			Id:               int64(plan.Id),
-			IsOn:             plan.IsOn == 1,
-			Name:             plan.Name,
-			ClusterId:        int64(plan.ClusterId),
-			TrafficLimitJSON: []byte(plan.TrafficLimit),
-			FeaturesJSON:     []byte(plan.Features),
-			PriceType:        plan.PriceType,
-			TrafficPriceJSON: []byte(plan.TrafficPrice),
-			MonthlyPrice:     float32(plan.MonthlyPrice),
-			SeasonallyPrice:  float32(plan.SeasonallyPrice),
-			YearlyPrice:      float32(plan.YearlyPrice),
+			Id:                 int64(plan.Id),
+			IsOn:               plan.IsOn,
+			Name:               plan.Name,
+			ClusterId:          int64(plan.ClusterId),
+			TrafficLimitJSON:   plan.TrafficLimit,
+			FeaturesJSON:       plan.Features,
+			PriceType:          plan.PriceType,
+			TrafficPriceJSON:   plan.TrafficPrice,
+			BandwidthPriceJSON: plan.BandwidthPrice,
+			MonthlyPrice:       float32(plan.MonthlyPrice),
+			SeasonallyPrice:    float32(plan.SeasonallyPrice),
+			YearlyPrice:        float32(plan.YearlyPrice),
 		})
 	}
 
@@ -138,7 +143,7 @@ func (this *PlanService) ListEnabledPlans(ctx context.Context, req *pb.ListEnabl
 
 // SortPlans 对套餐进行排序
 func (this *PlanService) SortPlans(ctx context.Context, req *pb.SortPlansRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

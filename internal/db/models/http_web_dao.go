@@ -6,6 +6,7 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
+	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
@@ -94,14 +95,14 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 		return nil, nil
 	}
 
-	config := &serverconfigs.HTTPWebConfig{}
+	var config = &serverconfigs.HTTPWebConfig{}
 	config.Id = webId
-	config.IsOn = web.IsOn == 1
+	config.IsOn = web.IsOn
 
 	// root
 	if IsNotNull(web.Root) {
 		rootConfig := &serverconfigs.HTTPRootConfig{}
-		err = json.Unmarshal([]byte(web.Root), rootConfig)
+		err = json.Unmarshal(web.Root, rootConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -111,7 +112,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// compression
 	if IsNotNull(web.Compression) {
 		compression := &serverconfigs.HTTPCompressionConfig{}
-		err = json.Unmarshal([]byte(web.Compression), compression)
+		err = json.Unmarshal(web.Compression, compression)
 		if err != nil {
 			return nil, err
 		}
@@ -148,7 +149,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// charset
 	if IsNotNull(web.Charset) {
 		charsetConfig := &serverconfigs.HTTPCharsetConfig{}
-		err = json.Unmarshal([]byte(web.Charset), charsetConfig)
+		err = json.Unmarshal(web.Charset, charsetConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -158,7 +159,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// headers
 	if IsNotNull(web.RequestHeader) {
 		ref := &shared.HTTPHeaderPolicyRef{}
-		err = json.Unmarshal([]byte(web.RequestHeader), ref)
+		err = json.Unmarshal(web.RequestHeader, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -177,7 +178,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 
 	if IsNotNull(web.ResponseHeader) {
 		ref := &shared.HTTPHeaderPolicyRef{}
-		err = json.Unmarshal([]byte(web.ResponseHeader), ref)
+		err = json.Unmarshal(web.ResponseHeader, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +198,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// shutdown
 	if IsNotNull(web.Shutdown) {
 		shutdownConfig := &serverconfigs.HTTPShutdownConfig{}
-		err = json.Unmarshal([]byte(web.Shutdown), shutdownConfig)
+		err = json.Unmarshal(web.Shutdown, shutdownConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -207,7 +208,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// pages
 	if IsNotNull(web.Pages) {
 		pages := []*serverconfigs.HTTPPageConfig{}
-		err = json.Unmarshal([]byte(web.Pages), &pages)
+		err = json.Unmarshal(web.Pages, &pages)
 		if err != nil {
 			return nil, err
 		}
@@ -226,7 +227,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// 访问日志
 	if IsNotNull(web.AccessLog) {
 		accessLogConfig := &serverconfigs.HTTPAccessLogRef{}
-		err = json.Unmarshal([]byte(web.AccessLog), accessLogConfig)
+		err = json.Unmarshal(web.AccessLog, accessLogConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -236,7 +237,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// 统计配置
 	if IsNotNull(web.Stat) {
 		statRef := &serverconfigs.HTTPStatRef{}
-		err = json.Unmarshal([]byte(web.Stat), statRef)
+		err = json.Unmarshal(web.Stat, statRef)
 		if err != nil {
 			return nil, err
 		}
@@ -246,7 +247,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// 缓存配置
 	if IsNotNull(web.Cache) {
 		cacheConfig := &serverconfigs.HTTPCacheConfig{}
-		err = json.Unmarshal([]byte(web.Cache), &cacheConfig)
+		err = json.Unmarshal(web.Cache, &cacheConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +259,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// 防火墙配置
 	if IsNotNull(web.Firewall) {
 		firewallRef := &firewallconfigs.HTTPFirewallRef{}
-		err = json.Unmarshal([]byte(web.Firewall), firewallRef)
+		err = json.Unmarshal(web.Firewall, firewallRef)
 		if err != nil {
 			return nil, err
 		}
@@ -281,7 +282,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// 路由规则
 	if IsNotNull(web.Locations) {
 		refs := []*serverconfigs.HTTPLocationRef{}
-		err = json.Unmarshal([]byte(web.Locations), &refs)
+		err = json.Unmarshal(web.Locations, &refs)
 		if err != nil {
 			return nil, err
 		}
@@ -299,7 +300,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// 跳转
 	if IsNotNull(web.RedirectToHttps) {
 		redirectToHTTPSConfig := &serverconfigs.HTTPRedirectToHTTPSConfig{}
-		err = json.Unmarshal([]byte(web.RedirectToHttps), redirectToHTTPSConfig)
+		err = json.Unmarshal(web.RedirectToHttps, redirectToHTTPSConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -309,7 +310,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// Websocket
 	if IsNotNull(web.Websocket) {
 		ref := &serverconfigs.HTTPWebsocketRef{}
-		err = json.Unmarshal([]byte(web.Websocket), ref)
+		err = json.Unmarshal(web.Websocket, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -328,7 +329,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// 重写规则
 	if IsNotNull(web.RewriteRules) {
 		refs := []*serverconfigs.HTTPRewriteRef{}
-		err = json.Unmarshal([]byte(web.RewriteRules), &refs)
+		err = json.Unmarshal(web.RewriteRules, &refs)
 		if err != nil {
 			return nil, err
 		}
@@ -347,7 +348,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// 主机跳转
 	if IsNotNull(web.HostRedirects) {
 		redirects := []*serverconfigs.HTTPHostRedirectConfig{}
-		err = json.Unmarshal([]byte(web.HostRedirects), &redirects)
+		err = json.Unmarshal(web.HostRedirects, &redirects)
 		if err != nil {
 			return nil, err
 		}
@@ -357,7 +358,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// Fastcgi
 	if IsNotNull(web.Fastcgi) {
 		ref := &serverconfigs.HTTPFastcgiRef{}
-		err = json.Unmarshal([]byte(web.Fastcgi), ref)
+		err = json.Unmarshal(web.Fastcgi, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -380,8 +381,8 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 
 	// 认证
 	if IsNotNull(web.Auth) {
-		authConfig := &serverconfigs.HTTPAuthConfig{}
-		err = json.Unmarshal([]byte(web.Auth), authConfig)
+		var authConfig = &serverconfigs.HTTPAuthConfig{}
+		err = json.Unmarshal(web.Auth, authConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -394,6 +395,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 			if policyConfig != nil {
 				ref.AuthPolicy = policyConfig
 				newRefs = append(newRefs, ref)
+				authConfig.PolicyRefs = newRefs
 			}
 		}
 		config.Auth = authConfig
@@ -402,7 +404,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// WebP
 	if IsNotNull(web.Webp) {
 		var webpConfig = &serverconfigs.WebPImageConfig{}
-		err = json.Unmarshal([]byte(web.Webp), webpConfig)
+		err = json.Unmarshal(web.Webp, webpConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -412,7 +414,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 	// RemoteAddr
 	if IsNotNull(web.RemoteAddr) {
 		var remoteAddrConfig = &serverconfigs.HTTPRemoteAddrConfig{}
-		err = json.Unmarshal([]byte(web.RemoteAddr), remoteAddrConfig)
+		err = json.Unmarshal(web.RemoteAddr, remoteAddrConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -421,6 +423,50 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 
 	// mergeSlashes
 	config.MergeSlashes = web.MergeSlashes == 1
+
+	// 请求限制
+	if len(web.RequestLimit) > 0 {
+		var requestLimitConfig = &serverconfigs.HTTPRequestLimitConfig{}
+		if len(web.RequestLimit) > 0 {
+			err = json.Unmarshal(web.RequestLimit, requestLimitConfig)
+			if err != nil {
+				return nil, err
+			}
+			config.RequestLimit = requestLimitConfig
+		}
+	}
+
+	// 请求脚本
+	if len(web.RequestScripts) > 0 {
+		var requestScriptsConfig = &serverconfigs.HTTPRequestScriptsConfig{}
+		if len(web.RequestScripts) > 0 {
+			err = json.Unmarshal(web.RequestScripts, requestScriptsConfig)
+			if err != nil {
+				return nil, err
+			}
+			config.RequestScripts = requestScriptsConfig
+		}
+	}
+
+	// UAM
+	if teaconst.IsPlus && IsNotNull(web.Uam) {
+		var uamConfig = &serverconfigs.UAMConfig{}
+		err = json.Unmarshal(web.Uam, uamConfig)
+		if err != nil {
+			return nil, err
+		}
+		config.UAM = uamConfig
+	}
+
+	// Referers
+	if IsNotNull(web.Referers) {
+		var referersConfig = &serverconfigs.ReferersConfig{}
+		err = json.Unmarshal(web.Referers, referersConfig)
+		if err != nil {
+			return nil, err
+		}
+		config.Referers = referersConfig
+	}
 
 	if cacheMap != nil {
 		cacheMap.Put(cacheKey, config)
@@ -431,7 +477,7 @@ func (this *HTTPWebDAO) ComposeWebConfig(tx *dbs.Tx, webId int64, cacheMap *util
 
 // CreateWeb 创建Web配置
 func (this *HTTPWebDAO) CreateWeb(tx *dbs.Tx, adminId int64, userId int64, rootJSON []byte) (int64, error) {
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.State = HTTPWebStateEnabled
 	op.AdminId = adminId
 	op.UserId = userId
@@ -450,7 +496,7 @@ func (this *HTTPWebDAO) UpdateWeb(tx *dbs.Tx, webId int64, rootJSON []byte) erro
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Root = JSONBytes(rootJSON)
 	err := this.Save(tx, op)
@@ -466,7 +512,7 @@ func (this *HTTPWebDAO) UpdateWebCompression(tx *dbs.Tx, webId int64, compressio
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Compression = JSONBytes(compressionConfig)
 	err := this.Save(tx, op)
@@ -482,7 +528,7 @@ func (this *HTTPWebDAO) UpdateWebWebP(tx *dbs.Tx, webId int64, webpConfig []byte
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Webp = JSONBytes(webpConfig)
 	err := this.Save(tx, op)
@@ -513,7 +559,7 @@ func (this *HTTPWebDAO) UpdateWebCharset(tx *dbs.Tx, webId int64, charsetJSON []
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Charset = JSONBytes(charsetJSON)
 	err := this.Save(tx, op)
@@ -529,7 +575,7 @@ func (this *HTTPWebDAO) UpdateWebRequestHeaderPolicy(tx *dbs.Tx, webId int64, he
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.RequestHeader = JSONBytes(headerPolicyJSON)
 	err := this.Save(tx, op)
@@ -545,7 +591,7 @@ func (this *HTTPWebDAO) UpdateWebResponseHeaderPolicy(tx *dbs.Tx, webId int64, h
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.ResponseHeader = JSONBytes(headerPolicyJSON)
 	err := this.Save(tx, op)
@@ -561,7 +607,7 @@ func (this *HTTPWebDAO) UpdateWebPages(tx *dbs.Tx, webId int64, pagesJSON []byte
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Pages = JSONBytes(pagesJSON)
 	err := this.Save(tx, op)
@@ -577,7 +623,7 @@ func (this *HTTPWebDAO) UpdateWebShutdown(tx *dbs.Tx, webId int64, shutdownJSON 
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Shutdown = JSONBytes(shutdownJSON)
 	err := this.Save(tx, op)
@@ -593,7 +639,7 @@ func (this *HTTPWebDAO) UpdateWebAccessLogConfig(tx *dbs.Tx, webId int64, access
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.AccessLog = JSONBytes(accessLogJSON)
 	err := this.Save(tx, op)
@@ -609,7 +655,7 @@ func (this *HTTPWebDAO) UpdateWebStat(tx *dbs.Tx, webId int64, statJSON []byte) 
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Stat = JSONBytes(statJSON)
 	err := this.Save(tx, op)
@@ -625,7 +671,7 @@ func (this *HTTPWebDAO) UpdateWebCache(tx *dbs.Tx, webId int64, cacheJSON []byte
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Cache = JSONBytes(cacheJSON)
 	err := this.Save(tx, op)
@@ -641,7 +687,7 @@ func (this *HTTPWebDAO) UpdateWebFirewall(tx *dbs.Tx, webId int64, firewallJSON 
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Firewall = JSONBytes(firewallJSON)
 	err := this.Save(tx, op)
@@ -657,7 +703,7 @@ func (this *HTTPWebDAO) UpdateWebLocations(tx *dbs.Tx, webId int64, locationsJSO
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Locations = JSONBytes(locationsJSON)
 	err := this.Save(tx, op)
@@ -673,7 +719,7 @@ func (this *HTTPWebDAO) UpdateWebRedirectToHTTPS(tx *dbs.Tx, webId int64, redire
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.RedirectToHttps = JSONBytes(redirectToHTTPSJSON)
 	err := this.Save(tx, op)
@@ -689,7 +735,7 @@ func (this *HTTPWebDAO) UpdateWebsocket(tx *dbs.Tx, webId int64, websocketJSON [
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Websocket = JSONBytes(websocketJSON)
 	err := this.Save(tx, op)
@@ -705,7 +751,7 @@ func (this *HTTPWebDAO) UpdateWebFastcgi(tx *dbs.Tx, webId int64, fastcgiJSON []
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Fastcgi = JSONBytes(fastcgiJSON)
 	err := this.Save(tx, op)
@@ -721,7 +767,7 @@ func (this *HTTPWebDAO) UpdateWebRewriteRules(tx *dbs.Tx, webId int64, rewriteRu
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.RewriteRules = JSONBytes(rewriteRulesJSON)
 	err := this.Save(tx, op)
@@ -737,7 +783,7 @@ func (this *HTTPWebDAO) UpdateWebAuth(tx *dbs.Tx, webId int64, authJSON []byte) 
 	if webId <= 0 {
 		return errors.New("invalid webId")
 	}
-	op := NewHTTPWebOperator()
+	var op = NewHTTPWebOperator()
 	op.Id = webId
 	op.Auth = JSONBytes(authJSON)
 	err := this.Save(tx, op)
@@ -1007,6 +1053,10 @@ func (this *HTTPWebDAO) FindWebServerGroupId(tx *dbs.Tx, webId int64) (groupId i
 
 // CheckUserWeb 检查用户权限
 func (this *HTTPWebDAO) CheckUserWeb(tx *dbs.Tx, userId int64, webId int64) error {
+	if userId <= 0 || webId <= 0 {
+		return ErrNotFound
+	}
+
 	serverId, err := this.FindWebServerId(tx, webId)
 	if err != nil {
 		return err
@@ -1068,6 +1118,138 @@ func (this *HTTPWebDAO) UpdateWebCommon(tx *dbs.Tx, webId int64, mergeSlashes bo
 	}
 
 	return this.NotifyUpdate(tx, webId)
+}
+
+// UpdateWebRequestLimit 修改服务的请求限制
+func (this *HTTPWebDAO) UpdateWebRequestLimit(tx *dbs.Tx, webId int64, config *serverconfigs.HTTPRequestLimitConfig) error {
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	err = this.Query(tx).
+		Pk(webId).
+		Set("requestLimit", configJSON).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+	return this.NotifyUpdate(tx, webId)
+}
+
+// FindWebRequestLimit 获取服务的请求限制
+func (this *HTTPWebDAO) FindWebRequestLimit(tx *dbs.Tx, webId int64) (*serverconfigs.HTTPRequestLimitConfig, error) {
+	configString, err := this.Query(tx).
+		Pk(webId).
+		Result("requestLimit").
+		FindStringCol("")
+	if err != nil {
+		return nil, err
+	}
+
+	var config = &serverconfigs.HTTPRequestLimitConfig{}
+	if len(configString) == 0 {
+		return config, nil
+	}
+	err = json.Unmarshal([]byte(configString), config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+// UpdateWebRequestScripts 修改服务的请求脚本设置
+func (this *HTTPWebDAO) UpdateWebRequestScripts(tx *dbs.Tx, webId int64, config *serverconfigs.HTTPRequestScriptsConfig) error {
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	err = this.Query(tx).
+		Pk(webId).
+		Set("requestScripts", configJSON).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+	return this.NotifyUpdate(tx, webId)
+}
+
+// FindWebRequestScripts 查找服务的脚本设置
+func (this *HTTPWebDAO) FindWebRequestScripts(tx *dbs.Tx, webId int64) (*serverconfigs.HTTPRequestScriptsConfig, error) {
+	configString, err := this.Query(tx).
+		Pk(webId).
+		Result("requestScripts").
+		FindStringCol("")
+	if err != nil {
+		return nil, err
+	}
+
+	var config = &serverconfigs.HTTPRequestScriptsConfig{}
+	if len(configString) == 0 {
+		return config, nil
+	}
+	err = json.Unmarshal([]byte(configString), config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+// UpdateWebUAM 开启UAM
+func (this *HTTPWebDAO) UpdateWebUAM(tx *dbs.Tx, webId int64, uamConfig *serverconfigs.UAMConfig) error {
+	if uamConfig == nil {
+		return nil
+	}
+	configJSON, err := json.Marshal(uamConfig)
+	if err != nil {
+		return err
+	}
+
+	err = this.Query(tx).
+		Pk(webId).
+		Set("uam", configJSON).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx, webId)
+}
+
+// FindWebUAM 查找服务的UAM配置
+func (this *HTTPWebDAO) FindWebUAM(tx *dbs.Tx, webId int64) ([]byte, error) {
+	return this.Query(tx).
+		Pk(webId).
+		Result("uam").
+		FindJSONCol()
+}
+
+// UpdateWebReferers 修改防盗链设置
+func (this *HTTPWebDAO) UpdateWebReferers(tx *dbs.Tx, webId int64, referersConfig *serverconfigs.ReferersConfig) error {
+	if referersConfig == nil {
+		return nil
+	}
+	configJSON, err := json.Marshal(referersConfig)
+	if err != nil {
+		return err
+	}
+
+	err = this.Query(tx).
+		Pk(webId).
+		Set("referers", configJSON).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx, webId)
+}
+
+// FindWebReferers 查找服务的防盗链配置
+func (this *HTTPWebDAO) FindWebReferers(tx *dbs.Tx, webId int64) ([]byte, error) {
+	return this.Query(tx).
+		Pk(webId).
+		Result("referers").
+		FindJSONCol()
 }
 
 // NotifyUpdate 通知更新

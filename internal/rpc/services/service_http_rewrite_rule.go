@@ -15,12 +15,12 @@ type HTTPRewriteRuleService struct {
 // CreateHTTPRewriteRule 创建重写规则
 func (this *HTTPRewriteRuleService) CreateHTTPRewriteRule(ctx context.Context, req *pb.CreateHTTPRewriteRuleRequest) (*pb.CreateHTTPRewriteRuleResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	rewriteRuleId, err := models.SharedHTTPRewriteRuleDAO.CreateRewriteRule(tx, req.Pattern, req.Replace, req.Mode, types.Int(req.RedirectStatus), req.IsBreak, req.ProxyHost, req.WithQuery, req.IsOn, req.CondsJSON)
 	if err != nil {
@@ -33,12 +33,12 @@ func (this *HTTPRewriteRuleService) CreateHTTPRewriteRule(ctx context.Context, r
 // UpdateHTTPRewriteRule 修改重写规则
 func (this *HTTPRewriteRuleService) UpdateHTTPRewriteRule(ctx context.Context, req *pb.UpdateHTTPRewriteRuleRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedHTTPRewriteRuleDAO.UpdateRewriteRule(tx, req.RewriteRuleId, req.Pattern, req.Replace, req.Mode, types.Int(req.RedirectStatus), req.IsBreak, req.ProxyHost, req.WithQuery, req.IsOn, req.CondsJSON)
 	if err != nil {

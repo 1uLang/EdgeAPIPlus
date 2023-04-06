@@ -3,12 +3,11 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"github.com/1uLang/EdgeCommon/pkg/iplibrary"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
-	"github.com/TeaOSLab/EdgeAPI/internal/db/models/regions"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
-	"github.com/TeaOSLab/EdgeAPI/internal/iplibrary"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/iwind/TeaGo/lists"
 	"net"
@@ -22,12 +21,12 @@ type HTTPFirewallPolicyService struct {
 // FindAllEnabledHTTPFirewallPolicies 获取所有可用策略
 func (this *HTTPFirewallPolicyService) FindAllEnabledHTTPFirewallPolicies(ctx context.Context, req *pb.FindAllEnabledHTTPFirewallPoliciesRequest) (*pb.FindAllEnabledHTTPFirewallPoliciesResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	policies, err := models.SharedHTTPFirewallPolicyDAO.FindAllEnabledFirewallPolicies(tx)
 	if err != nil {
@@ -37,13 +36,14 @@ func (this *HTTPFirewallPolicyService) FindAllEnabledHTTPFirewallPolicies(ctx co
 	result := []*pb.HTTPFirewallPolicy{}
 	for _, p := range policies {
 		result = append(result, &pb.HTTPFirewallPolicy{
-			Id:           int64(p.Id),
-			Name:         p.Name,
-			Description:  p.Description,
-			IsOn:         p.IsOn == 1,
-			InboundJSON:  []byte(p.Inbound),
-			OutboundJSON: []byte(p.Outbound),
-			Mode:         p.Mode,
+			Id:               int64(p.Id),
+			Name:             p.Name,
+			Description:      p.Description,
+			IsOn:             p.IsOn,
+			InboundJSON:      p.Inbound,
+			OutboundJSON:     p.Outbound,
+			Mode:             p.Mode,
+			UseLocalFirewall: p.UseLocalFirewall == 1,
 		})
 	}
 
@@ -53,12 +53,12 @@ func (this *HTTPFirewallPolicyService) FindAllEnabledHTTPFirewallPolicies(ctx co
 // CreateHTTPFirewallPolicy 创建防火墙策略
 func (this *HTTPFirewallPolicyService) CreateHTTPFirewallPolicy(ctx context.Context, req *pb.CreateHTTPFirewallPolicyRequest) (*pb.CreateHTTPFirewallPolicyResponse, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	policyId, err := models.SharedHTTPFirewallPolicyDAO.CreateFirewallPolicy(tx, userId, req.ServerGroupId, req.ServerId, req.IsOn, req.Name, req.Description, nil, nil)
 	if err != nil {
@@ -121,7 +121,7 @@ func (this *HTTPFirewallPolicyService) CreateHTTPFirewallPolicy(ctx context.Cont
 // CreateEmptyHTTPFirewallPolicy 创建空防火墙策略
 func (this *HTTPFirewallPolicyService) CreateEmptyHTTPFirewallPolicy(ctx context.Context, req *pb.CreateEmptyHTTPFirewallPolicyRequest) (*pb.CreateEmptyHTTPFirewallPolicyResponse, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (this *HTTPFirewallPolicyService) CreateEmptyHTTPFirewallPolicy(ctx context
 		}
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	policyId, err := models.SharedHTTPFirewallPolicyDAO.CreateFirewallPolicy(tx, userId, req.ServerGroupId, req.ServerId, req.IsOn, req.Name, req.Description, nil, nil)
 	if err != nil {
@@ -167,14 +167,14 @@ func (this *HTTPFirewallPolicyService) CreateEmptyHTTPFirewallPolicy(ctx context
 // UpdateHTTPFirewallPolicy 修改防火墙策略
 func (this *HTTPFirewallPolicyService) UpdateHTTPFirewallPolicy(ctx context.Context, req *pb.UpdateHTTPFirewallPolicyRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	templatePolicy := firewallconfigs.HTTPFirewallTemplate()
+	var templatePolicy = firewallconfigs.HTTPFirewallTemplate()
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 已经有的数据
 	firewallPolicy, err := models.SharedHTTPFirewallPolicyDAO.ComposeFirewallPolicy(tx, req.HttpFirewallPolicyId, nil)
@@ -185,18 +185,18 @@ func (this *HTTPFirewallPolicyService) UpdateHTTPFirewallPolicy(ctx context.Cont
 		return nil, errors.New("can not found firewall policy")
 	}
 
-	inboundConfig := firewallPolicy.Inbound
+	var inboundConfig = firewallPolicy.Inbound
 	if inboundConfig == nil {
 		inboundConfig = &firewallconfigs.HTTPFirewallInboundConfig{IsOn: true}
 	}
 
-	outboundConfig := firewallPolicy.Outbound
+	var outboundConfig = firewallPolicy.Outbound
 	if outboundConfig == nil {
 		outboundConfig = &firewallconfigs.HTTPFirewallOutboundConfig{IsOn: true}
 	}
 
 	// 更新老的
-	oldCodes := []string{}
+	var oldCodes = []string{}
 	if firewallPolicy.Inbound != nil {
 		for _, g := range firewallPolicy.Inbound.Groups {
 			if len(g.Code) > 0 {
@@ -284,7 +284,23 @@ func (this *HTTPFirewallPolicyService) UpdateHTTPFirewallPolicy(ctx context.Cont
 		return nil, err
 	}
 
-	err = models.SharedHTTPFirewallPolicyDAO.UpdateFirewallPolicy(tx, req.HttpFirewallPolicyId, req.IsOn, req.Name, req.Description, inboundConfigJSON, outboundConfigJSON, req.BlockOptionsJSON, req.Mode)
+	var synFloodConfig = &firewallconfigs.SYNFloodConfig{}
+	if len(req.SynFloodJSON) > 0 {
+		err = json.Unmarshal(req.SynFloodJSON, synFloodConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var logConfig = &firewallconfigs.HTTPFirewallPolicyLogConfig{}
+	if len(req.LogJSON) > 0 {
+		err = json.Unmarshal(req.LogJSON, logConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = models.SharedHTTPFirewallPolicyDAO.UpdateFirewallPolicy(tx, req.HttpFirewallPolicyId, req.IsOn, req.Name, req.Description, inboundConfigJSON, outboundConfigJSON, req.BlockOptionsJSON, req.CaptchaOptionsJSON, req.Mode, req.UseLocalFirewall, synFloodConfig, logConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +311,7 @@ func (this *HTTPFirewallPolicyService) UpdateHTTPFirewallPolicy(ctx context.Cont
 // UpdateHTTPFirewallPolicyGroups 修改分组信息
 func (this *HTTPFirewallPolicyService) UpdateHTTPFirewallPolicyGroups(ctx context.Context, req *pb.UpdateHTTPFirewallPolicyGroupsRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +323,7 @@ func (this *HTTPFirewallPolicyService) UpdateHTTPFirewallPolicyGroups(ctx contex
 		}
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedHTTPFirewallPolicyDAO.UpdateFirewallPolicyInboundAndOutbound(tx, req.HttpFirewallPolicyId, req.InboundJSON, req.OutboundJSON, true)
 	if err != nil {
@@ -320,12 +336,12 @@ func (this *HTTPFirewallPolicyService) UpdateHTTPFirewallPolicyGroups(ctx contex
 // UpdateHTTPFirewallInboundConfig 修改inbound信息
 func (this *HTTPFirewallPolicyService) UpdateHTTPFirewallInboundConfig(ctx context.Context, req *pb.UpdateHTTPFirewallInboundConfigRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	if userId > 0 {
 		err = models.SharedHTTPFirewallPolicyDAO.CheckUserFirewallPolicy(tx, userId, req.HttpFirewallPolicyId)
@@ -345,14 +361,14 @@ func (this *HTTPFirewallPolicyService) UpdateHTTPFirewallInboundConfig(ctx conte
 // CountAllEnabledHTTPFirewallPolicies 计算可用的防火墙策略数量
 func (this *HTTPFirewallPolicyService) CountAllEnabledHTTPFirewallPolicies(ctx context.Context, req *pb.CountAllEnabledHTTPFirewallPoliciesRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	count, err := models.SharedHTTPFirewallPolicyDAO.CountAllEnabledFirewallPolicies(tx, req.Keyword)
+	count, err := models.SharedHTTPFirewallPolicyDAO.CountAllEnabledFirewallPolicies(tx, req.NodeClusterId, req.Keyword)
 	if err != nil {
 		return nil, err
 	}
@@ -362,14 +378,14 @@ func (this *HTTPFirewallPolicyService) CountAllEnabledHTTPFirewallPolicies(ctx c
 // ListEnabledHTTPFirewallPolicies 列出单页的防火墙策略
 func (this *HTTPFirewallPolicyService) ListEnabledHTTPFirewallPolicies(ctx context.Context, req *pb.ListEnabledHTTPFirewallPoliciesRequest) (*pb.ListEnabledHTTPFirewallPoliciesResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	policies, err := models.SharedHTTPFirewallPolicyDAO.ListEnabledFirewallPolicies(tx, req.Keyword, req.Offset, req.Size)
+	policies, err := models.SharedHTTPFirewallPolicyDAO.ListEnabledFirewallPolicies(tx, req.NodeClusterId, req.Keyword, req.Offset, req.Size)
 	if err != nil {
 		return nil, err
 	}
@@ -377,13 +393,14 @@ func (this *HTTPFirewallPolicyService) ListEnabledHTTPFirewallPolicies(ctx conte
 	result := []*pb.HTTPFirewallPolicy{}
 	for _, p := range policies {
 		result = append(result, &pb.HTTPFirewallPolicy{
-			Id:           int64(p.Id),
-			Name:         p.Name,
-			Description:  p.Description,
-			IsOn:         p.IsOn == 1,
-			InboundJSON:  []byte(p.Inbound),
-			OutboundJSON: []byte(p.Outbound),
-			Mode:         p.Mode,
+			Id:               int64(p.Id),
+			Name:             p.Name,
+			Description:      p.Description,
+			IsOn:             p.IsOn,
+			InboundJSON:      p.Inbound,
+			OutboundJSON:     p.Outbound,
+			Mode:             p.Mode,
+			UseLocalFirewall: p.UseLocalFirewall == 1,
 		})
 	}
 
@@ -393,12 +410,12 @@ func (this *HTTPFirewallPolicyService) ListEnabledHTTPFirewallPolicies(ctx conte
 // DeleteHTTPFirewallPolicy 删除某个防火墙策略
 func (this *HTTPFirewallPolicyService) DeleteHTTPFirewallPolicy(ctx context.Context, req *pb.DeleteHTTPFirewallPolicyRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedHTTPFirewallPolicyDAO.DisableHTTPFirewallPolicy(tx, req.HttpFirewallPolicyId)
 	if err != nil {
@@ -411,7 +428,7 @@ func (this *HTTPFirewallPolicyService) DeleteHTTPFirewallPolicy(ctx context.Cont
 // FindEnabledHTTPFirewallPolicyConfig 查找单个防火墙配置
 func (this *HTTPFirewallPolicyService) FindEnabledHTTPFirewallPolicyConfig(ctx context.Context, req *pb.FindEnabledHTTPFirewallPolicyConfigRequest) (*pb.FindEnabledHTTPFirewallPolicyConfigResponse, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +441,7 @@ func (this *HTTPFirewallPolicyService) FindEnabledHTTPFirewallPolicyConfig(ctx c
 		}
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	config, err := models.SharedHTTPFirewallPolicyDAO.ComposeFirewallPolicy(tx, req.HttpFirewallPolicyId, nil)
 	if err != nil {
@@ -445,7 +462,7 @@ func (this *HTTPFirewallPolicyService) FindEnabledHTTPFirewallPolicyConfig(ctx c
 // FindEnabledHTTPFirewallPolicy 获取防火墙的基本信息
 func (this *HTTPFirewallPolicyService) FindEnabledHTTPFirewallPolicy(ctx context.Context, req *pb.FindEnabledHTTPFirewallPolicyRequest) (*pb.FindEnabledHTTPFirewallPolicyResponse, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +474,7 @@ func (this *HTTPFirewallPolicyService) FindEnabledHTTPFirewallPolicy(ctx context
 		}
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	policy, err := models.SharedHTTPFirewallPolicyDAO.FindEnabledHTTPFirewallPolicy(tx, req.HttpFirewallPolicyId)
 	if err != nil {
@@ -468,25 +485,27 @@ func (this *HTTPFirewallPolicyService) FindEnabledHTTPFirewallPolicy(ctx context
 	}
 	return &pb.FindEnabledHTTPFirewallPolicyResponse{HttpFirewallPolicy: &pb.HTTPFirewallPolicy{
 		Id:           int64(policy.Id),
+		ServerId:     int64(policy.ServerId),
 		Name:         policy.Name,
 		Description:  policy.Description,
-		IsOn:         policy.IsOn == 1,
-		InboundJSON:  []byte(policy.Inbound),
-		OutboundJSON: []byte(policy.Outbound),
+		IsOn:         policy.IsOn,
+		InboundJSON:  policy.Inbound,
+		OutboundJSON: policy.Outbound,
 		Mode:         policy.Mode,
+		SynFloodJSON: policy.SynFlood,
 	}}, nil
 }
 
 // ImportHTTPFirewallPolicy 导入策略数据
 func (this *HTTPFirewallPolicyService) ImportHTTPFirewallPolicy(ctx context.Context, req *pb.ImportHTTPFirewallPolicyRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// TODO 检查权限
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	oldConfig, err := models.SharedHTTPFirewallPolicyDAO.ComposeFirewallPolicy(tx, req.HttpFirewallPolicyId, nil)
 	if err != nil {
@@ -506,46 +525,20 @@ func (this *HTTPFirewallPolicyService) ImportHTTPFirewallPolicy(ctx context.Cont
 	// 入站分组
 	if newConfig.Inbound != nil {
 		for _, g := range newConfig.Inbound.Groups {
+			var oldGroup *firewallconfigs.HTTPFirewallRuleGroup
+
+			// 使用代号查找
 			if len(g.Code) > 0 {
-				// 对于有代号的，覆盖或者添加
-				oldGroup := oldConfig.FindRuleGroupWithCode(g.Code)
-				if oldGroup == nil {
-					// 新创建分组
-					groupId, err := models.SharedHTTPFirewallRuleGroupDAO.CreateGroupFromConfig(tx, g)
-					if err != nil {
-						return nil, err
-					}
-					oldConfig.Inbound.GroupRefs = append(oldConfig.Inbound.GroupRefs, &firewallconfigs.HTTPFirewallRuleGroupRef{
-						IsOn:    true,
-						GroupId: groupId,
-					})
-				} else {
-					setRefs := []*firewallconfigs.HTTPFirewallRuleSetRef{}
-					for _, set := range g.Sets {
-						setId, err := models.SharedHTTPFirewallRuleSetDAO.CreateOrUpdateSetFromConfig(tx, set)
-						if err != nil {
-							return nil, err
-						}
-						setRefs = append(setRefs, &firewallconfigs.HTTPFirewallRuleSetRef{
-							IsOn:  true,
-							SetId: setId,
-						})
-					}
-					setsJSON, err := json.Marshal(setRefs)
-					if err != nil {
-						return nil, err
-					}
-					err = models.SharedHTTPFirewallRuleGroupDAO.UpdateGroupIsOn(tx, oldGroup.Id, true)
-					if err != nil {
-						return nil, err
-					}
-					err = models.SharedHTTPFirewallRuleGroupDAO.UpdateGroupSets(tx, oldGroup.Id, setsJSON)
-					if err != nil {
-						return nil, err
-					}
-				}
-			} else {
-				// 没有代号的直接创建
+				oldGroup = oldConfig.FindRuleGroupWithCode(g.Code)
+			}
+
+			// 再次根据Name查找
+			if oldGroup == nil && len(g.Name) > 0 {
+				oldGroup = oldConfig.FindRuleGroupWithName(g.Name)
+			}
+
+			if oldGroup == nil {
+				// 新创建分组
 				groupId, err := models.SharedHTTPFirewallRuleGroupDAO.CreateGroupFromConfig(tx, g)
 				if err != nil {
 					return nil, err
@@ -554,6 +547,32 @@ func (this *HTTPFirewallPolicyService) ImportHTTPFirewallPolicy(ctx context.Cont
 					IsOn:    true,
 					GroupId: groupId,
 				})
+			} else {
+				setRefs := []*firewallconfigs.HTTPFirewallRuleSetRef{}
+				for _, set := range g.Sets {
+					setId, err := models.SharedHTTPFirewallRuleSetDAO.CreateOrUpdateSetFromConfig(tx, set)
+					if err != nil {
+						return nil, err
+					}
+					setRefs = append(setRefs, &firewallconfigs.HTTPFirewallRuleSetRef{
+						IsOn:  true,
+						SetId: setId,
+					})
+				}
+				setsJSON, err := json.Marshal(setRefs)
+				if err != nil {
+					return nil, err
+				}
+
+				err = models.SharedHTTPFirewallRuleGroupDAO.UpdateGroup(tx, oldGroup.Id, g.IsOn, g.Name, g.Code, g.Description)
+				if err != nil {
+					return nil, err
+				}
+
+				err = models.SharedHTTPFirewallRuleGroupDAO.UpdateGroupSets(tx, oldGroup.Id, setsJSON)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -561,46 +580,20 @@ func (this *HTTPFirewallPolicyService) ImportHTTPFirewallPolicy(ctx context.Cont
 	// 出站分组
 	if newConfig.Outbound != nil {
 		for _, g := range newConfig.Outbound.Groups {
+			var oldGroup *firewallconfigs.HTTPFirewallRuleGroup
+
+			// 使用代号查找
 			if len(g.Code) > 0 {
-				// 对于有代号的，覆盖或者添加
-				oldGroup := oldConfig.FindRuleGroupWithCode(g.Code)
-				if oldGroup == nil {
-					// 新创建分组
-					groupId, err := models.SharedHTTPFirewallRuleGroupDAO.CreateGroupFromConfig(tx, g)
-					if err != nil {
-						return nil, err
-					}
-					oldConfig.Outbound.GroupRefs = append(oldConfig.Outbound.GroupRefs, &firewallconfigs.HTTPFirewallRuleGroupRef{
-						IsOn:    true,
-						GroupId: groupId,
-					})
-				} else {
-					setRefs := []*firewallconfigs.HTTPFirewallRuleSetRef{}
-					for _, set := range g.Sets {
-						setId, err := models.SharedHTTPFirewallRuleSetDAO.CreateOrUpdateSetFromConfig(tx, set)
-						if err != nil {
-							return nil, err
-						}
-						setRefs = append(setRefs, &firewallconfigs.HTTPFirewallRuleSetRef{
-							IsOn:  true,
-							SetId: setId,
-						})
-					}
-					setsJSON, err := json.Marshal(setRefs)
-					if err != nil {
-						return nil, err
-					}
-					err = models.SharedHTTPFirewallRuleGroupDAO.UpdateGroupIsOn(tx, oldGroup.Id, true)
-					if err != nil {
-						return nil, err
-					}
-					err = models.SharedHTTPFirewallRuleGroupDAO.UpdateGroupSets(tx, oldGroup.Id, setsJSON)
-					if err != nil {
-						return nil, err
-					}
-				}
-			} else {
-				// 没有代号的直接创建
+				oldGroup = oldConfig.FindRuleGroupWithCode(g.Code)
+			}
+
+			// 再次根据Name查找
+			if oldGroup == nil && len(g.Name) > 0 {
+				oldGroup = oldConfig.FindRuleGroupWithName(g.Name)
+			}
+
+			if oldGroup == nil {
+				// 新创建分组
 				groupId, err := models.SharedHTTPFirewallRuleGroupDAO.CreateGroupFromConfig(tx, g)
 				if err != nil {
 					return nil, err
@@ -609,6 +602,30 @@ func (this *HTTPFirewallPolicyService) ImportHTTPFirewallPolicy(ctx context.Cont
 					IsOn:    true,
 					GroupId: groupId,
 				})
+			} else {
+				setRefs := []*firewallconfigs.HTTPFirewallRuleSetRef{}
+				for _, set := range g.Sets {
+					setId, err := models.SharedHTTPFirewallRuleSetDAO.CreateOrUpdateSetFromConfig(tx, set)
+					if err != nil {
+						return nil, err
+					}
+					setRefs = append(setRefs, &firewallconfigs.HTTPFirewallRuleSetRef{
+						IsOn:  true,
+						SetId: setId,
+					})
+				}
+				setsJSON, err := json.Marshal(setRefs)
+				if err != nil {
+					return nil, err
+				}
+				err = models.SharedHTTPFirewallRuleGroupDAO.UpdateGroup(tx, oldGroup.Id, g.IsOn, g.Name, g.Code, g.Description)
+				if err != nil {
+					return nil, err
+				}
+				err = models.SharedHTTPFirewallRuleGroupDAO.UpdateGroupSets(tx, oldGroup.Id, setsJSON)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -637,7 +654,7 @@ func (this *HTTPFirewallPolicyService) ImportHTTPFirewallPolicy(ctx context.Cont
 
 // CheckHTTPFirewallPolicyIPStatus 检查IP状态
 func (this *HTTPFirewallPolicyService) CheckHTTPFirewallPolicyIPStatus(ctx context.Context, req *pb.CheckHTTPFirewallPolicyIPStatusRequest) (*pb.CheckHTTPFirewallPolicyIPStatusResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +669,7 @@ func (this *HTTPFirewallPolicyService) CheckHTTPFirewallPolicyIPStatus(ctx conte
 	}
 	ipLong := utils.IP2Long(req.Ip)
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 	firewallPolicy, err := models.SharedHTTPFirewallPolicyDAO.ComposeFirewallPolicy(tx, req.HttpFirewallPolicyId, nil)
 	if err != nil {
 		return nil, err
@@ -776,20 +793,14 @@ func (this *HTTPFirewallPolicyService) CheckHTTPFirewallPolicyIPStatus(ctx conte
 	}
 
 	// 检查封禁的地区和省份
-	info, err := iplibrary.SharedLibrary.Lookup(req.Ip)
-	if err != nil {
-		return nil, err
-	}
-	if info != nil {
+	var info = iplibrary.LookupIP(req.Ip)
+	if info != nil && info.IsOk() {
 		if firewallPolicy.Inbound != nil &&
 			firewallPolicy.Inbound.IsOn &&
 			firewallPolicy.Inbound.Region != nil &&
 			firewallPolicy.Inbound.Region.IsOn {
 			// 检查封禁的地区
-			countryId, err := regions.SharedRegionCountryDAO.FindCountryIdWithNameCacheable(tx, info.Country)
-			if err != nil {
-				return nil, err
-			}
+			var countryId = info.CountryId()
 			if countryId > 0 && lists.ContainsInt64(firewallPolicy.Inbound.Region.DenyCountryIds, countryId) {
 				return &pb.CheckHTTPFirewallPolicyIPStatusResponse{
 					IsOk:      true,
@@ -800,7 +811,7 @@ func (this *HTTPFirewallPolicyService) CheckHTTPFirewallPolicyIPStatus(ctx conte
 					IpItem:    nil,
 					RegionCountry: &pb.RegionCountry{
 						Id:   countryId,
-						Name: info.Country,
+						Name: info.CountryName(),
 					},
 					RegionProvince: nil,
 				}, nil
@@ -808,10 +819,7 @@ func (this *HTTPFirewallPolicyService) CheckHTTPFirewallPolicyIPStatus(ctx conte
 
 			// 检查封禁的省份
 			if countryId > 0 {
-				provinceId, err := regions.SharedRegionProvinceDAO.FindProvinceIdWithNameCacheable(tx, countryId, info.Province)
-				if err != nil {
-					return nil, err
-				}
+				var provinceId = info.ProvinceId()
 				if provinceId > 0 && lists.ContainsInt64(firewallPolicy.Inbound.Region.DenyProvinceIds, provinceId) {
 					return &pb.CheckHTTPFirewallPolicyIPStatusResponse{
 						IsOk:      true,
@@ -822,11 +830,11 @@ func (this *HTTPFirewallPolicyService) CheckHTTPFirewallPolicyIPStatus(ctx conte
 						IpItem:    nil,
 						RegionCountry: &pb.RegionCountry{
 							Id:   countryId,
-							Name: info.Country,
+							Name: info.CountryName(),
 						},
 						RegionProvince: &pb.RegionProvince{
 							Id:   provinceId,
-							Name: info.Province,
+							Name: info.ProvinceName(),
 						},
 					}, nil
 				}

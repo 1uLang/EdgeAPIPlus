@@ -3,6 +3,7 @@ package stats
 import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
@@ -19,14 +20,14 @@ func init() {
 	dbs.OnReadyDone(func() {
 		// 清理数据任务
 		var ticker = time.NewTicker(time.Duration(rands.Int(24, 48)) * time.Hour)
-		go func() {
+		goman.New(func() {
 			for range ticker.C {
-				err := SharedServerHTTPFirewallDailyStatDAO.Clean(nil, 60) // 只保留60天
+				err := SharedServerHTTPFirewallDailyStatDAO.Clean(nil, 30) // 只保留N天
 				if err != nil {
 					remotelogs.Error("ServerHTTPFirewallDailyStatDAO", "clean expired data failed: "+err.Error())
 				}
 			}
-		}()
+		})
 	})
 }
 
@@ -108,10 +109,13 @@ func (this *ServerHTTPFirewallDailyStatDAO) GroupDailyCount(tx *dbs.Tx, userId i
 }
 
 // FindDailyStats 查询某个日期段内的记录
-func (this *ServerHTTPFirewallDailyStatDAO) FindDailyStats(tx *dbs.Tx, userId int64, serverId int64, action string, dayFrom string, dayTo string) (result []*ServerHTTPFirewallDailyStat, err error) {
+func (this *ServerHTTPFirewallDailyStatDAO) FindDailyStats(tx *dbs.Tx, userId int64, serverId int64, actions []string, dayFrom string, dayTo string) (result []*ServerHTTPFirewallDailyStat, err error) {
+	if len(actions) == 0 {
+		return nil, nil
+	}
 	query := this.Query(tx).
 		Between("day", dayFrom, dayTo).
-		Attr("action", action)
+		Attr("action", actions)
 	if serverId > 0 {
 		query.Attr("serverId", serverId)
 	} else if userId > 0 {

@@ -15,7 +15,7 @@ type DNSTaskService struct {
 
 // ExistsDNSTasks 检查是否有正在执行的任务
 func (this *DNSTaskService) ExistsDNSTasks(ctx context.Context, req *pb.ExistsDNSTasksRequest) (*pb.ExistsDNSTasksResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func (this *DNSTaskService) ExistsDNSTasks(ctx context.Context, req *pb.ExistsDN
 
 // FindAllDoingDNSTasks 查找正在执行的所有任务
 func (this *DNSTaskService) FindAllDoingDNSTasks(ctx context.Context, req *pb.FindAllDoingDNSTasksRequest) (*pb.FindAllDoingDNSTasksResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -55,14 +55,14 @@ func (this *DNSTaskService) FindAllDoingDNSTasks(ctx context.Context, req *pb.Fi
 		pbTask := &pb.DNSTask{
 			Id:        int64(task.Id),
 			Type:      task.Type,
-			IsDone:    task.IsDone == 1,
-			IsOk:      task.IsOk == 1,
+			IsDone:    task.IsDone,
+			IsOk:      task.IsOk,
 			Error:     task.Error,
 			UpdatedAt: int64(task.UpdatedAt),
 		}
 
 		switch task.Type {
-		case dns.DNSTaskTypeClusterChange:
+		case dns.DNSTaskTypeClusterChange, dns.DNSTaskTypeClusterRemoveDomain:
 			clusterName, err := models.SharedNodeClusterDAO.FindNodeClusterName(tx, int64(task.ClusterId))
 			if err != nil {
 				return nil, err
@@ -106,7 +106,7 @@ func (this *DNSTaskService) FindAllDoingDNSTasks(ctx context.Context, req *pb.Fi
 
 // DeleteDNSTask 删除任务
 func (this *DNSTaskService) DeleteDNSTask(ctx context.Context, req *pb.DeleteDNSTaskRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

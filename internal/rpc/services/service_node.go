@@ -7,17 +7,22 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/configutils"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients/dnstypes"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/installers"
+	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
 	"github.com/andybalholm/brotli"
-	"github.com/iwind/TeaGo/logs"
+	"github.com/iwind/TeaGo/dbs"
+	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/types"
 	stringutil "github.com/iwind/TeaGo/utils/string"
 	"io"
@@ -33,7 +38,7 @@ type NodeVersionCache struct {
 	CacheMap map[int64]*utils.CacheMap // version => map
 }
 
-var nodeVersionCacheMap = map[int64]*NodeVersionCache{} // [cluster_id]_[version] => cache
+var nodeVersionCacheMap = map[int64]*NodeVersionCache{} // [cluster_id] =>  { [version] => cache }
 var nodeVersionCacheLocker = &sync.Mutex{}
 
 // NodeService 边缘节点相关服务
@@ -41,14 +46,19 @@ type NodeService struct {
 	BaseService
 }
 
+func (this *NodeService) mustEmbedUnimplementedNodeServiceServer() {
+	//TODO implement me
+	panic("implement me")
+}
+
 // CreateNode 创建节点
 func (this *NodeService) CreateNode(ctx context.Context, req *pb.CreateNodeRequest) (*pb.CreateNodeResponse, error) {
-	adminId, err := this.ValidateAdmin(ctx, 0)
+	adminId, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodeId, err := models.SharedNodeDAO.CreateNode(tx, adminId, req.Name, req.NodeClusterId, req.NodeGroupId, req.NodeRegionId)
 	if err != nil {
@@ -99,7 +109,7 @@ func (this *NodeService) RegisterClusterNode(ctx context.Context, req *pb.Regist
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	adminId, err := models.SharedNodeClusterDAO.FindClusterAdminId(tx, clusterId)
 	if err != nil {
@@ -139,12 +149,12 @@ func (this *NodeService) RegisterClusterNode(ctx context.Context, req *pb.Regist
 // CountAllEnabledNodes 计算节点数量
 func (this *NodeService) CountAllEnabledNodes(ctx context.Context, req *pb.CountAllEnabledNodesRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	count, err := models.SharedNodeDAO.CountAllEnabledNodes(tx)
 	if err != nil {
@@ -156,14 +166,14 @@ func (this *NodeService) CountAllEnabledNodes(ctx context.Context, req *pb.Count
 
 // CountAllEnabledNodesMatch 计算匹配的节点数量
 func (this *NodeService) CountAllEnabledNodesMatch(ctx context.Context, req *pb.CountAllEnabledNodesMatchRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	count, err := models.SharedNodeDAO.CountAllEnabledNodesMatch(tx, req.NodeClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword, req.NodeGroupId, req.NodeRegionId, true)
+	count, err := models.SharedNodeDAO.CountAllEnabledNodesMatch(tx, req.NodeClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword, req.NodeGroupId, req.NodeRegionId, req.Level, true)
 	if err != nil {
 		return nil, err
 	}
@@ -172,26 +182,28 @@ func (this *NodeService) CountAllEnabledNodesMatch(ctx context.Context, req *pb.
 
 // ListEnabledNodesMatch 列出单页的节点
 func (this *NodeService) ListEnabledNodesMatch(ctx context.Context, req *pb.ListEnabledNodesMatchRequest) (*pb.ListEnabledNodesMatchResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	clusterDNS, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, req.NodeClusterId, nil)
-	if err != nil {
-		return nil, err
-	}
+	var dnsDomainId = int64(0)
+	var domainRoutes = []*dnstypes.Route{}
 
-	dnsDomainId := int64(0)
-	domainRoutes := []*dnstypes.Route{}
-	if clusterDNS != nil {
-		dnsDomainId = int64(clusterDNS.DnsDomainId)
-		if clusterDNS.DnsDomainId > 0 {
-			domainRoutes, err = dns.SharedDNSDomainDAO.FindDomainRoutes(tx, dnsDomainId)
-			if err != nil {
-				return nil, err
+	if req.NodeClusterId > 0 {
+		clusterDNS, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, req.NodeClusterId, nil)
+		if err != nil {
+			return nil, err
+		}
+		if clusterDNS != nil {
+			dnsDomainId = int64(clusterDNS.DnsDomainId)
+			if clusterDNS.DnsDomainId > 0 {
+				domainRoutes, err = dns.SharedDNSDomainDAO.FindDomainRoutes(tx, dnsDomainId)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -214,13 +226,18 @@ func (this *NodeService) ListEnabledNodesMatch(ctx context.Context, req *pb.List
 		order = "trafficOutAsc"
 	} else if req.TrafficOutDesc {
 		order = "trafficOutDesc"
+	} else if req.LoadAsc {
+		order = "loadAsc"
+	} else if req.LoadDesc {
+		order = "loadDesc"
 	}
 
-	nodes, err := models.SharedNodeDAO.ListEnabledNodesMatch(tx, req.NodeClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword, req.NodeGroupId, req.NodeRegionId, true, order, req.Offset, req.Size)
+	nodes, err := models.SharedNodeDAO.ListEnabledNodesMatch(tx, req.NodeClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword, req.NodeGroupId, req.NodeRegionId, req.Level, true, order, req.Offset, req.Size)
 	if err != nil {
 		return nil, err
 	}
-	result := []*pb.Node{}
+	var result = []*pb.Node{}
+	var cacheMap = utils.NewCacheMap()
 	for _, node := range nodes {
 		// 主集群信息
 		clusterName, err := models.SharedNodeClusterDAO.FindNodeClusterName(tx, int64(node.ClusterId))
@@ -237,7 +254,7 @@ func (this *NodeService) ListEnabledNodesMatch(ctx context.Context, req *pb.List
 		for _, secondaryCluster := range secondaryClusters {
 			pbSecondaryClusters = append(pbSecondaryClusters, &pb.NodeCluster{
 				Id:   int64(secondaryCluster.Id),
-				IsOn: secondaryCluster.IsOn == 1,
+				IsOn: secondaryCluster.IsOn,
 				Name: secondaryCluster.Name,
 			})
 		}
@@ -275,19 +292,54 @@ func (this *NodeService) ListEnabledNodesMatch(ctx context.Context, req *pb.List
 		}
 
 		// DNS线路
-		routeCodes, err := node.DNSRouteCodesForDomainId(dnsDomainId)
-		if err != nil {
-			return nil, err
-		}
-		pbRoutes := []*pb.DNSRoute{}
-		for _, routeCode := range routeCodes {
-			for _, route := range domainRoutes {
-				if route.Code == routeCode {
-					pbRoutes = append(pbRoutes, &pb.DNSRoute{
-						Name: route.Name,
-						Code: route.Code,
-					})
-					break
+		var pbRoutes = []*pb.DNSRoute{}
+		if dnsDomainId > 0 {
+			routeCodes, err := node.DNSRouteCodesForDomainId(dnsDomainId)
+			if err != nil {
+				return nil, err
+			}
+
+			for _, routeCode := range routeCodes {
+				for _, route := range domainRoutes {
+					if route.Code == routeCode {
+						pbRoutes = append(pbRoutes, &pb.DNSRoute{
+							Name: route.Name,
+							Code: route.Code,
+						})
+						break
+					}
+				}
+			}
+		} else if req.NodeClusterId == 0 {
+			var clusterDomainIds = []int64{}
+			for _, clusterId := range node.AllClusterIds() {
+				clusterDNSInfo, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, clusterId, cacheMap)
+				if err != nil {
+					return nil, err
+				}
+				if clusterDNSInfo != nil && clusterDNSInfo.DnsDomainId > 0 {
+					clusterDomainIds = append(clusterDomainIds, int64(clusterDNSInfo.DnsDomainId))
+				}
+			}
+
+			for domainId, routeCodes := range node.DNSRouteCodes() {
+				if domainId == 0 {
+					continue
+				}
+				if !lists.ContainsInt64(clusterDomainIds, domainId) {
+					continue
+				}
+				for _, routeCode := range routeCodes {
+					routeName, err := dns.SharedDNSDomainDAO.FindDomainRouteName(tx, domainId, routeCode)
+					if err != nil {
+						return nil, err
+					}
+					if len(routeName) > 0 {
+						pbRoutes = append(pbRoutes, &pb.DNSRoute{
+							Name: routeName,
+							Code: routeCode,
+						})
+					}
 				}
 			}
 		}
@@ -302,18 +354,24 @@ func (this *NodeService) ListEnabledNodesMatch(ctx context.Context, req *pb.List
 			if region != nil {
 				pbRegion = &pb.NodeRegion{
 					Id:   int64(region.Id),
-					IsOn: region.IsOn == 1,
+					IsOn: region.IsOn,
 					Name: region.Name,
 				}
 			}
+		}
+
+		// 状态
+		statusJSON, err := models.SharedNodeValueDAO.ComposeNodeStatusJSON(tx, nodeconfigs.NodeRoleNode, int64(node.Id), node.Status)
+		if err != nil {
+			return nil, err
 		}
 
 		result = append(result, &pb.Node{
 			Id:          int64(node.Id),
 			Name:        node.Name,
 			Version:     int64(node.Version),
-			IsInstalled: node.IsInstalled == 1,
-			StatusJSON:  []byte(node.Status),
+			IsInstalled: node.IsInstalled,
+			StatusJSON:  statusJSON,
 			NodeCluster: &pb.NodeCluster{
 				Id:   int64(node.ClusterId),
 				Name: clusterName,
@@ -321,11 +379,12 @@ func (this *NodeService) ListEnabledNodesMatch(ctx context.Context, req *pb.List
 			SecondaryNodeClusters: pbSecondaryClusters,
 			InstallStatus:         installStatusResult,
 			MaxCPU:                types.Int32(node.MaxCPU),
-			IsOn:                  node.IsOn == 1,
-			IsUp:                  node.IsUp == 1,
+			IsOn:                  node.IsOn,
+			IsUp:                  node.IsUp,
 			NodeGroup:             pbGroup,
 			NodeRegion:            pbRegion,
 			DnsRoutes:             pbRoutes,
+			Level:                 int32(node.Level),
 		})
 	}
 
@@ -336,7 +395,7 @@ func (this *NodeService) ListEnabledNodesMatch(ctx context.Context, req *pb.List
 
 // FindAllEnabledNodesWithNodeClusterId 查找一个集群下的所有节点
 func (this *NodeService) FindAllEnabledNodesWithNodeClusterId(ctx context.Context, req *pb.FindAllEnabledNodesWithNodeClusterIdRequest) (*pb.FindAllEnabledNodesWithNodeClusterIdResponse, error) {
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -345,9 +404,9 @@ func (this *NodeService) FindAllEnabledNodesWithNodeClusterId(ctx context.Contex
 		// TODO 检查权限
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesWithClusterId(tx, req.NodeClusterId)
+	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesWithClusterId(tx, req.NodeClusterId, req.IncludeSecondary)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +414,7 @@ func (this *NodeService) FindAllEnabledNodesWithNodeClusterId(ctx context.Contex
 	for _, node := range nodes {
 		apiNodeIds := []int64{}
 		if models.IsNotNull(node.ConnectedAPINodes) {
-			err = json.Unmarshal([]byte(node.ConnectedAPINodes), &apiNodeIds)
+			err = json.Unmarshal(node.ConnectedAPINodes, &apiNodeIds)
 			if err != nil {
 				return nil, err
 			}
@@ -368,7 +427,7 @@ func (this *NodeService) FindAllEnabledNodesWithNodeClusterId(ctx context.Contex
 			Secret:              node.Secret,
 			ConnectedAPINodeIds: apiNodeIds,
 			MaxCPU:              types.Int32(node.MaxCPU),
-			IsOn:                node.IsOn == 1,
+			IsOn:                node.IsOn,
 		})
 	}
 	return &pb.FindAllEnabledNodesWithNodeClusterIdResponse{Nodes: result}, nil
@@ -376,12 +435,12 @@ func (this *NodeService) FindAllEnabledNodesWithNodeClusterId(ctx context.Contex
 
 // DeleteNode 删除节点
 func (this *NodeService) DeleteNode(ctx context.Context, req *pb.DeleteNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedNodeDAO.DisableNode(tx, req.NodeId)
 	if err != nil {
@@ -399,12 +458,12 @@ func (this *NodeService) DeleteNode(ctx context.Context, req *pb.DeleteNodeReque
 
 // DeleteNodeFromNodeCluster 从集群中删除节点
 func (this *NodeService) DeleteNodeFromNodeCluster(ctx context.Context, req *pb.DeleteNodeFromNodeClusterRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 	err = models.SharedNodeDAO.DeleteNodeFromCluster(tx, req.NodeId, req.NodeClusterId)
 	if err != nil {
 		return nil, err
@@ -415,14 +474,14 @@ func (this *NodeService) DeleteNodeFromNodeCluster(ctx context.Context, req *pb.
 
 // UpdateNode 修改节点
 func (this *NodeService) UpdateNode(ctx context.Context, req *pb.UpdateNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	err = models.SharedNodeDAO.UpdateNode(tx, req.NodeId, req.Name, req.NodeClusterId, req.SecondaryNodeClusterIds, req.NodeGroupId, req.NodeRegionId, req.IsOn)
+	err = models.SharedNodeDAO.UpdateNode(tx, req.NodeId, req.Name, req.NodeClusterId, req.SecondaryNodeClusterIds, req.NodeGroupId, req.NodeRegionId, req.IsOn, int(req.Level), req.LnAddrs)
 	if err != nil {
 		return nil, err
 	}
@@ -432,12 +491,12 @@ func (this *NodeService) UpdateNode(ctx context.Context, req *pb.UpdateNodeReque
 
 // FindEnabledNode 查询单个节点信息
 func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnabledNodeRequest) (*pb.FindEnabledNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	node, err := models.SharedNodeDAO.FindEnabledNode(tx, req.NodeId)
 	if err != nil {
@@ -452,6 +511,7 @@ func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnable
 	if err != nil {
 		return nil, err
 	}
+	var clusterIds = []int64{int64(node.ClusterId)}
 
 	// 从集群信息
 	var secondaryPBClusters []*pb.NodeCluster
@@ -465,9 +525,10 @@ func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnable
 		}
 		secondaryPBClusters = append(secondaryPBClusters, &pb.NodeCluster{
 			Id:   int64(cluster.Id),
-			IsOn: cluster.IsOn == 1,
+			IsOn: cluster.IsOn,
 			Name: cluster.Name,
 		})
+		clusterIds = append(clusterIds, int64(cluster.Id))
 	}
 
 	// 认证信息
@@ -481,7 +542,7 @@ func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnable
 			Id:     int64(login.Id),
 			Name:   login.Name,
 			Type:   login.Type,
-			Params: []byte(login.Params),
+			Params: login.Params,
 		}
 	}
 
@@ -527,7 +588,7 @@ func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnable
 		if region != nil {
 			pbRegion = &pb.NodeRegion{
 				Id:   int64(region.Id),
-				IsOn: region.IsOn == 1,
+				IsOn: region.IsOn,
 				Name: region.Name,
 			}
 		}
@@ -535,9 +596,9 @@ func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnable
 
 	// 最大硬盘容量
 	var pbMaxCacheDiskCapacity *pb.SizeCapacity
-	if len(node.MaxCacheDiskCapacity) > 0 {
+	if models.IsNotNull(node.MaxCacheDiskCapacity) {
 		pbMaxCacheDiskCapacity = &pb.SizeCapacity{}
-		err = json.Unmarshal([]byte(node.MaxCacheDiskCapacity), pbMaxCacheDiskCapacity)
+		err = json.Unmarshal(node.MaxCacheDiskCapacity, pbMaxCacheDiskCapacity)
 		if err != nil {
 			return nil, err
 		}
@@ -545,24 +606,63 @@ func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnable
 
 	// 最大内存容量
 	var pbMaxCacheMemoryCapacity *pb.SizeCapacity
-	if len(node.MaxCacheMemoryCapacity) > 0 {
+	if models.IsNotNull(node.MaxCacheMemoryCapacity) {
 		pbMaxCacheMemoryCapacity = &pb.SizeCapacity{}
-		err = json.Unmarshal([]byte(node.MaxCacheMemoryCapacity), pbMaxCacheMemoryCapacity)
+		err = json.Unmarshal(node.MaxCacheMemoryCapacity, pbMaxCacheMemoryCapacity)
 		if err != nil {
 			return nil, err
 		}
 	}
 
+	// 线路
+	var pbRoutes = []*pb.DNSRoute{}
+	var clusterDomainIds = []int64{}
+	for _, clusterId := range node.AllClusterIds() {
+		clusterDNSInfo, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, clusterId, nil)
+		if err != nil {
+			return nil, err
+		}
+		if clusterDNSInfo != nil && clusterDNSInfo.DnsDomainId > 0 {
+			clusterDomainIds = append(clusterDomainIds, int64(clusterDNSInfo.DnsDomainId))
+		}
+	}
+	for domainId, routeCodes := range node.DNSRouteCodes() {
+		if domainId == 0 {
+			continue
+		}
+		if !lists.ContainsInt64(clusterDomainIds, domainId) {
+			continue
+		}
+		for _, routeCode := range routeCodes {
+			routeName, err := dns.SharedDNSDomainDAO.FindDomainRouteName(tx, domainId, routeCode)
+			if err != nil {
+				return nil, err
+			}
+			if len(routeName) > 0 {
+				pbRoutes = append(pbRoutes, &pb.DNSRoute{
+					Name: routeName,
+					Code: routeCode,
+				})
+			}
+		}
+	}
+
+	// 监控状态
+	statusJSON, err := models.SharedNodeValueDAO.ComposeNodeStatusJSON(tx, nodeconfigs.NodeRoleNode, int64(node.Id), node.Status)
+	if err != nil {
+		return nil, err
+	}
+
 	return &pb.FindEnabledNodeResponse{Node: &pb.Node{
 		Id:            int64(node.Id),
 		Name:          node.Name,
-		StatusJSON:    []byte(node.Status),
+		StatusJSON:    statusJSON,
 		UniqueId:      node.UniqueId,
 		Version:       int64(node.Version),
 		LatestVersion: int64(node.LatestVersion),
 		Secret:        node.Secret,
 		InstallDir:    node.InstallDir,
-		IsInstalled:   node.IsInstalled == 1,
+		IsInstalled:   node.IsInstalled,
 		NodeCluster: &pb.NodeCluster{
 			Id:   int64(node.ClusterId),
 			Name: clusterName,
@@ -571,23 +671,27 @@ func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnable
 		NodeLogin:              respLogin,
 		InstallStatus:          installStatusResult,
 		MaxCPU:                 types.Int32(node.MaxCPU),
-		IsOn:                   node.IsOn == 1,
-		IsUp:                   node.IsUp == 1,
+		IsOn:                   node.IsOn,
+		IsUp:                   node.IsUp,
 		NodeGroup:              pbGroup,
 		NodeRegion:             pbRegion,
 		MaxCacheDiskCapacity:   pbMaxCacheDiskCapacity,
 		MaxCacheMemoryCapacity: pbMaxCacheMemoryCapacity,
+		CacheDiskDir:           node.CacheDiskDir,
+		Level:                  int32(node.Level),
+		LnAddrs:                node.DecodeLnAddrs(),
+		DnsRoutes:              pbRoutes,
 	}}, nil
 }
 
 // FindEnabledBasicNode 获取单个节点基本信息
 func (this *NodeService) FindEnabledBasicNode(ctx context.Context, req *pb.FindEnabledBasicNodeRequest) (*pb.FindEnabledBasicNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 	node, err := models.SharedNodeDAO.FindEnabledBasicNode(tx, req.NodeId)
 	if err != nil {
 		return nil, err
@@ -602,10 +706,11 @@ func (this *NodeService) FindEnabledBasicNode(ctx context.Context, req *pb.FindE
 	}
 
 	return &pb.FindEnabledBasicNodeResponse{Node: &pb.BasicNode{
-		Id:   int64(node.Id),
-		Name: node.Name,
-		IsOn: node.IsOn == 1,
-		IsUp: node.IsUp == 1,
+		Id:    int64(node.Id),
+		Name:  node.Name,
+		IsOn:  node.IsOn,
+		IsUp:  node.IsUp,
+		Level: int32(node.Level),
 		NodeCluster: &pb.NodeCluster{
 			Id:   int64(node.ClusterId),
 			Name: clusterName,
@@ -621,7 +726,7 @@ func (this *NodeService) FindCurrentNodeConfig(ctx context.Context, req *pb.Find
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 检查版本号
 	currentVersion, err := models.SharedNodeDAO.FindNodeVersion(tx, nodeId)
@@ -670,13 +775,14 @@ func (this *NodeService) FindCurrentNodeConfig(ctx context.Context, req *pb.Find
 		NodeJSON:     data,
 		DataSize:     int64(len(data)),
 		IsCompressed: isCompressed,
+		Timestamp:    time.Now().Unix(),
 	}, nil
 }
 
 // UpdateNodeStatus 更新节点状态
 func (this *NodeService) UpdateNodeStatus(ctx context.Context, req *pb.UpdateNodeStatusRequest) (*pb.RPCSuccess, error) {
 	// 校验节点
-	_, _, nodeId, err := rpcutils.ValidateRequest(ctx, rpcutils.UserTypeNode)
+	nodeId, err := this.ValidateNode(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -689,9 +795,18 @@ func (this *NodeService) UpdateNodeStatus(ctx context.Context, req *pb.UpdateNod
 		return nil, errors.New("'nodeId' should be greater than 0")
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	err = models.SharedNodeDAO.UpdateNodeStatus(tx, nodeId, req.StatusJSON)
+	// 修改时间戳
+	var nodeStatus = &nodeconfigs.NodeStatus{}
+	err = json.Unmarshal(req.StatusJSON, nodeStatus)
+	if err != nil {
+		return nil, errors.New("decode node status json failed: " + err.Error())
+	}
+	nodeStatus.UpdatedAt = time.Now().Unix()
+
+	// 保存
+	err = models.SharedNodeDAO.UpdateNodeStatus(tx, nodeId, nodeStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -700,12 +815,12 @@ func (this *NodeService) UpdateNodeStatus(ctx context.Context, req *pb.UpdateNod
 
 // UpdateNodeIsInstalled 修改节点安装状态
 func (this *NodeService) UpdateNodeIsInstalled(ctx context.Context, req *pb.UpdateNodeIsInstalledRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedNodeDAO.UpdateNodeIsInstalled(tx, req.NodeId, req.IsInstalled)
 	if err != nil {
@@ -718,17 +833,17 @@ func (this *NodeService) UpdateNodeIsInstalled(ctx context.Context, req *pb.Upda
 // InstallNode 安装节点
 func (this *NodeService) InstallNode(ctx context.Context, req *pb.InstallNodeRequest) (*pb.InstallNodeResponse, error) {
 	// 校验节点
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	go func() {
+	goman.New(func() {
 		err = installers.SharedNodeQueue().InstallNodeProcess(req.NodeId, false)
 		if err != nil {
-			logs.Println("[RPC]install node:" + err.Error())
+			remotelogs.Error("NODE_SERVICE", "install node failed:"+err.Error())
 		}
-	}()
+	})
 
 	return &pb.InstallNodeResponse{}, nil
 }
@@ -736,12 +851,12 @@ func (this *NodeService) InstallNode(ctx context.Context, req *pb.InstallNodeReq
 // UpgradeNode 升级节点
 func (this *NodeService) UpgradeNode(ctx context.Context, req *pb.UpgradeNodeRequest) (*pb.UpgradeNodeResponse, error) {
 	// 校验节点
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedNodeDAO.UpdateNodeIsInstalled(tx, req.NodeId, false)
 	if err != nil {
@@ -763,12 +878,12 @@ func (this *NodeService) UpgradeNode(ctx context.Context, req *pb.UpgradeNodeReq
 		return nil, err
 	}
 
-	go func() {
+	goman.New(func() {
 		err = installers.SharedNodeQueue().InstallNodeProcess(req.NodeId, true)
 		if err != nil {
-			logs.Println("[RPC]install node:" + err.Error())
+			remotelogs.Error("NODE_SERVICE", "install node:"+err.Error())
 		}
-	}()
+	})
 
 	return &pb.UpgradeNodeResponse{}, nil
 }
@@ -776,7 +891,7 @@ func (this *NodeService) UpgradeNode(ctx context.Context, req *pb.UpgradeNodeReq
 // StartNode 启动节点
 func (this *NodeService) StartNode(ctx context.Context, req *pb.StartNodeRequest) (*pb.StartNodeResponse, error) {
 	// 校验节点
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -795,7 +910,7 @@ func (this *NodeService) StartNode(ctx context.Context, req *pb.StartNodeRequest
 // StopNode 停止节点
 func (this *NodeService) StopNode(ctx context.Context, req *pb.StopNodeRequest) (*pb.StopNodeResponse, error) {
 	// 校验节点
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -819,7 +934,7 @@ func (this *NodeService) UpdateNodeConnectedAPINodes(ctx context.Context, req *p
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedNodeDAO.UpdateNodeConnectedAPINodes(tx, nodeId, req.ApiNodeIds)
 	if err != nil {
@@ -832,12 +947,12 @@ func (this *NodeService) UpdateNodeConnectedAPINodes(ctx context.Context, req *p
 // CountAllEnabledNodesWithNodeGrantId 计算使用某个认证的节点数量
 func (this *NodeService) CountAllEnabledNodesWithNodeGrantId(ctx context.Context, req *pb.CountAllEnabledNodesWithNodeGrantIdRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	count, err := models.SharedNodeDAO.CountAllEnabledNodesWithGrantId(tx, req.NodeGrantId)
 	if err != nil {
@@ -849,12 +964,12 @@ func (this *NodeService) CountAllEnabledNodesWithNodeGrantId(ctx context.Context
 // FindAllEnabledNodesWithNodeGrantId 查找使用某个认证的所有节点
 func (this *NodeService) FindAllEnabledNodesWithNodeGrantId(ctx context.Context, req *pb.FindAllEnabledNodesWithNodeGrantIdRequest) (*pb.FindAllEnabledNodesWithNodeGrantIdResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesWithGrantId(tx, req.NodeGrantId)
 	if err != nil {
@@ -873,13 +988,13 @@ func (this *NodeService) FindAllEnabledNodesWithNodeGrantId(ctx context.Context,
 			Id:          int64(node.Id),
 			Name:        node.Name,
 			Version:     int64(node.Version),
-			IsInstalled: node.IsInstalled == 1,
-			StatusJSON:  []byte(node.Status),
+			IsInstalled: node.IsInstalled,
+			StatusJSON:  node.Status,
 			NodeCluster: &pb.NodeCluster{
 				Id:   int64(node.ClusterId),
 				Name: clusterName,
 			},
-			IsOn: node.IsOn == 1,
+			IsOn: node.IsOn,
 		})
 	}
 
@@ -888,11 +1003,11 @@ func (this *NodeService) FindAllEnabledNodesWithNodeGrantId(ctx context.Context,
 
 // CountAllNotInstalledNodesWithNodeClusterId 计算没有安装的节点数量
 func (this *NodeService) CountAllNotInstalledNodesWithNodeClusterId(ctx context.Context, req *pb.CountAllNotInstalledNodesWithNodeClusterIdRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	tx := this.NullTx()
+	var tx = this.NullTx()
 	count, err := models.SharedNodeDAO.CountAllNotInstalledNodesWithClusterId(tx, req.NodeClusterId)
 	if err != nil {
 		return nil, err
@@ -902,12 +1017,12 @@ func (this *NodeService) CountAllNotInstalledNodesWithNodeClusterId(ctx context.
 
 // FindAllNotInstalledNodesWithNodeClusterId 列出所有未安装的节点
 func (this *NodeService) FindAllNotInstalledNodesWithNodeClusterId(ctx context.Context, req *pb.FindAllNotInstalledNodesWithNodeClusterIdRequest) (*pb.FindAllNotInstalledNodesWithNodeClusterIdResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodes, err := models.SharedNodeDAO.FindAllNotInstalledNodesWithClusterId(tx, req.NodeClusterId)
 	if err != nil {
@@ -926,7 +1041,7 @@ func (this *NodeService) FindAllNotInstalledNodesWithNodeClusterId(ctx context.C
 				Id:     int64(login.Id),
 				Name:   login.Name,
 				Type:   login.Type,
-				Params: []byte(login.Params),
+				Params: login.Params,
 			}
 		}
 
@@ -946,7 +1061,7 @@ func (this *NodeService) FindAllNotInstalledNodesWithNodeClusterId(ctx context.C
 				Description: address.Description,
 				State:       int64(address.State),
 				Order:       int64(address.Order),
-				CanAccess:   address.CanAccess == 1,
+				CanAccess:   address.CanAccess,
 			})
 		}
 
@@ -971,9 +1086,9 @@ func (this *NodeService) FindAllNotInstalledNodesWithNodeClusterId(ctx context.C
 			Id:            int64(node.Id),
 			Name:          node.Name,
 			Version:       int64(node.Version),
-			IsInstalled:   node.IsInstalled == 1,
-			StatusJSON:    []byte(node.Status),
-			IsOn:          node.IsOn == 1,
+			IsInstalled:   node.IsInstalled,
+			StatusJSON:    node.Status,
+			IsOn:          node.IsOn,
 			NodeLogin:     pbLogin,
 			IpAddresses:   pbAddresses,
 			InstallStatus: pbInstallStatus,
@@ -985,14 +1100,14 @@ func (this *NodeService) FindAllNotInstalledNodesWithNodeClusterId(ctx context.C
 // CountAllUpgradeNodesWithNodeClusterId 计算需要升级的节点数量
 func (this *NodeService) CountAllUpgradeNodesWithNodeClusterId(ctx context.Context, req *pb.CountAllUpgradeNodesWithNodeClusterIdRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	deployFiles := installers.SharedDeployManager.LoadNodeFiles()
+	var deployFiles = installers.SharedDeployManager.LoadNodeFiles()
 	total := int64(0)
 	for _, deployFile := range deployFiles {
 		count, err := models.SharedNodeDAO.CountAllLowerVersionNodesWithClusterId(tx, req.NodeClusterId, deployFile.OS, deployFile.Arch, deployFile.Version)
@@ -1008,12 +1123,12 @@ func (this *NodeService) CountAllUpgradeNodesWithNodeClusterId(ctx context.Conte
 // FindAllUpgradeNodesWithNodeClusterId 列出所有需要升级的节点
 func (this *NodeService) FindAllUpgradeNodesWithNodeClusterId(ctx context.Context, req *pb.FindAllUpgradeNodesWithNodeClusterIdRequest) (*pb.FindAllUpgradeNodesWithNodeClusterIdResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 获取当前能升级到的最新版本
 	deployFiles := installers.SharedDeployManager.LoadNodeFiles()
@@ -1035,7 +1150,7 @@ func (this *NodeService) FindAllUpgradeNodesWithNodeClusterId(ctx context.Contex
 					Id:     int64(login.Id),
 					Name:   login.Name,
 					Type:   login.Type,
-					Params: []byte(login.Params),
+					Params: login.Params,
 				}
 			}
 
@@ -1055,7 +1170,7 @@ func (this *NodeService) FindAllUpgradeNodesWithNodeClusterId(ctx context.Contex
 					Description: address.Description,
 					State:       int64(address.State),
 					Order:       int64(address.Order),
-					CanAccess:   address.CanAccess == 1,
+					CanAccess:   address.CanAccess,
 				})
 			}
 
@@ -1089,9 +1204,9 @@ func (this *NodeService) FindAllUpgradeNodesWithNodeClusterId(ctx context.Contex
 				Id:            int64(node.Id),
 				Name:          node.Name,
 				Version:       int64(node.Version),
-				IsInstalled:   node.IsInstalled == 1,
-				StatusJSON:    []byte(node.Status),
-				IsOn:          node.IsOn == 1,
+				IsInstalled:   node.IsInstalled,
+				StatusJSON:    node.Status,
+				IsOn:          node.IsOn,
 				IpAddresses:   pbAddresses,
 				NodeLogin:     pbLogin,
 				InstallStatus: pbInstallStatus,
@@ -1114,12 +1229,12 @@ func (this *NodeService) FindAllUpgradeNodesWithNodeClusterId(ctx context.Contex
 // FindNodeInstallStatus 读取节点安装状态
 func (this *NodeService) FindNodeInstallStatus(ctx context.Context, req *pb.FindNodeInstallStatusRequest) (*pb.FindNodeInstallStatusResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	installStatus, err := models.SharedNodeDAO.FindNodeInstallStatus(tx, req.NodeId)
 	if err != nil {
@@ -1143,12 +1258,12 @@ func (this *NodeService) FindNodeInstallStatus(ctx context.Context, req *pb.Find
 // UpdateNodeLogin 修改节点登录信息
 func (this *NodeService) UpdateNodeLogin(ctx context.Context, req *pb.UpdateNodeLoginRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	if req.NodeLogin.Id <= 0 {
 		_, err := models.SharedNodeLoginDAO.CreateNodeLogin(tx, nodeconfigs.NodeRoleNode, req.NodeId, req.NodeLogin.Name, req.NodeLogin.Type, req.NodeLogin.Params)
@@ -1165,12 +1280,12 @@ func (this *NodeService) UpdateNodeLogin(ctx context.Context, req *pb.UpdateNode
 // CountAllEnabledNodesWithNodeGroupId 计算某个节点分组内的节点数量
 func (this *NodeService) CountAllEnabledNodesWithNodeGroupId(ctx context.Context, req *pb.CountAllEnabledNodesWithNodeGroupIdRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	count, err := models.SharedNodeDAO.CountAllEnabledNodesWithGroupId(tx, req.NodeGroupId)
 	if err != nil {
@@ -1182,12 +1297,12 @@ func (this *NodeService) CountAllEnabledNodesWithNodeGroupId(ctx context.Context
 // FindAllEnabledNodesDNSWithNodeClusterId 取得某个集群下的所有节点
 func (this *NodeService) FindAllEnabledNodesDNSWithNodeClusterId(ctx context.Context, req *pb.FindAllEnabledNodesDNSWithNodeClusterIdRequest) (*pb.FindAllEnabledNodesDNSWithNodeClusterIdResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	clusterDNS, err := models.SharedNodeClusterDAO.FindClusterDNSInfo(tx, req.NodeClusterId, nil)
 	if err != nil {
@@ -1196,18 +1311,19 @@ func (this *NodeService) FindAllEnabledNodesDNSWithNodeClusterId(ctx context.Con
 	if clusterDNS == nil {
 		return nil, errors.New("not found clusterId '" + numberutils.FormatInt64(req.NodeClusterId) + "'")
 	}
-	dnsDomainId := int64(clusterDNS.DnsDomainId)
+	var dnsConfig, _ = clusterDNS.DecodeDNSConfig()
+	var dnsDomainId = int64(clusterDNS.DnsDomainId)
 
 	routes, err := dns.SharedDNSDomainDAO.FindDomainRoutes(tx, dnsDomainId)
 	if err != nil {
 		return nil, err
 	}
 
-	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesDNSWithClusterId(tx, req.NodeClusterId, true)
+	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesDNSWithClusterId(tx, req.NodeClusterId, true, dnsConfig != nil && dnsConfig.IncludingLnNodes)
 	if err != nil {
 		return nil, err
 	}
-	result := []*pb.NodeDNSInfo{}
+	var result = []*pb.NodeDNSInfo{}
 	for _, node := range nodes {
 		ipAddresses, err := models.SharedNodeIPAddressDAO.FindNodeAccessAndUpIPAddresses(tx, int64(node.Id), nodeconfigs.NodeRoleNode)
 		if err != nil {
@@ -1219,7 +1335,7 @@ func (this *NodeService) FindAllEnabledNodesDNSWithNodeClusterId(ctx context.Con
 			return nil, err
 		}
 
-		pbRoutes := []*pb.DNSRoute{}
+		var pbRoutes = []*pb.DNSRoute{}
 		for _, routeCode := range domainRouteCodes {
 			for _, r := range routes {
 				if r.Code == routeCode {
@@ -1255,12 +1371,12 @@ func (this *NodeService) FindAllEnabledNodesDNSWithNodeClusterId(ctx context.Con
 // FindEnabledNodeDNS 查找单个节点的域名解析信息
 func (this *NodeService) FindEnabledNodeDNS(ctx context.Context, req *pb.FindEnabledNodeDNSRequest) (*pb.FindEnabledNodeDNSResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	node, err := models.SharedNodeDAO.FindEnabledNodeDNS(tx, req.NodeId)
 	if err != nil {
@@ -1271,7 +1387,7 @@ func (this *NodeService) FindEnabledNodeDNS(ctx context.Context, req *pb.FindEna
 		return &pb.FindEnabledNodeDNSResponse{Node: nil}, nil
 	}
 
-	ipAddr, _, err := models.SharedNodeIPAddressDAO.FindFirstNodeAccessIPAddress(tx, int64(node.Id), nodeconfigs.NodeRoleNode)
+	ipAddr, _, err := models.SharedNodeIPAddressDAO.FindFirstNodeAccessIPAddress(tx, int64(node.Id), true, nodeconfigs.NodeRoleNode)
 	if err != nil {
 		return nil, err
 	}
@@ -1331,12 +1447,12 @@ func (this *NodeService) FindEnabledNodeDNS(ctx context.Context, req *pb.FindEna
 // UpdateNodeDNS 修改节点的DNS解析信息
 func (this *NodeService) UpdateNodeDNS(ctx context.Context, req *pb.UpdateNodeDNSRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	adminId, err := this.ValidateAdmin(ctx, 0)
+	adminId, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	node, err := models.SharedNodeDAO.FindEnabledNodeDNS(tx, req.NodeId)
 	if err != nil {
@@ -1392,7 +1508,7 @@ func (this *NodeService) UpdateNodeDNS(ctx context.Context, req *pb.UpdateNodeDN
 
 	// 修改IP
 	if len(req.IpAddr) > 0 {
-		ipAddrId, err := models.SharedNodeIPAddressDAO.FindFirstNodeAccessIPAddressId(tx, req.NodeId, nodeconfigs.NodeRoleNode)
+		ipAddrId, err := models.SharedNodeIPAddressDAO.FindFirstNodeAccessIPAddressId(tx, req.NodeId, true, nodeconfigs.NodeRoleNode)
 		if err != nil {
 			return nil, err
 		}
@@ -1402,7 +1518,7 @@ func (this *NodeService) UpdateNodeDNS(ctx context.Context, req *pb.UpdateNodeDN
 				return nil, err
 			}
 		} else {
-			_, err = models.SharedNodeIPAddressDAO.CreateAddress(tx, adminId, req.NodeId, nodeconfigs.NodeRoleNode, "DNS IP", req.IpAddr, true, true)
+			_, err = models.SharedNodeIPAddressDAO.CreateAddress(tx, adminId, req.NodeId, nodeconfigs.NodeRoleNode, "DNS IP", req.IpAddr, true, true, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -1414,12 +1530,12 @@ func (this *NodeService) UpdateNodeDNS(ctx context.Context, req *pb.UpdateNodeDN
 
 // CountAllEnabledNodesWithNodeRegionId 计算某个区域下的节点数量
 func (this *NodeService) CountAllEnabledNodesWithNodeRegionId(ctx context.Context, req *pb.CountAllEnabledNodesWithNodeRegionIdRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	count, err := models.SharedNodeDAO.CountAllEnabledNodesWithRegionId(tx, req.NodeRegionId)
 	if err != nil {
@@ -1430,12 +1546,12 @@ func (this *NodeService) CountAllEnabledNodesWithNodeRegionId(ctx context.Contex
 
 // FindEnabledNodesWithIds 根据一组ID获取节点信息
 func (this *NodeService) FindEnabledNodesWithIds(ctx context.Context, req *pb.FindEnabledNodesWithIdsRequest) (*pb.FindEnabledNodesWithIdsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodes, err := models.SharedNodeDAO.FindEnabledNodesWithIds(tx, req.NodeIds)
 	if err != nil {
@@ -1449,8 +1565,8 @@ func (this *NodeService) FindEnabledNodesWithIds(ctx context.Context, req *pb.Fi
 		}
 		pbNodes = append(pbNodes, &pb.Node{
 			Id:                  int64(node.Id),
-			IsOn:                node.IsOn == 1,
-			IsActive:            node.IsActive == 1,
+			IsOn:                node.IsOn,
+			IsActive:            node.IsActive,
 			ConnectedAPINodeIds: connectedAPINodeIds,
 		})
 	}
@@ -1459,7 +1575,7 @@ func (this *NodeService) FindEnabledNodesWithIds(ctx context.Context, req *pb.Fi
 
 // CheckNodeLatestVersion 检查新版本
 func (this *NodeService) CheckNodeLatestVersion(ctx context.Context, req *pb.CheckNodeLatestVersionRequest) (*pb.CheckNodeLatestVersionResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1478,7 +1594,7 @@ func (this *NodeService) CheckNodeLatestVersion(ctx context.Context, req *pb.Che
 
 // UpdateNodeUp 设置节点上线状态
 func (this *NodeService) UpdateNodeUp(ctx context.Context, req *pb.UpdateNodeUpRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1494,12 +1610,12 @@ func (this *NodeService) UpdateNodeUp(ctx context.Context, req *pb.UpdateNodeUpR
 
 // DownloadNodeInstallationFile 下载最新边缘节点安装文件
 func (this *NodeService) DownloadNodeInstallationFile(ctx context.Context, req *pb.DownloadNodeInstallationFileRequest) (*pb.DownloadNodeInstallationFileResponse, error) {
-	_, err := this.ValidateNode(ctx)
+	nodeId, err := this.ValidateNode(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	file := installers.SharedDeployManager.FindNodeFile(req.Os, req.Arch)
+	var file = installers.SharedDeployManager.FindNodeFile(req.Os, req.Arch)
 	if file == nil {
 		return &pb.DownloadNodeInstallationFileResponse{}, nil
 	}
@@ -1514,6 +1630,9 @@ func (this *NodeService) DownloadNodeInstallationFile(ctx context.Context, req *
 		return nil, err
 	}
 
+	// 增加下载速度监控
+	installers.SharedUpgradeLimiter.UpdateNodeBytes(nodeconfigs.NodeRoleNode, nodeId, int64(len(data)))
+
 	return &pb.DownloadNodeInstallationFileResponse{
 		Sum:       sum,
 		Offset:    offset,
@@ -1525,7 +1644,7 @@ func (this *NodeService) DownloadNodeInstallationFile(ctx context.Context, req *
 
 // UpdateNodeSystem 修改节点系统信息
 func (this *NodeService) UpdateNodeSystem(ctx context.Context, req *pb.UpdateNodeSystemRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1540,7 +1659,7 @@ func (this *NodeService) UpdateNodeSystem(ctx context.Context, req *pb.UpdateNod
 
 // UpdateNodeCache 修改节点缓存设置
 func (this *NodeService) UpdateNodeCache(ctx context.Context, req *pb.UpdateNodeCacheRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1569,7 +1688,7 @@ func (this *NodeService) UpdateNodeCache(ctx context.Context, req *pb.UpdateNode
 		}
 	}
 
-	err = models.SharedNodeDAO.UpdateNodeCache(tx, req.NodeId, maxCacheDiskCapacityJSON, maxCacheMemoryCapacityJSON)
+	err = models.SharedNodeDAO.UpdateNodeCache(tx, req.NodeId, maxCacheDiskCapacityJSON, maxCacheMemoryCapacityJSON, req.CacheDiskDir)
 	if err != nil {
 		return nil, err
 	}
@@ -1581,6 +1700,10 @@ func (this *NodeService) UpdateNodeCache(ctx context.Context, req *pb.UpdateNode
 func (this *NodeService) findClusterCacheMap(clusterId int64, version int64) *utils.CacheMap {
 	nodeVersionCacheLocker.Lock()
 	defer nodeVersionCacheLocker.Unlock()
+
+	if version == 0 {
+		return utils.NewCacheMap()
+	}
 
 	cache, ok := nodeVersionCacheMap[clusterId]
 	if ok {
@@ -1609,4 +1732,376 @@ func (this *NodeService) findClusterCacheMap(clusterId int64, version int64) *ut
 		nodeVersionCacheMap[clusterId] = cache
 		return cacheMap
 	}
+}
+
+// FindNodeLevelInfo 读取节点级别信息
+func (this *NodeService) FindNodeLevelInfo(ctx context.Context, req *pb.FindNodeLevelInfoRequest) (*pb.FindNodeLevelInfoResponse, error) {
+	nodeId, err := this.ValidateNode(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx *dbs.Tx
+	node, err := models.SharedNodeDAO.FindNodeLevelInfo(tx, nodeId)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return &pb.FindNodeLevelInfoResponse{}, nil
+	}
+
+	var result = &pb.FindNodeLevelInfoResponse{
+		Level: types.Int32(node.Level),
+	}
+
+	if node.Level == 1 {
+		parentNodes, err := models.SharedNodeDAO.FindParentNodeConfigs(tx, nodeId, int64(node.GroupId), node.AllClusterIds(), types.Int(node.Level))
+		if err != nil {
+			return nil, err
+		}
+		parentNodesJSON, err := json.Marshal(parentNodes)
+		if err != nil {
+			return nil, err
+		}
+		result.ParentNodesMapJSON = parentNodesJSON
+	}
+
+	return result, nil
+}
+
+// FindNodeDNSResolver 读取节点DNS Resolver
+func (this *NodeService) FindNodeDNSResolver(ctx context.Context, req *pb.FindNodeDNSResolverRequest) (*pb.FindNodeDNSResolverResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	config, err := models.SharedNodeDAO.FindNodeDNSResolver(tx, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.FindNodeDNSResolverResponse{
+		DnsResolverJSON: configJSON,
+	}, nil
+}
+
+// UpdateNodeDNSResolver 修改DNS Resolver
+func (this *NodeService) UpdateNodeDNSResolver(ctx context.Context, req *pb.UpdateNodeDNSResolverRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	var config = nodeconfigs.DefaultDNSResolverConfig()
+	err = json.Unmarshal(req.DnsResolverJSON, config)
+	if err != nil {
+		return nil, err
+	}
+	err = models.SharedNodeDAO.UpdateNodeDNSResolver(tx, req.NodeId, config)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
+}
+
+// FindNodeDDoSProtection 获取集群的DDoS设置
+func (this *NodeService) FindNodeDDoSProtection(ctx context.Context, req *pb.FindNodeDDoSProtectionRequest) (*pb.FindNodeDDoSProtectionResponse, error) {
+	var nodeId = req.NodeId
+	var isFromNode = false
+
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		// 检查是否来自节点
+		currentNodeId, err2 := this.ValidateNode(ctx)
+		if err2 != nil {
+			return nil, err
+		}
+
+		if nodeId > 0 && currentNodeId != nodeId {
+			return nil, errors.New("invalid 'nodeId'")
+		}
+
+		nodeId = currentNodeId
+		isFromNode = true
+	}
+
+	var tx *dbs.Tx
+	ddosProtection, err := models.SharedNodeDAO.FindNodeDDoSProtection(tx, nodeId)
+	if err != nil {
+		return nil, err
+	}
+	if ddosProtection == nil {
+		ddosProtection = ddosconfigs.DefaultProtectionConfig()
+	}
+
+	// 组合父级节点配置
+	// 只有从节点读取配置时才需要组合
+	if isFromNode {
+		clusterId, err := models.SharedNodeDAO.FindNodeClusterId(tx, nodeId)
+		if err != nil {
+			return nil, err
+		}
+
+		if clusterId > 0 {
+			clusterDDoSProtection, err := models.SharedNodeClusterDAO.FindClusterDDoSProtection(tx, clusterId)
+			if err != nil {
+				return nil, err
+			}
+			if clusterDDoSProtection == nil {
+				clusterDDoSProtection = ddosconfigs.DefaultProtectionConfig()
+			}
+
+			clusterDDoSProtection.Merge(ddosProtection)
+			ddosProtection = clusterDDoSProtection
+		}
+	}
+
+	ddosProtectionJSON, err := json.Marshal(ddosProtection)
+	if err != nil {
+		return nil, err
+	}
+
+	var result = &pb.FindNodeDDoSProtectionResponse{
+		DdosProtectionJSON: ddosProtectionJSON,
+	}
+
+	return result, nil
+}
+
+// UpdateNodeDDoSProtection 修改集群的DDoS设置
+func (this *NodeService) UpdateNodeDDoSProtection(ctx context.Context, req *pb.UpdateNodeDDoSProtectionRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var ddosProtection = &ddosconfigs.ProtectionConfig{}
+	err = json.Unmarshal(req.DdosProtectionJSON, ddosProtection)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx *dbs.Tx
+	err = models.SharedNodeDAO.UpdateNodeDDoSProtection(tx, req.NodeId, ddosProtection)
+	if err != nil {
+		return nil, err
+	}
+	return this.Success()
+}
+
+// FindNodeGlobalServerConfig 取得节点的服务全局配置
+func (this *NodeService) FindNodeGlobalServerConfig(ctx context.Context, req *pb.FindNodeGlobalServerConfigRequest) (*pb.FindNodeGlobalServerConfigResponse, error) {
+	var nodeId = req.NodeId
+
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		// 检查是否来自节点
+		currentNodeId, err2 := this.ValidateNode(ctx)
+		if err2 != nil {
+			return nil, err
+		}
+
+		if nodeId > 0 && currentNodeId != nodeId {
+			return nil, errors.New("invalid 'nodeId'")
+		}
+
+		nodeId = currentNodeId
+	}
+
+	var tx = this.NullTx()
+
+	clusterId, err := models.SharedNodeDAO.FindNodeClusterId(tx, nodeId)
+	if err != nil {
+		return nil, err
+	}
+
+	var config *serverconfigs.GlobalServerConfig
+	if clusterId > 0 {
+		config, err = models.SharedNodeClusterDAO.FindClusterGlobalServerConfig(tx, clusterId)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if config == nil {
+		config = serverconfigs.DefaultGlobalServerConfig()
+	}
+
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+
+	var result = &pb.FindNodeGlobalServerConfigResponse{
+		GlobalServerConfigJSON: configJSON,
+	}
+
+	return result, nil
+}
+
+// FindEnabledNodeConfigInfo 取得节点的配置概要信息
+func (this *NodeService) FindEnabledNodeConfigInfo(ctx context.Context, req *pb.FindEnabledNodeConfigInfoRequest) (*pb.FindEnabledNodeConfigInfoResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	var result = &pb.FindEnabledNodeConfigInfoResponse{}
+	node, err := models.SharedNodeDAO.FindEnabledNode(tx, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		// 总是返回非空
+		return result, nil
+	}
+
+	// dns
+	if len(node.DNSRouteCodes()) > 0 {
+		result.HasDNSInfo = true
+	}
+
+	// cache
+	if len(node.CacheDiskDir) > 0 {
+		result.HasCacheInfo = true
+	} else {
+		var diskCapacity = node.DecodeMaxCacheDiskCapacity()
+		var memoryCapacity = node.DecodeMaxCacheMemoryCapacity()
+		if (diskCapacity != nil && diskCapacity.IsNotEmpty()) || (memoryCapacity != nil && memoryCapacity.IsNotEmpty()) {
+			result.HasCacheInfo = true
+		}
+	}
+
+	// thresholds
+	countThresholds, err := models.SharedNodeThresholdDAO.CountAllEnabledThresholds(tx, nodeconfigs.NodeRoleNode, 0, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+	result.HasThresholds = countThresholds > 0
+
+	// ssh
+	nodeLogin, err := models.SharedNodeLoginDAO.FindEnabledNodeLoginWithNodeId(tx, nodeconfigs.NodeRoleNode, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+	if nodeLogin != nil {
+		sshParams, err := nodeLogin.DecodeSSHParams()
+		if err != nil {
+			return nil, err
+		}
+		if sshParams != nil {
+			result.HasSSH = len(sshParams.Host) > 0 || sshParams.Port > 0
+		}
+	}
+
+	// systemSettings
+	if node.MaxCPU > 0 {
+		result.HasSystemSettings = true
+	} else {
+		// dns resolver
+		var dnsResolverConfig = node.DecodeDNSResolver()
+		if dnsResolverConfig != nil {
+			result.HasSystemSettings = dnsResolverConfig.Type != nodeconfigs.DNSResolverTypeDefault
+		}
+	}
+
+	// ddos protection
+	result.HasDDoSProtection = node.HasDDoSProtection()
+
+	return result, nil
+}
+
+// ------- api 客户定制化接口
+
+type nodeInfo struct {
+	Id       uint32  `json:"id"`
+	Name     string  `json:"name"`
+	CPUUsage float64 `json:"cpu_usage"`
+	MemUsage float64 `json:"mem_usage"`
+	Status   string  `json:"status"`
+}
+type ListNodesResponse struct {
+	Nodes []*nodeInfo `json:"nodes"`
+	Total int64       `json:"total"`
+}
+
+// ListNodes 列出单页的节点
+func (this *NodeService) ListNodes(ctx context.Context, req *pb.ListEnabledNodesMatchRequest) (*ListNodesResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+
+	countResp, err := models.SharedNodeDAO.CountAllEnabledNodesMatch(tx, req.NodeClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword, 0, 0, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	resp := &ListNodesResponse{Total: countResp, Nodes: []*nodeInfo{}}
+	nodes, err := models.SharedNodeDAO.ListEnabledNodesMatch(tx, req.NodeClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword,
+		0, 0, 0, false, "", req.Offset, req.Size)
+	for _, node := range nodes {
+		n := nodeInfo{Id: node.Id}
+		// 状态
+		isSynced := false
+		status := &nodeconfigs.NodeStatus{}
+		if len(node.Status) > 0 {
+			err = json.Unmarshal(node.Status, &status)
+			if err != nil {
+				return nil, err
+			}
+			status.IsActive = status.IsActive && time.Now().Unix()-status.UpdatedAt <= 60 // N秒之内认为活跃
+			isSynced = status.ConfigVersion == int64(node.Version)
+		}
+		if !node.IsUp {
+			n.Status = "健康问题下线"
+		} else if !node.IsOn {
+			n.Status = "未启用"
+		} else if node.IsInstalled {
+
+			if status.IsActive {
+				if isSynced {
+					n.Status = "同步中"
+				} else {
+					n.Status = "运行中"
+				}
+			} else if status.UpdatedAt > 0 {
+				n.Status = "已断开"
+			} else {
+				n.Status = "未连接"
+			}
+		} else {
+			// 安装信息
+			installStatus, err := node.DecodeInstallStatus()
+			if err != nil {
+				return nil, err
+			}
+			if installStatus.IsRunning {
+				n.Status = "安装中"
+			}
+			if installStatus.IsFinished && !installStatus.IsOk {
+				n.Status = "安装错误"
+			} else {
+				n.Status = "未安装"
+			}
+		}
+
+		// 名称
+		n.Name = node.Name
+		// CPU
+		n.CPUUsage = status.CPUUsage
+		// mem
+		n.MemUsage = status.MemoryUsage
+		resp.Nodes = append(resp.Nodes, &n)
+	}
+	return resp, nil
 }

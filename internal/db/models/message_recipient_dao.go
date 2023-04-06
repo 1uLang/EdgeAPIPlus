@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
@@ -85,7 +86,7 @@ func (this *MessageRecipientDAO) FindEnabledMessageRecipient(tx *dbs.Tx, recipie
 
 // CreateRecipient 创建接收人
 func (this *MessageRecipientDAO) CreateRecipient(tx *dbs.Tx, adminId int64, instanceId int64, user string, groupIds []int64, description string, timeFrom string, timeTo string) (int64, error) {
-	op := NewMessageRecipientOperator()
+	var op = NewMessageRecipientOperator()
 	op.AdminId = adminId
 	op.InstanceId = instanceId
 	op.User = user
@@ -121,7 +122,7 @@ func (this *MessageRecipientDAO) UpdateRecipient(tx *dbs.Tx, recipientId int64, 
 		return errors.New("invalid recipientId")
 	}
 
-	op := NewMessageRecipientOperator()
+	var op = NewMessageRecipientOperator()
 	op.Id = recipientId
 	op.AdminId = adminId
 	op.InstanceId = instanceId
@@ -172,7 +173,7 @@ func (this *MessageRecipientDAO) CountAllEnabledRecipients(tx *dbs.Tx, adminId i
 	}
 	if len(keyword) > 0 {
 		query.Where("(`user` LIKE :keyword OR description LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 	return query.
 		State(MessageRecipientStateEnabled).
@@ -197,7 +198,7 @@ func (this *MessageRecipientDAO) ListAllEnabledRecipients(tx *dbs.Tx, adminId in
 	}
 	if len(keyword) > 0 {
 		query.Where("(`user` LIKE :keyword OR description LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 	_, err = query.
 		State(MessageRecipientStateEnabled).

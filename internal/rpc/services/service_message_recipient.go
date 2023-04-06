@@ -14,7 +14,7 @@ type MessageRecipientService struct {
 
 // CreateMessageRecipient 创建接收人
 func (this *MessageRecipientService) CreateMessageRecipient(ctx context.Context, req *pb.CreateMessageRecipientRequest) (*pb.CreateMessageRecipientResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func (this *MessageRecipientService) CreateMessageRecipient(ctx context.Context,
 
 // UpdateMessageRecipient 修改接收人
 func (this *MessageRecipientService) UpdateMessageRecipient(ctx context.Context, req *pb.UpdateMessageRecipientRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (this *MessageRecipientService) UpdateMessageRecipient(ctx context.Context,
 
 // DeleteMessageRecipient 删除接收人
 func (this *MessageRecipientService) DeleteMessageRecipient(ctx context.Context, req *pb.DeleteMessageRecipientRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (this *MessageRecipientService) DeleteMessageRecipient(ctx context.Context,
 
 // CountAllEnabledMessageRecipients 计算接收人数量
 func (this *MessageRecipientService) CountAllEnabledMessageRecipients(ctx context.Context, req *pb.CountAllEnabledMessageRecipientsRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (this *MessageRecipientService) CountAllEnabledMessageRecipients(ctx contex
 
 // ListEnabledMessageRecipients 列出单页接收人
 func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Context, req *pb.ListEnabledMessageRecipientsRequest) (*pb.ListEnabledMessageRecipientsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Co
 			Id:       int64(admin.Id),
 			Fullname: admin.Fullname,
 			Username: admin.Username,
-			IsOn:     admin.IsOn == 1,
+			IsOn:     admin.IsOn,
 		}
 
 		// 媒介实例
@@ -115,7 +115,7 @@ func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Co
 		}
 		pbInstance := &pb.MessageMediaInstance{
 			Id:          int64(instance.Id),
-			IsOn:        instance.IsOn == 1,
+			IsOn:        instance.IsOn,
 			Name:        instance.Name,
 			Description: instance.Description,
 		}
@@ -133,7 +133,7 @@ func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Co
 					pbGroups = append(pbGroups, &pb.MessageRecipientGroup{
 						Id:   int64(group.Id),
 						Name: group.Name,
-						IsOn: group.IsOn == 1,
+						IsOn: group.IsOn,
 					})
 				}
 			}
@@ -144,7 +144,7 @@ func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Co
 			Admin:                  pbAdmin,
 			User:                   recipient.User,
 			MessageMediaInstance:   pbInstance,
-			IsOn:                   recipient.IsOn == 1,
+			IsOn:                   recipient.IsOn,
 			MessageRecipientGroups: pbGroups,
 			Description:            recipient.Description,
 			TimeFrom:               recipient.TimeFrom,
@@ -157,7 +157,7 @@ func (this *MessageRecipientService) ListEnabledMessageRecipients(ctx context.Co
 
 // FindEnabledMessageRecipient 查找单个接收人信息
 func (this *MessageRecipientService) FindEnabledMessageRecipient(ctx context.Context, req *pb.FindEnabledMessageRecipientRequest) (*pb.FindEnabledMessageRecipientResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func (this *MessageRecipientService) FindEnabledMessageRecipient(ctx context.Con
 		Id:       int64(admin.Id),
 		Fullname: admin.Fullname,
 		Username: admin.Username,
-		IsOn:     admin.IsOn == 1,
+		IsOn:     admin.IsOn,
 	}
 
 	// 媒介实例
@@ -197,7 +197,7 @@ func (this *MessageRecipientService) FindEnabledMessageRecipient(ctx context.Con
 	}
 	pbInstance := &pb.MessageMediaInstance{
 		Id:          int64(instance.Id),
-		IsOn:        instance.IsOn == 1,
+		IsOn:        instance.IsOn,
 		Name:        instance.Name,
 		Description: instance.Description,
 	}
@@ -215,7 +215,7 @@ func (this *MessageRecipientService) FindEnabledMessageRecipient(ctx context.Con
 				pbGroups = append(pbGroups, &pb.MessageRecipientGroup{
 					Id:   int64(group.Id),
 					Name: group.Name,
-					IsOn: group.IsOn == 1,
+					IsOn: group.IsOn,
 				})
 			}
 		}
@@ -226,7 +226,7 @@ func (this *MessageRecipientService) FindEnabledMessageRecipient(ctx context.Con
 		User:                   recipient.User,
 		Admin:                  pbAdmin,
 		MessageMediaInstance:   pbInstance,
-		IsOn:                   recipient.IsOn == 1,
+		IsOn:                   recipient.IsOn,
 		MessageRecipientGroups: pbGroups,
 		Description:            recipient.Description,
 		TimeFrom:               recipient.TimeFrom,

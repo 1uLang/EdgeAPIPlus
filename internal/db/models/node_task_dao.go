@@ -14,17 +14,22 @@ import (
 type NodeTaskType = string
 
 const (
-	NodeTaskTypeConfigChanged      NodeTaskType = "configChanged"
-	NodeTaskTypeIPItemChanged      NodeTaskType = "ipItemChanged"
-	NodeTaskTypeNodeVersionChanged NodeTaskType = "nodeVersionChanged"
+	NodeTaskTypeConfigChanged             NodeTaskType = "configChanged"             // 节点整体配置变化
+	NodeTaskTypeDDosProtectionChanged     NodeTaskType = "ddosProtectionChanged"     // 节点DDoS配置变更
+	NodeTaskTypeGlobalServerConfigChanged NodeTaskType = "globalServerConfigChanged" // 全局服务设置变化
+	NodeTaskTypeIPItemChanged             NodeTaskType = "ipItemChanged"
+	NodeTaskTypeNodeVersionChanged        NodeTaskType = "nodeVersionChanged"
+	NodeTaskTypeScriptsChanged            NodeTaskType = "scriptsChanged"
+	NodeTaskTypeNodeLevelChanged          NodeTaskType = "nodeLevelChanged"
 
 	// NS相关
 
-	NSNodeTaskTypeConfigChanged NodeTaskType = "nsConfigChanged"
-	NSNodeTaskTypeDomainChanged NodeTaskType = "nsDomainChanged"
-	NSNodeTaskTypeRecordChanged NodeTaskType = "nsRecordChanged"
-	NSNodeTaskTypeRouteChanged  NodeTaskType = "nsRouteChanged"
-	NSNodeTaskTypeKeyChanged    NodeTaskType = "nsKeyChanged"
+	NSNodeTaskTypeConfigChanged         NodeTaskType = "nsConfigChanged"
+	NSNodeTaskTypeDomainChanged         NodeTaskType = "nsDomainChanged"
+	NSNodeTaskTypeRecordChanged         NodeTaskType = "nsRecordChanged"
+	NSNodeTaskTypeRouteChanged          NodeTaskType = "nsRouteChanged"
+	NSNodeTaskTypeKeyChanged            NodeTaskType = "nsKeyChanged"
+	NSNodeTaskTypeDDosProtectionChanged NodeTaskType = "nsDDoSProtectionChanged" // 节点DDoS配置变更
 )
 
 type NodeTaskDAO dbs.DAO
@@ -49,17 +54,18 @@ func init() {
 }
 
 // CreateNodeTask 创建单个节点任务
-func (this *NodeTaskDAO) CreateNodeTask(tx *dbs.Tx, role string, clusterId int64, nodeId int64, taskType NodeTaskType, version int64) error {
+func (this *NodeTaskDAO) CreateNodeTask(tx *dbs.Tx, role string, clusterId int64, nodeId int64, serverId int64, taskType NodeTaskType, version int64) error {
 	if clusterId <= 0 || nodeId <= 0 {
 		return nil
 	}
-	uniqueId := role + "@" + types.String(nodeId) + "@node@" + taskType
-	updatedAt := time.Now().Unix()
+	var uniqueId = role + "@" + types.String(nodeId) + "@node@" + types.String(serverId) + "@" + taskType
+	var updatedAt = time.Now().Unix()
 	_, _, err := this.Query(tx).
 		InsertOrUpdate(maps.Map{
 			"role":      role,
 			"clusterId": clusterId,
 			"nodeId":    nodeId,
+			"serverId":  serverId,
 			"type":      taskType,
 			"uniqueId":  uniqueId,
 			"updatedAt": updatedAt,
@@ -75,22 +81,24 @@ func (this *NodeTaskDAO) CreateNodeTask(tx *dbs.Tx, role string, clusterId int64
 			"error":      "",
 			"isNotified": 0,
 			"version":    version,
+			"serverId":   serverId,
 		})
 	return err
 }
 
 // CreateClusterTask 创建集群任务
-func (this *NodeTaskDAO) CreateClusterTask(tx *dbs.Tx, role string, clusterId int64, taskType NodeTaskType) error {
+func (this *NodeTaskDAO) CreateClusterTask(tx *dbs.Tx, role string, clusterId int64, serverId int64, taskType NodeTaskType) error {
 	if clusterId <= 0 {
 		return nil
 	}
 
-	uniqueId := role + "@" + types.String(clusterId) + "@cluster@" + taskType
-	updatedAt := time.Now().Unix()
+	var uniqueId = role + "@" + types.String(clusterId) + "@" + types.String(serverId) + "@cluster@" + types.String(serverId) + "@" + taskType
+	var updatedAt = time.Now().Unix()
 	_, _, err := this.Query(tx).
 		InsertOrUpdate(maps.Map{
 			"role":       role,
 			"clusterId":  clusterId,
+			"serverId":   serverId,
 			"nodeId":     0,
 			"type":       taskType,
 			"uniqueId":   uniqueId,
@@ -107,12 +115,13 @@ func (this *NodeTaskDAO) CreateClusterTask(tx *dbs.Tx, role string, clusterId in
 			"isNotified": 0,
 			"error":      "",
 			"version":    time.Now().UnixNano(),
+			"serverId":   serverId,
 		})
 	return err
 }
 
 // ExtractNodeClusterTask 分解边缘节点集群任务
-func (this *NodeTaskDAO) ExtractNodeClusterTask(tx *dbs.Tx, clusterId int64, taskType NodeTaskType) error {
+func (this *NodeTaskDAO) ExtractNodeClusterTask(tx *dbs.Tx, clusterId int64, serverId int64, taskType NodeTaskType) error {
 	nodeIds, err := SharedNodeDAO.FindAllNodeIdsMatch(tx, clusterId, true, configutils.BoolStateYes)
 	if err != nil {
 		return err
@@ -131,7 +140,7 @@ func (this *NodeTaskDAO) ExtractNodeClusterTask(tx *dbs.Tx, clusterId int64, tas
 
 	var version = time.Now().UnixNano()
 	for _, nodeId := range nodeIds {
-		err = this.CreateNodeTask(tx, nodeconfigs.NodeRoleNode, clusterId, nodeId, taskType, version)
+		err = this.CreateNodeTask(tx, nodeconfigs.NodeRoleNode, clusterId, nodeId, serverId, taskType, version)
 		if err != nil {
 			return err
 		}
@@ -139,45 +148,6 @@ func (this *NodeTaskDAO) ExtractNodeClusterTask(tx *dbs.Tx, clusterId int64, tas
 
 	_, err = this.Query(tx).
 		Attr("role", nodeconfigs.NodeRoleNode).
-		Attr("clusterId", clusterId).
-		Attr("nodeId", 0).
-		Attr("type", taskType).
-		Delete()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// ExtractNSClusterTask 分解NS节点集群任务
-func (this *NodeTaskDAO) ExtractNSClusterTask(tx *dbs.Tx, clusterId int64, taskType NodeTaskType) error {
-	nodeIds, err := SharedNSNodeDAO.FindAllNodeIdsMatch(tx, clusterId, true, configutils.BoolStateYes)
-	if err != nil {
-		return err
-	}
-
-	_, err = this.Query(tx).
-		Attr("role", nodeconfigs.NodeRoleDNS).
-		Attr("clusterId", clusterId).
-		Param("clusterIdString", types.String(clusterId)).
-		Where("nodeId > 0").
-		Attr("type", taskType).
-		Delete()
-	if err != nil {
-		return err
-	}
-
-	var version = time.Now().UnixNano()
-	for _, nodeId := range nodeIds {
-		err = this.CreateNodeTask(tx, nodeconfigs.NodeRoleDNS, clusterId, nodeId, taskType, version)
-		if err != nil {
-			return err
-		}
-	}
-
-	_, err = this.Query(tx).
-		Attr("role", nodeconfigs.NodeRoleDNS).
 		Attr("clusterId", clusterId).
 		Attr("nodeId", 0).
 		Attr("type", taskType).
@@ -202,7 +172,8 @@ func (this *NodeTaskDAO) ExtractAllClusterTasks(tx *dbs.Tx, role string) error {
 		clusterId := int64(one.(*NodeTask).ClusterId)
 		switch role {
 		case nodeconfigs.NodeRoleNode:
-			err = this.ExtractNodeClusterTask(tx, clusterId, one.(*NodeTask).Type)
+			var nodeTask = one.(*NodeTask)
+			err = this.ExtractNodeClusterTask(tx, clusterId, int64(nodeTask.ServerId), nodeTask.Type)
 			if err != nil {
 				return err
 			}
@@ -311,20 +282,30 @@ func (this *NodeTaskDAO) FindAllDoingNodeIds(tx *dbs.Tx, role string) ([]int64, 
 }
 
 // ExistsDoingNodeTasks 检查是否有正在执行的任务
-func (this *NodeTaskDAO) ExistsDoingNodeTasks(tx *dbs.Tx, role string) (bool, error) {
-	return this.Query(tx).
+func (this *NodeTaskDAO) ExistsDoingNodeTasks(tx *dbs.Tx, role string, excludeTypes []NodeTaskType) (bool, error) {
+	var query = this.Query(tx).
 		Attr("role", role).
 		Where("(isDone=0 OR (isDone=1 AND isOk=0))").
-		Gt("nodeId", 0).
-		Exist()
+		Gt("nodeId", 0)
+	if len(excludeTypes) > 0 {
+		for _, excludeType := range excludeTypes {
+			query.Neq("type", excludeType)
+		}
+	}
+	return query.Exist()
 }
 
 // ExistsErrorNodeTasks 是否有错误的任务
-func (this *NodeTaskDAO) ExistsErrorNodeTasks(tx *dbs.Tx, role string) (bool, error) {
-	return this.Query(tx).
+func (this *NodeTaskDAO) ExistsErrorNodeTasks(tx *dbs.Tx, role string, excludeTypes []NodeTaskType) (bool, error) {
+	var query = this.Query(tx).
 		Attr("role", role).
-		Where("(isDone=1 AND isOk=0)").
-		Exist()
+		Where("(isDone=1 AND isOk=0)")
+	if len(excludeTypes) > 0 {
+		for _, excludeType := range excludeTypes {
+			query.Neq("type", excludeType)
+		}
+	}
+	return query.Exist()
 }
 
 // DeleteNodeTask 删除任务

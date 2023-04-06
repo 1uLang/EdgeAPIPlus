@@ -6,13 +6,13 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients/cloudflare"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients/dnstypes"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/types"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -168,7 +168,7 @@ func (this *CloudFlareProvider) QueryRecord(domain string, name string, recordTy
 func (this *CloudFlareProvider) AddRecord(domain string, newRecord *dnstypes.Record) error {
 	zoneId, err := this.findZoneIdWithDomain(domain)
 	if err != nil {
-		return err
+		return this.WrapError(err, domain, newRecord)
 	}
 
 	resp := new(cloudflare.CreateDNSRecordResponse)
@@ -185,7 +185,7 @@ func (this *CloudFlareProvider) AddRecord(domain string, newRecord *dnstypes.Rec
 		"ttl":     ttl,
 	}, resp)
 	if err != nil {
-		return err
+		return this.WrapError(err, domain, newRecord)
 	}
 	return nil
 }
@@ -194,7 +194,7 @@ func (this *CloudFlareProvider) AddRecord(domain string, newRecord *dnstypes.Rec
 func (this *CloudFlareProvider) UpdateRecord(domain string, record *dnstypes.Record, newRecord *dnstypes.Record) error {
 	zoneId, err := this.findZoneIdWithDomain(domain)
 	if err != nil {
-		return err
+		return this.WrapError(err, domain, newRecord)
 	}
 
 	var ttl = newRecord.TTL
@@ -215,13 +215,13 @@ func (this *CloudFlareProvider) UpdateRecord(domain string, record *dnstypes.Rec
 func (this *CloudFlareProvider) DeleteRecord(domain string, record *dnstypes.Record) error {
 	zoneId, err := this.findZoneIdWithDomain(domain)
 	if err != nil {
-		return err
+		return this.WrapError(err, domain, record)
 	}
 
 	resp := new(cloudflare.DeleteDNSRecordResponse)
 	err = this.doAPI(http.MethodDelete, "zones/"+zoneId+"/dns_records/"+record.Id, map[string]string{}, nil, resp)
 	if err != nil {
-		return err
+		return this.WrapError(err, domain, record)
 	}
 	return nil
 }
@@ -257,6 +257,7 @@ func (this *CloudFlareProvider) doAPI(method string, apiPath string, args map[st
 	if err != nil {
 		return err
 	}
+	req.Header.Set("User-Agent", teaconst.ProductName+"/"+teaconst.Version)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Auth-Key", this.apiKey)
 	req.Header.Set("x-Auth-Email", this.email)
@@ -268,7 +269,7 @@ func (this *CloudFlareProvider) doAPI(method string, apiPath string, args map[st
 		_ = resp.Body.Close()
 	}()
 
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
@@ -277,13 +278,13 @@ func (this *CloudFlareProvider) doAPI(method string, apiPath string, args map[st
 		return errors.New("invalid response status '" + strconv.Itoa(resp.StatusCode) + "', response '" + string(data) + "'")
 	}
 
-	err = json.Unmarshal(data, respPtr)
-	if err != nil {
-		return err
-	}
-
 	if resp.StatusCode != http.StatusOK {
 		return errors.New("response error: " + string(data))
+	}
+
+	err = json.Unmarshal(data, respPtr)
+	if err != nil {
+		return errors.New("decode json failed: " + err.Error() + ", response text: " + string(data))
 	}
 
 	return nil

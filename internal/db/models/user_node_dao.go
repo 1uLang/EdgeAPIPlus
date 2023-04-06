@@ -51,12 +51,17 @@ func (this *UserNodeDAO) EnableUserNode(tx *dbs.Tx, id uint32) error {
 }
 
 // DisableUserNode 禁用条目
-func (this *UserNodeDAO) DisableUserNode(tx *dbs.Tx, id int64) error {
+func (this *UserNodeDAO) DisableUserNode(tx *dbs.Tx, nodeId int64) error {
 	_, err := this.Query(tx).
-		Pk(id).
+		Pk(nodeId).
 		Set("state", UserNodeStateDisabled).
 		Update()
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 删除运行日志
+	return SharedNodeLogDAO.DeleteNodeLogs(tx, nodeconfigs.NodeRoleUser, nodeId)
 }
 
 // FindEnabledUserNode 查找启用中的条目
@@ -157,7 +162,7 @@ func (this *UserNodeDAO) CreateUserNode(tx *dbs.Tx, name string, description str
 		return
 	}
 
-	op := NewUserNodeOperator()
+	var op = NewUserNodeOperator()
 	op.IsOn = isOn
 	op.UniqueId = uniqueId
 	op.Secret = secret
@@ -189,7 +194,7 @@ func (this *UserNodeDAO) UpdateUserNode(tx *dbs.Tx, nodeId int64, name string, d
 		return errors.New("invalid nodeId")
 	}
 
-	op := NewUserNodeOperator()
+	var op = NewUserNodeOperator()
 	op.Id = nodeId
 	op.Name = name
 	op.Description = description
@@ -254,13 +259,19 @@ func (this *UserNodeDAO) GenUniqueId(tx *dbs.Tx) (string, error) {
 }
 
 // UpdateNodeStatus 更改节点状态
-func (this *UserNodeDAO) UpdateNodeStatus(tx *dbs.Tx, nodeId int64, statusJSON []byte) error {
-	if len(statusJSON) == 0 {
+func (this *UserNodeDAO) UpdateNodeStatus(tx *dbs.Tx, nodeId int64, nodeStatus *nodeconfigs.NodeStatus) error {
+	if nodeStatus == nil {
 		return nil
 	}
-	_, err := this.Query(tx).
+
+	nodeStatusJSON, err := json.Marshal(nodeStatus)
+	if err != nil {
+		return err
+	}
+
+	_, err = this.Query(tx).
 		Pk(nodeId).
-		Set("status", string(statusJSON)).
+		Set("status", nodeStatusJSON).
 		Update()
 	return err
 }

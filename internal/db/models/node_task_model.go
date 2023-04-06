@@ -6,13 +6,14 @@ type NodeTask struct {
 	Role       string `field:"role"`       // 节点角色
 	NodeId     uint32 `field:"nodeId"`     // 节点ID
 	ClusterId  uint32 `field:"clusterId"`  // 集群ID
+	ServerId   uint32 `field:"serverId"`   // 服务ID
 	Type       string `field:"type"`       // 任务类型
 	UniqueId   string `field:"uniqueId"`   // 唯一ID：nodeId@type
 	UpdatedAt  uint64 `field:"updatedAt"`  // 修改时间
-	IsDone     uint8  `field:"isDone"`     // 是否已完成
-	IsOk       uint8  `field:"isOk"`       // 是否已完成
+	IsDone     bool   `field:"isDone"`     // 是否已完成
+	IsOk       bool   `field:"isOk"`       // 是否已完成
 	Error      string `field:"error"`      // 错误信息
-	IsNotified uint8  `field:"isNotified"` // 是否已通知更新
+	IsNotified bool   `field:"isNotified"` // 是否已通知更新
 	Version    uint64 `field:"version"`    // 版本
 }
 
@@ -21,6 +22,7 @@ type NodeTaskOperator struct {
 	Role       interface{} // 节点角色
 	NodeId     interface{} // 节点ID
 	ClusterId  interface{} // 集群ID
+	ServerId   interface{} // 服务ID
 	Type       interface{} // 任务类型
 	UniqueId   interface{} // 唯一ID：nodeId@type
 	UpdatedAt  interface{} // 修改时间

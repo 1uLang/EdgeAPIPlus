@@ -1,22 +1,32 @@
 package models
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
+	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeAPI/internal/zero"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/logs"
+	"github.com/iwind/TeaGo/rands"
 	"github.com/iwind/TeaGo/types"
 	timeutil "github.com/iwind/TeaGo/utils/time"
+	"golang.org/x/net/idna"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,9 +38,82 @@ type HTTPAccessLogDAO dbs.DAO
 
 var SharedHTTPAccessLogDAO *HTTPAccessLogDAO
 
+// 队列
+var (
+	oldAccessLogQueue       = make(chan *pb.HTTPAccessLog)
+	accessLogQueue          = make(chan *pb.HTTPAccessLog, 10_000)
+	accessLogQueueMaxLength = 100_000 // 队列最大长度
+	accessLogQueuePercent   = 100     // 0-100
+	accessLogCountPerSecond = 10_000  // 每秒钟写入条数，0 表示不限制
+	accessLogPerTx          = 100     // 单事务写入条数
+	accessLogConfigJSON     = []byte{}
+	accessLogQueueChanged   = make(chan zero.Zero, 1)
+
+	accessLogEnableAutoPartial       = true    // 是否启用自动分表
+	accessLogRowsPerTable      int64 = 500_000 // 自动分表的单表最大值
+)
+
+type accessLogTableQuery struct {
+	daoWrapper         *HTTPAccessLogDAOWrapper
+	name               string
+	hasRemoteAddrField bool
+	hasDomainField     bool
+}
+
 func init() {
 	dbs.OnReady(func() {
 		SharedHTTPAccessLogDAO = NewHTTPAccessLogDAO()
+	})
+
+	// 队列相关
+	dbs.OnReadyDone(func() {
+		// 检查队列变化
+		goman.New(func() {
+			var ticker = time.NewTicker(60 * time.Second)
+
+			// 先执行一次初始化
+			SharedHTTPAccessLogDAO.SetupQueue()
+
+			// 循环执行
+			for {
+				select {
+				case <-ticker.C:
+					SharedHTTPAccessLogDAO.SetupQueue()
+				case <-accessLogQueueChanged:
+					SharedHTTPAccessLogDAO.SetupQueue()
+				}
+			}
+		})
+
+		// 导出队列内容
+		goman.New(func() {
+			var ticker = time.NewTicker(1 * time.Second)
+			var accessLogPerLoop = accessLogPerTx
+
+			for range ticker.C {
+				var countTxs = accessLogCountPerSecond / accessLogPerLoop
+				if countTxs <= 0 {
+					countTxs = 1
+				}
+				for i := 0; i < countTxs; i++ {
+					var before = time.Now()
+					hasMore, err := SharedHTTPAccessLogDAO.DumpAccessLogsFromQueue(accessLogPerLoop)
+
+					// 如果用时过长，则调整每次写入次数
+					var costMs = time.Since(before).Milliseconds()
+					if costMs > 150 {
+						accessLogPerLoop = accessLogPerTx / 4
+					} else if costMs > 100 {
+						accessLogPerLoop = accessLogPerTx / 2
+					} // 这里不需要恢复成默认值，因为可能是写入数量比较小
+					if err != nil {
+						remotelogs.Error("HTTP_ACCESS_LOG_QUEUE", "dump access logs failed: "+err.Error())
+					} else if !hasMore {
+						break
+					}
+				}
+			}
+		})
 	})
 }
 
@@ -47,92 +130,179 @@ func NewHTTPAccessLogDAO() *HTTPAccessLogDAO {
 
 // CreateHTTPAccessLogs 创建访问日志
 func (this *HTTPAccessLogDAO) CreateHTTPAccessLogs(tx *dbs.Tx, accessLogs []*pb.HTTPAccessLog) error {
-	dao := randomHTTPAccessLogDAO()
-	if dao == nil {
-		dao = &HTTPAccessLogDAOWrapper{
-			DAO:    SharedHTTPAccessLogDAO,
-			NodeId: 0,
-		}
-	}
-	return this.CreateHTTPAccessLogsWithDAO(tx, dao, accessLogs)
-}
-
-// CreateHTTPAccessLogsWithDAO 使用特定的DAO创建访问日志
-func (this *HTTPAccessLogDAO) CreateHTTPAccessLogsWithDAO(tx *dbs.Tx, daoWrapper *HTTPAccessLogDAOWrapper, accessLogs []*pb.HTTPAccessLog) error {
-	if daoWrapper == nil {
-		return errors.New("dao should not be nil")
-	}
-	if len(accessLogs) == 0 {
-		return nil
-	}
-
-	dao := daoWrapper.DAO
-
-	// TODO 改成事务批量提交，以加快速度
-
+	// 写入队列
+	var queue = accessLogQueue // 这样写非常重要，防止在写入过程中队列有切换
 	for _, accessLog := range accessLogs {
-		day := timeutil.Format("Ymd", time.Unix(accessLog.Timestamp, 0))
-		tableDef, err := findHTTPAccessLogTable(dao.Instance, day, false)
-		if err != nil {
-			return err
-		}
-
-		fields := map[string]interface{}{}
-		fields["serverId"] = accessLog.ServerId
-		fields["nodeId"] = accessLog.NodeId
-		fields["status"] = accessLog.Status
-		fields["createdAt"] = accessLog.Timestamp
-		fields["requestId"] = accessLog.RequestId
-		fields["firewallPolicyId"] = accessLog.FirewallPolicyId
-		fields["firewallRuleGroupId"] = accessLog.FirewallRuleGroupId
-		fields["firewallRuleSetId"] = accessLog.FirewallRuleSetId
-		fields["firewallRuleId"] = accessLog.FirewallRuleId
-
-		// TODO 根据集群、服务设置获取IP
-		if tableDef.HasRemoteAddr {
-			fields["remoteAddr"] = accessLog.RemoteAddr
-		}
-		if tableDef.HasDomain {
-			fields["domain"] = accessLog.Host
-		}
-
-		content, err := json.Marshal(accessLog)
-		if err != nil {
-			return err
-		}
-		fields["content"] = content
-
-		_, err = dao.Query(tx).
-			Table(tableDef.Name).
-			Sets(fields).
-			Insert()
-		if err != nil {
-			// 是否为 Error 1146: Table 'xxx.xxx' doesn't exist  如果是，则创建表之后重试
-			if strings.Contains(err.Error(), "1146") {
-				tableDef, err = findHTTPAccessLogTable(dao.Instance, day, true)
-				if err != nil {
-					return err
-				}
-				_, err = dao.Query(tx).
-					Table(tableDef.Name).
-					Sets(fields).
-					Insert()
-				if err != nil {
-					return err
-				}
-			} else {
-				logs.Println("HTTP_ACCESS_LOG", err.Error())
+		if accessLog.FirewallPolicyId == 0 { // 如果是WAF记录，则采取采样率
+			// 采样率
+			if accessLogQueuePercent <= 0 {
+				return nil
 			}
+			if accessLogQueuePercent < 100 && rands.Int(1, 100) > accessLogQueuePercent {
+				return nil
+			}
+		}
+
+		select {
+		case queue <- accessLog:
+		default:
+			// 超出的丢弃
 		}
 	}
 
 	return nil
 }
 
+// DumpAccessLogsFromQueue 从队列导入访问日志
+func (this *HTTPAccessLogDAO) DumpAccessLogsFromQueue(size int) (hasMore bool, err error) {
+	if size <= 0 {
+		size = 100
+	}
+
+	var dao = randomHTTPAccessLogDAO()
+	if dao == nil {
+		dao = &HTTPAccessLogDAOWrapper{
+			DAO:    SharedHTTPAccessLogDAO,
+			NodeId: 0,
+		}
+	}
+
+	if len(oldAccessLogQueue) == 0 && len(accessLogQueue) == 0 {
+		return false, nil
+	}
+
+	// 开始事务
+	tx, err := dao.DAO.Instance.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = tx.Commit()
+	}()
+
+	// 复制变量，防止中途改变
+	var oldQueue = oldAccessLogQueue
+	var newQueue = accessLogQueue
+
+	hasMore = true
+
+Loop:
+	for i := 0; i < size; i++ {
+		// old
+		select {
+		case accessLog := <-oldQueue:
+			err := this.CreateHTTPAccessLog(tx, dao.DAO, accessLog)
+			if err != nil {
+				return false, err
+			}
+			continue Loop
+		default:
+
+		}
+
+		// new
+		select {
+		case accessLog := <-newQueue:
+			err := this.CreateHTTPAccessLog(tx, dao.DAO, accessLog)
+			if err != nil {
+				return false, err
+			}
+			continue Loop
+		default:
+			hasMore = false
+			break Loop
+		}
+	}
+
+	return hasMore, nil
+}
+
+// CreateHTTPAccessLog 写入单条访问日志
+func (this *HTTPAccessLogDAO) CreateHTTPAccessLog(tx *dbs.Tx, dao *HTTPAccessLogDAO, accessLog *pb.HTTPAccessLog) error {
+	var day = ""
+	// 注意：如果你修改了 TimeISO8601 的逻辑，这里也需要同步修改
+	if len(accessLog.TimeISO8601) > 10 {
+		day = strings.ReplaceAll(accessLog.TimeISO8601[:10], "-", "")
+	} else {
+		timeutil.FormatTime("Ymd", accessLog.Timestamp)
+	}
+
+	tableDef, err := SharedHTTPAccessLogManager.FindLastTable(dao.Instance, day, true)
+	if err != nil {
+		return err
+	}
+
+	fields := map[string]interface{}{}
+	fields["serverId"] = accessLog.ServerId
+	fields["nodeId"] = accessLog.NodeId
+	fields["status"] = accessLog.Status
+	fields["createdAt"] = accessLog.Timestamp
+	fields["requestId"] = accessLog.RequestId
+	fields["firewallPolicyId"] = accessLog.FirewallPolicyId
+	fields["firewallRuleGroupId"] = accessLog.FirewallRuleGroupId
+	fields["firewallRuleSetId"] = accessLog.FirewallRuleSetId
+	fields["firewallRuleId"] = accessLog.FirewallRuleId
+
+	if len(accessLog.RequestBody) > 0 {
+		fields["requestBody"] = accessLog.RequestBody
+		accessLog.RequestBody = nil
+	}
+
+	if tableDef.HasRemoteAddr {
+		fields["remoteAddr"] = accessLog.RemoteAddr
+	}
+	if tableDef.HasDomain {
+		fields["domain"] = accessLog.Host
+	}
+
+	content, err := json.Marshal(accessLog)
+	if err != nil {
+		return err
+	}
+	fields["content"] = content
+
+	var lastId int64
+	lastId, err = dao.Query(tx).
+		Table(tableDef.Name).
+		Sets(fields).
+		Insert()
+	if err != nil {
+		// 错误重试
+		if CheckSQLErrCode(err, 1146) { // Error 1146: Table 'xxx' doesn't exist
+			err = SharedHTTPAccessLogManager.CreateTable(dao.Instance, tableDef.Name)
+			if err != nil {
+				return err
+			}
+
+			// 重新尝试
+			lastId, err = dao.Query(tx).
+				Table(tableDef.Name).
+				Sets(fields).
+				Insert()
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	if accessLogEnableAutoPartial && accessLogRowsPerTable > 0 && lastId >= accessLogRowsPerTable {
+		SharedHTTPAccessLogManager.ResetTable(dao.Instance, day)
+	}
+
+	return nil
+}
+
 // ListAccessLogs 读取往前的 单页访问日志
-func (this *HTTPAccessLogDAO) ListAccessLogs(tx *dbs.Tx, lastRequestId string,
+func (this *HTTPAccessLogDAO) ListAccessLogs(tx *dbs.Tx,
+	partition int32,
+	lastRequestId string,
 	size int64,
 	day string,
+	hourFrom string,
+	hourTo string,
+	clusterId int64,
+	nodeId int64,
 	serverId int64,
 	reverse bool,
 	hasError bool,
@@ -153,23 +323,42 @@ func (this *HTTPAccessLogDAO) ListAccessLogs(tx *dbs.Tx, lastRequestId string,
 		size = 1000
 	}
 
-	result, nextLastRequestId, err = this.listAccessLogs(tx, lastRequestId, size, day, serverId, reverse, hasError, firewallPolicyId, firewallRuleGroupId, firewallRuleSetId, hasFirewallPolicy, userId, keyword, ip, domain)
+	result, nextLastRequestId, err = this.listAccessLogs(tx, partition, lastRequestId, size, day, hourFrom, hourTo, clusterId, nodeId, serverId, reverse, hasError, firewallPolicyId, firewallRuleGroupId, firewallRuleSetId, hasFirewallPolicy, userId, keyword, ip, domain)
 	if err != nil || int64(len(result)) < size {
 		return
 	}
 
-	moreResult, _, _ := this.listAccessLogs(tx, nextLastRequestId, 1, day, serverId, reverse, hasError, firewallPolicyId, firewallRuleGroupId, firewallRuleSetId, hasFirewallPolicy, userId, keyword, ip, domain)
+	moreResult, _, _ := this.listAccessLogs(tx, partition, nextLastRequestId, 1, day, hourFrom, hourTo, clusterId, nodeId, serverId, reverse, hasError, firewallPolicyId, firewallRuleGroupId, firewallRuleSetId, hasFirewallPolicy, userId, keyword, ip, domain)
 	hasMore = len(moreResult) > 0
 	return
 }
 
 // 读取往前的单页访问日志
-func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, size int64, day string, serverId int64, reverse bool, hasError bool, firewallPolicyId int64, firewallRuleGroupId int64, firewallRuleSetId int64, hasFirewallPolicy bool, userId int64, keyword string, ip string, domain string) (result []*HTTPAccessLog, nextLastRequestId string, err error) {
+func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx,
+	partition int32,
+	lastRequestId string,
+	size int64,
+	day string,
+	hourFrom string,
+	hourTo string,
+	clusterId int64,
+	nodeId int64,
+	serverId int64,
+	reverse bool,
+	hasError bool,
+	firewallPolicyId int64,
+	firewallRuleGroupId int64,
+	firewallRuleSetId int64,
+	hasFirewallPolicy bool,
+	userId int64,
+	keyword string,
+	ip string,
+	domain string) (result []*HTTPAccessLog, nextLastRequestId string, err error) {
 	if size <= 0 {
 		return nil, lastRequestId, nil
 	}
 
-	serverIds := []int64{}
+	var serverIds = []int64{}
 	if userId > 0 {
 		serverIds, err = SharedServerDAO.FindAllEnabledServerIdsWithUserId(tx, userId)
 		if err != nil {
@@ -181,7 +370,7 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 	}
 
 	accessLogLocker.RLock()
-	daoList := []*HTTPAccessLogDAOWrapper{}
+	var daoList = []*HTTPAccessLogDAOWrapper{}
 	for _, daoWrapper := range httpAccessLogDAOMapping {
 		daoList = append(daoList, daoWrapper)
 	}
@@ -194,30 +383,99 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 		}}
 	}
 
-	locker := sync.Mutex{}
+	// 查询某个集群下的节点
+	var nodeIds = []int64{}
+	if clusterId > 0 {
+		nodeIds, err = SharedNodeDAO.FindAllEnabledNodeIdsWithClusterId(tx, clusterId)
+		if err != nil {
+			remotelogs.Error("DB_NODE", err.Error())
+			return
+		}
+		sort.Slice(nodeIds, func(i, j int) bool {
+			return nodeIds[i] < nodeIds[j]
+		})
+	}
 
-	count := len(daoList)
-	wg := &sync.WaitGroup{}
-	wg.Add(count)
+	// 准备查询
+	var tableQueries = []*accessLogTableQuery{}
+	var maxTableName = ""
 	for _, daoWrapper := range daoList {
-		go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+		var instance = daoWrapper.DAO.Instance
+		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, partition)
+		if err != nil {
+			return nil, "", err
+		}
+		if !def.Exists {
+			continue
+		}
+
+		if len(maxTableName) == 0 || def.Name > maxTableName {
+			maxTableName = def.Name
+		}
+
+		tableQueries = append(tableQueries, &accessLogTableQuery{
+			daoWrapper:         daoWrapper,
+			name:               def.Name,
+			hasRemoteAddrField: def.HasRemoteAddr,
+			hasDomainField:     def.HasDomain,
+		})
+	}
+
+	// 检查各个分表是否一致
+	if partition < 0 {
+		var newTableQueries = []*accessLogTableQuery{}
+		for _, tableQuery := range tableQueries {
+			if tableQuery.name != maxTableName {
+				continue
+			}
+			newTableQueries = append(newTableQueries, tableQuery)
+		}
+		tableQueries = newTableQueries
+	}
+
+	if len(tableQueries) == 0 {
+		return nil, "", nil
+	}
+
+	var locker = sync.Mutex{}
+
+	// 这里正则表达式中的括号不能轻易变更，因为后面有引用
+	// TODO 支持多个查询条件的组合，比如 status:200 proto:HTTP/1.1
+	var statusPrefixReg = regexp.MustCompile(`status:\s*(\d{3})\b`)
+	var statusRangeReg = regexp.MustCompile(`status:\s*(\d{3})-(\d{3})\b`)
+	var urlReg = regexp.MustCompile(`^(http|https)://`)
+	var requestPathReg = regexp.MustCompile(`requestPath:(\S+)`)
+	var protoReg = regexp.MustCompile(`proto:(\S+)`)
+	var schemeReg = regexp.MustCompile(`scheme:(\S+)`)
+
+	var count = len(tableQueries)
+	var wg = &sync.WaitGroup{}
+	wg.Add(count)
+	for _, tableQuery := range tableQueries {
+		go func(tableQuery *accessLogTableQuery, keyword string) {
 			defer wg.Done()
 
-			dao := daoWrapper.DAO
-
-			tableName, hasRemoteAddrField, hasDomainField, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-			if !exists {
-				// 表格不存在则跳过
-				return
-			}
-			if err != nil {
-				logs.Println("[DB_NODE]" + err.Error())
-				return
-			}
-
-			query := dao.Query(tx)
+			var dao = tableQuery.daoWrapper.DAO
+			var query = dao.Query(tx)
+			query.Result("id", "serverId", "nodeId", "status", "createdAt", "content", "requestId", "firewallPolicyId", "firewallRuleGroupId", "firewallRuleSetId", "firewallRuleId", "remoteAddr", "domain")
 
 			// 条件
+			if nodeId > 0 {
+				query.Attr("nodeId", nodeId)
+			} else if clusterId > 0 {
+				if len(nodeIds) > 0 {
+					var nodeIdStrings = []string{}
+					for _, subNodeId := range nodeIds {
+						nodeIdStrings = append(nodeIdStrings, types.String(subNodeId))
+					}
+
+					query.Where("nodeId IN (" + strings.Join(nodeIdStrings, ",") + ")")
+					query.Reuse(false)
+				} else {
+					// 如果没有节点，则直接返回空
+					return
+				}
+			}
 			if serverId > 0 {
 				query.Attr("serverId", serverId)
 			} else if userId > 0 && len(serverIds) > 0 {
@@ -244,7 +502,7 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 			// keyword
 			if len(ip) > 0 {
 				// TODO 支持IP范围
-				if hasRemoteAddrField {
+				if tableQuery.hasRemoteAddrField {
 					// IP格式
 					if strings.Contains(ip, ",") || strings.Contains(ip, "-") {
 						rangeConfig, err := shared.ParseIPRange(ip)
@@ -254,6 +512,9 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 							}
 						}
 					} else {
+						// 去掉IPv6的[]
+						ip = strings.Trim(ip, "[]")
+
 						query.Attr("remoteAddr", ip)
 						query.UseIndex("remoteAddr")
 					}
@@ -263,13 +524,21 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 				}
 			}
 			if len(domain) > 0 {
-				if hasDomainField {
+				if tableQuery.hasDomainField {
 					if strings.Contains(domain, "*") {
 						domain = strings.ReplaceAll(domain, "*", "%")
 						domain = regexp.MustCompile(`[^a-zA-Z0-9-.%]`).ReplaceAllString(domain, "")
 						query.Where("domain LIKE :host2").
 							Param("host2", domain)
 					} else {
+						// 中文域名
+						if !regexp.MustCompile(`^[a-zA-Z0-9-.]+$`).MatchString(domain) {
+							unicodeDomain, err := idna.ToASCII(domain)
+							if err == nil && len(unicodeDomain) > 0 {
+								domain = unicodeDomain
+							}
+						}
+
 						query.Attr("domain", domain)
 						query.UseIndex("domain")
 					}
@@ -278,24 +547,60 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 						Param("host1", domain)
 				}
 			}
+
 			if len(keyword) > 0 {
-				// remoteAddr
-				if hasRemoteAddrField && net.ParseIP(keyword) != nil {
+				var isSpecialKeyword = false
+
+				if tableQuery.hasRemoteAddrField && net.ParseIP(keyword) != nil { // ip
+					isSpecialKeyword = true
 					query.Attr("remoteAddr", keyword)
-				} else if hasRemoteAddrField && regexp.MustCompile(`^ip:.+`).MatchString(keyword) {
+				} else if tableQuery.hasRemoteAddrField && regexp.MustCompile(`^ip:.+`).MatchString(keyword) { // ip:x.x.x.x
+					isSpecialKeyword = true
 					keyword = keyword[3:]
 					pieces := strings.SplitN(keyword, ",", 2)
-					if len(pieces) == 1 || len(pieces[1]) == 0 {
+					if len(pieces) == 1 || len(pieces[1]) == 0 || pieces[0] == pieces[1] {
 						query.Attr("remoteAddr", pieces[0])
 					} else {
 						query.Between("INET_ATON(remoteAddr)", utils.IP2Long(pieces[0]), utils.IP2Long(pieces[1]))
 					}
-				} else {
+				} else if statusRangeReg.MatchString(keyword) { // status:200-400
+					isSpecialKeyword = true
+					var matches = statusRangeReg.FindStringSubmatch(keyword)
+					query.Between("status", types.Int(matches[1]), types.Int(matches[2]))
+				} else if statusPrefixReg.MatchString(keyword) { // status:200
+					isSpecialKeyword = true
+					var matches = statusPrefixReg.FindStringSubmatch(keyword)
+					query.Attr("status", matches[1])
+				} else if requestPathReg.MatchString(keyword) {
+					isSpecialKeyword = true
+					var matches = requestPathReg.FindStringSubmatch(keyword)
+					query.Where("JSON_EXTRACT(content, '$.requestPath')=:keyword").
+						Param("keyword", matches[1])
+				} else if protoReg.MatchString(keyword) {
+					isSpecialKeyword = true
+					var matches = protoReg.FindStringSubmatch(keyword)
+					query.Where("JSON_EXTRACT(content, '$.proto')=:keyword").
+						Param("keyword", strings.ToUpper(matches[1]))
+				} else if schemeReg.MatchString(keyword) {
+					isSpecialKeyword = true
+					var matches = schemeReg.FindStringSubmatch(keyword)
+					query.Where("JSON_EXTRACT(content, '$.scheme')=:keyword").
+						Param("keyword", strings.ToLower(matches[1]))
+				} else if urlReg.MatchString(keyword) { // https://xxx/yyy
+					u, err := url.Parse(keyword)
+					if err == nil {
+						isSpecialKeyword = true
+						query.Attr("domain", u.Host)
+						query.Where("JSON_EXTRACT(content, '$.requestURI') LIKE :keyword").
+							Param("keyword", dbutils.QuoteLikePrefix("\""+u.RequestURI()))
+					}
+				}
+				if !isSpecialKeyword {
 					if regexp.MustCompile(`^ip:.+`).MatchString(keyword) {
 						keyword = keyword[3:]
 					}
 
-					useOriginKeyword := false
+					var useOriginKeyword = false
 
 					where := "JSON_EXTRACT(content, '$.remoteAddr') LIKE :keyword OR JSON_EXTRACT(content, '$.requestURI') LIKE :keyword OR JSON_EXTRACT(content, '$.host') LIKE :keyword OR JSON_EXTRACT(content, '$.userAgent') LIKE :keyword"
 
@@ -321,22 +626,41 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 
 					// 响应状态码
 					if regexp.MustCompile(`^\d{3}$`).MatchString(keyword) {
-						where += " OR JSON_EXTRACT(content, '$.status')=:intKeyword"
+						where += " OR status=:intKeyword"
 						query.Param("intKeyword", types.Int(keyword))
 					}
 
 					if regexp.MustCompile(`^\d{3}-\d{3}$`).MatchString(keyword) {
 						pieces := strings.Split(keyword, "-")
-						where += " OR JSON_EXTRACT(content, '$.status') BETWEEN :intKeyword1 AND :intKeyword2"
+						where += " OR status BETWEEN :intKeyword1 AND :intKeyword2"
 						query.Param("intKeyword1", types.Int(pieces[0]))
 						query.Param("intKeyword2", types.Int(pieces[1]))
 					}
 
+					if regexp.MustCompile(`^\d{20,}\s*\.?$`).MatchString(keyword) {
+						where += " OR requestId=:requestId"
+						query.Param("requestId", strings.TrimRight(keyword, ". "))
+					}
+
 					query.Where("("+where+")").
-						Param("keyword", "%"+keyword+"%")
+						Param("keyword", dbutils.QuoteLike(keyword))
 					if useOriginKeyword {
 						query.Param("originKeyword", keyword)
 					}
+				}
+			}
+
+			// hourFrom - hourTo
+			if len(hourFrom) > 0 && len(hourTo) > 0 {
+				var hourFromInt = types.Int(hourFrom)
+				var hourToInt = types.Int(hourTo)
+				if hourFromInt >= 0 && hourFromInt <= 23 && hourToInt >= hourFromInt && hourToInt <= 23 {
+					var y = types.Int(day[:4])
+					var m = types.Int(day[4:6])
+					var d = types.Int(day[6:])
+					var timeFrom = time.Date(y, time.Month(m), d, hourFromInt, 0, 0, 0, time.Local)
+					var timeTo = time.Date(y, time.Month(m), d, hourToInt, 59, 59, 0, time.Local)
+					query.Between("createdAt", timeFrom.Unix(), timeTo.Unix())
 				}
 			}
 
@@ -359,20 +683,21 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 
 			// 开始查询
 			ones, err := query.
-				Table(tableName).
+				Table(tableQuery.name).
 				Limit(size).
 				FindAll()
 			if err != nil {
-				logs.Println("[DB_NODE]" + err.Error())
+				remotelogs.Println("DB_NODE", err.Error())
 				return
 			}
+
 			locker.Lock()
 			for _, one := range ones {
-				accessLog := one.(*HTTPAccessLog)
+				var accessLog = one.(*HTTPAccessLog)
 				result = append(result, accessLog)
 			}
 			locker.Unlock()
-		}(daoWrapper)
+		}(tableQuery, keyword)
 	}
 	wg.Wait()
 
@@ -393,7 +718,7 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx, lastRequestId string, s
 		result = result[:size]
 	}
 
-	requestId := result[len(result)-1].RequestId
+	var requestId = result[len(result)-1].RequestId
 	if reverse {
 		lists.Reverse(result)
 	}
@@ -425,28 +750,36 @@ func (this *HTTPAccessLogDAO) FindAccessLogWithRequestId(tx *dbs.Tx, requestId s
 		}}
 	}
 
-	count := len(daoList)
-	wg := &sync.WaitGroup{}
+	// 准备查询
+	var day = timeutil.FormatTime("Ymd", types.Int64(requestId[:10]))
+	var tableQueries = []*accessLogTableQuery{}
+	for _, daoWrapper := range daoList {
+		var instance = daoWrapper.DAO.Instance
+		tableDefs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
+		if err != nil {
+			return nil, err
+		}
+		for _, def := range tableDefs {
+			tableQueries = append(tableQueries, &accessLogTableQuery{
+				daoWrapper:         daoWrapper,
+				name:               def.Name,
+				hasRemoteAddrField: def.HasRemoteAddr,
+				hasDomainField:     def.HasDomain,
+			})
+		}
+	}
+
+	var count = len(tableQueries)
+	var wg = &sync.WaitGroup{}
 	wg.Add(count)
 	var result *HTTPAccessLog = nil
-	day := timeutil.FormatTime("Ymd", types.Int64(requestId[:10]))
-	for _, daoWrapper := range daoList {
-		go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+	for _, tableQuery := range tableQueries {
+		go func(tableQuery *accessLogTableQuery) {
 			defer wg.Done()
 
-			dao := daoWrapper.DAO
-
-			tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-			if err != nil {
-				logs.Println("[DB_NODE]" + err.Error())
-				return
-			}
-			if !exists {
-				return
-			}
-
+			var dao = tableQuery.daoWrapper.DAO
 			one, err := dao.Query(tx).
-				Table(tableName).
+				Table(tableQuery.name).
 				Attr("requestId", requestId).
 				Find()
 			if err != nil {
@@ -456,10 +789,59 @@ func (this *HTTPAccessLogDAO) FindAccessLogWithRequestId(tx *dbs.Tx, requestId s
 			if one != nil {
 				result = one.(*HTTPAccessLog)
 			}
-		}(daoWrapper)
+		}(tableQuery)
 	}
 	wg.Wait()
 	return result, nil
+}
+
+// SetupQueue 建立队列
+func (this *HTTPAccessLogDAO) SetupQueue() {
+	configJSON, err := SharedSysSettingDAO.ReadSetting(nil, systemconfigs.SettingCodeAccessLogQueue)
+	if err != nil {
+		remotelogs.Error("HTTP_ACCESS_LOG_QUEUE", "read settings failed: "+err.Error())
+		return
+	}
+
+	if len(configJSON) == 0 {
+		return
+	}
+
+	if bytes.Equal(accessLogConfigJSON, configJSON) {
+		return
+	}
+	accessLogConfigJSON = configJSON
+
+	var config = &serverconfigs.AccessLogQueueConfig{}
+	err = json.Unmarshal(configJSON, config)
+	if err != nil {
+		remotelogs.Error("HTTP_ACCESS_LOG_QUEUE", "decode settings failed: "+err.Error())
+		return
+	}
+
+	accessLogQueuePercent = config.Percent
+	accessLogCountPerSecond = config.CountPerSecond
+	if accessLogCountPerSecond <= 0 {
+		accessLogCountPerSecond = 10_000
+	}
+	if config.MaxLength <= 0 {
+		config.MaxLength = 100_000
+	}
+
+	accessLogEnableAutoPartial = config.EnableAutoPartial
+	if config.RowsPerTable > 0 {
+		accessLogRowsPerTable = config.RowsPerTable
+	}
+
+	if accessLogQueueMaxLength != config.MaxLength {
+		accessLogQueueMaxLength = config.MaxLength
+		oldAccessLogQueue = accessLogQueue
+		accessLogQueue = make(chan *pb.HTTPAccessLog, config.MaxLength)
+	}
+
+	if Tea.IsTesting() {
+		remotelogs.Println("HTTP_ACCESS_LOG_QUEUE", "change queue "+string(configJSON))
+	}
 }
 
 // SearchAccessLogs 根据请求ID获取访问日志
@@ -508,28 +890,65 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 			return nil, "", err
 		}
 	}
+	// 准备查询
+	var tableQueries = []*accessLogTableQuery{}
+	var maxTableName = ""
+	for _, daoWrapper := range daoList {
+		var instance = daoWrapper.DAO.Instance
+		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		if err != nil {
+			return nil, "", err
+		}
+		if !def.Exists {
+			continue
+		}
+
+		if len(maxTableName) == 0 || def.Name > maxTableName {
+			maxTableName = def.Name
+		}
+
+		tableQueries = append(tableQueries, &accessLogTableQuery{
+			daoWrapper:         daoWrapper,
+			name:               def.Name,
+			hasRemoteAddrField: def.HasRemoteAddr,
+			hasDomainField:     def.HasDomain,
+		})
+	}
+
+	// 检查各个分表是否一致
+	var newTableQueries = []*accessLogTableQuery{}
+	for _, tableQuery := range tableQueries {
+		if tableQuery.name != maxTableName {
+			continue
+		}
+		newTableQueries = append(newTableQueries, tableQuery)
+	}
+	tableQueries = newTableQueries
+
+	if len(tableQueries) == 0 {
+		return nil, "", nil
+	}
 	locker := sync.Mutex{}
 
-	count := len(daoList)
+	// 这里正则表达式中的括号不能轻易变更，因为后面有引用
+	// TODO 支持多个查询条件的组合，比如 status:200 proto:HTTP/1.1
+	var statusPrefixReg = regexp.MustCompile(`status:\s*(\d{3})\b`)
+	var statusRangeReg = regexp.MustCompile(`status:\s*(\d{3})-(\d{3})\b`)
+	var urlReg = regexp.MustCompile(`^(http|https)://`)
+	var requestPathReg = regexp.MustCompile(`requestPath:(\S+)`)
+	var protoReg = regexp.MustCompile(`proto:(\S+)`)
+	var schemeReg = regexp.MustCompile(`scheme:(\S+)`)
+
+	var count = len(tableQueries)
 	wg := &sync.WaitGroup{}
 	wg.Add(count)
-	for _, daoWrapper := range daoList {
-		go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+	for _, tableQuery := range tableQueries {
+		go func(tableQuery *accessLogTableQuery, keyword string) {
 			defer wg.Done()
 
-			dao := daoWrapper.DAO
-
-			tableName, hasRemoteAddrField, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-			if !exists {
-				// 表格不存在则跳过
-				return
-			}
-			if err != nil {
-				logs.Println("[DB_NODE]" + err.Error())
-				return
-			}
-
-			query := dao.Query(tx)
+			var dao = tableQuery.daoWrapper.DAO
+			var query = dao.Query(tx)
+			query.Result("id", "serverId", "nodeId", "status", "createdAt", "content", "requestId", "firewallPolicyId", "firewallRuleGroupId", "firewallRuleSetId", "firewallRuleId", "remoteAddr", "domain")
 
 			// 条件
 			if userId > 0 && len(serverIds) > 0 {
@@ -538,8 +957,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 			}
 			// 时间条件限制
 			if startAt > 0 && startAt < endAt {
-				query.Where(fmt.Sprintf("createdAt>=%v", startAt))
-				query.Where(fmt.Sprintf("createdAt<%v", endAt))
+				query.Between("createdAt", startAt, endAt)
 			}
 			if wafLog {
 				query.Where("firewallPolicyId>0")
@@ -551,7 +969,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 			// keyword
 			if len(ip) > 0 {
 				// TODO 支持IP范围
-				if hasRemoteAddrField {
+				if tableQuery.hasRemoteAddrField {
 					// IP格式
 					if strings.Contains(ip, ",") || strings.Contains(ip, "-") {
 						rangeConfig, err := shared.ParseIPRange(ip)
@@ -561,6 +979,9 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 							}
 						}
 					} else {
+						// 去掉IPv6的[]
+						ip = strings.Trim(ip, "[]")
+
 						query.Attr("remoteAddr", ip)
 						query.UseIndex("remoteAddr")
 					}
@@ -570,43 +991,85 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 				}
 			}
 			if len(domain) > 0 {
-				//if hasDomainField {
-				//	if strings.Contains(domain, "*") {
-				//		domain = strings.ReplaceAll(domain, "*", "%")
-				//		domain = regexp.MustCompile(`[^a-zA-Z0-9-.%]`).ReplaceAllString(domain, "")
-				//		query.Where("domain LIKE :host2").
-				//			Param("host2", domain)
-				//	} else {
-				//		query.Attr("domain", domain)
-				//		query.UseIndex("domain")
-				//	}
-				//} else {
-				query.Where("JSON_EXTRACT(content, '$.host')=:host1").
-					Param("host1", domain)
-				//}
+				if tableQuery.hasDomainField {
+					if strings.Contains(domain, "*") {
+						domain = strings.ReplaceAll(domain, "*", "%")
+						domain = regexp.MustCompile(`[^a-zA-Z0-9-.%]`).ReplaceAllString(domain, "")
+						query.Where("domain LIKE :host2").
+							Param("host2", domain)
+					} else {
+						// 中文域名
+						if !regexp.MustCompile(`^[a-zA-Z0-9-.]+$`).MatchString(domain) {
+							unicodeDomain, err := idna.ToASCII(domain)
+							if err == nil && len(unicodeDomain) > 0 {
+								domain = unicodeDomain
+							}
+						}
+
+						query.Attr("domain", domain)
+						query.UseIndex("domain")
+					}
+				} else {
+					query.Where("JSON_EXTRACT(content, '$.host')=:host1").
+						Param("host1", domain)
+				}
 			}
 			if len(method) > 0 {
 				query.Where("JSON_EXTRACT(content, '$.requestMethod')=:method1").
 					Param("method1", strings.ToUpper(method))
 			}
 			if len(keyword) > 0 {
-				// remoteAddr
-				if hasRemoteAddrField && net.ParseIP(keyword) != nil {
+				var isSpecialKeyword = false
+				if tableQuery.hasRemoteAddrField && net.ParseIP(keyword) != nil { // ip
+					isSpecialKeyword = true
 					query.Attr("remoteAddr", keyword)
-				} else if hasRemoteAddrField && regexp.MustCompile(`^ip:.+`).MatchString(keyword) {
+				} else if tableQuery.hasRemoteAddrField && regexp.MustCompile(`^ip:.+`).MatchString(keyword) { // ip:x.x.x.x
+					isSpecialKeyword = true
 					keyword = keyword[3:]
 					pieces := strings.SplitN(keyword, ",", 2)
-					if len(pieces) == 1 || len(pieces[1]) == 0 {
+					if len(pieces) == 1 || len(pieces[1]) == 0 || pieces[0] == pieces[1] {
 						query.Attr("remoteAddr", pieces[0])
 					} else {
 						query.Between("INET_ATON(remoteAddr)", utils.IP2Long(pieces[0]), utils.IP2Long(pieces[1]))
 					}
-				} else {
+				} else if statusRangeReg.MatchString(keyword) { // status:200-400
+					isSpecialKeyword = true
+					var matches = statusRangeReg.FindStringSubmatch(keyword)
+					query.Between("status", types.Int(matches[1]), types.Int(matches[2]))
+				} else if statusPrefixReg.MatchString(keyword) { // status:200
+					isSpecialKeyword = true
+					var matches = statusPrefixReg.FindStringSubmatch(keyword)
+					query.Attr("status", matches[1])
+				} else if requestPathReg.MatchString(keyword) {
+					isSpecialKeyword = true
+					var matches = requestPathReg.FindStringSubmatch(keyword)
+					query.Where("JSON_EXTRACT(content, '$.requestPath')=:keyword").
+						Param("keyword", matches[1])
+				} else if protoReg.MatchString(keyword) {
+					isSpecialKeyword = true
+					var matches = protoReg.FindStringSubmatch(keyword)
+					query.Where("JSON_EXTRACT(content, '$.proto')=:keyword").
+						Param("keyword", strings.ToUpper(matches[1]))
+				} else if schemeReg.MatchString(keyword) {
+					isSpecialKeyword = true
+					var matches = schemeReg.FindStringSubmatch(keyword)
+					query.Where("JSON_EXTRACT(content, '$.scheme')=:keyword").
+						Param("keyword", strings.ToLower(matches[1]))
+				} else if urlReg.MatchString(keyword) { // https://xxx/yyy
+					u, err := url.Parse(keyword)
+					if err == nil {
+						isSpecialKeyword = true
+						query.Attr("domain", u.Host)
+						query.Where("JSON_EXTRACT(content, '$.requestURI') LIKE :keyword").
+							Param("keyword", dbutils.QuoteLikePrefix("\""+u.RequestURI()))
+					}
+				}
+				if !isSpecialKeyword {
 					if regexp.MustCompile(`^ip:.+`).MatchString(keyword) {
 						keyword = keyword[3:]
 					}
 
-					useOriginKeyword := false
+					var useOriginKeyword = false
 
 					where := "JSON_EXTRACT(content, '$.remoteAddr') LIKE :keyword OR JSON_EXTRACT(content, '$.requestURI') LIKE :keyword OR JSON_EXTRACT(content, '$.host') LIKE :keyword OR JSON_EXTRACT(content, '$.userAgent') LIKE :keyword"
 
@@ -632,19 +1095,24 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 
 					// 响应状态码
 					if regexp.MustCompile(`^\d{3}$`).MatchString(keyword) {
-						where += " OR JSON_EXTRACT(content, '$.status')=:intKeyword"
+						where += " OR status=:intKeyword"
 						query.Param("intKeyword", types.Int(keyword))
 					}
 
 					if regexp.MustCompile(`^\d{3}-\d{3}$`).MatchString(keyword) {
 						pieces := strings.Split(keyword, "-")
-						where += " OR JSON_EXTRACT(content, '$.status') BETWEEN :intKeyword1 AND :intKeyword2"
+						where += " OR status BETWEEN :intKeyword1 AND :intKeyword2"
 						query.Param("intKeyword1", types.Int(pieces[0]))
 						query.Param("intKeyword2", types.Int(pieces[1]))
 					}
 
+					if regexp.MustCompile(`^\d{20,}\s*\.?$`).MatchString(keyword) {
+						where += " OR requestId=:requestId"
+						query.Param("requestId", strings.TrimRight(keyword, ". "))
+					}
+
 					query.Where("("+where+")").
-						Param("keyword", "%"+keyword+"%")
+						Param("keyword", dbutils.QuoteLike(keyword))
 					if useOriginKeyword {
 						query.Param("originKeyword", keyword)
 					}
@@ -667,7 +1135,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 			}
 			// 开始查询
 			ones, err := query.
-				Table(tableName).
+				Table(tableQuery.name).
 				Limit(limit + 1).
 				FindAll()
 			if err != nil {
@@ -680,7 +1148,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 				result = append(result, accessLog)
 			}
 			locker.Unlock()
-		}(daoWrapper)
+		}(tableQuery, keyword)
 	}
 	wg.Wait()
 
@@ -699,9 +1167,7 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 	if int64(len(result)) >= limit {
 		result = result[:limit]
 	}
-
 	return result, nextRequestId, nil
-
 }
 
 // StatisticsTop 统计指定域名的攻击ip排行
@@ -734,7 +1200,45 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 			NodeId: 0,
 		}}
 	}
+	// 准备查询
+	var tableQueries = []*accessLogTableQuery{}
+	var maxTableName = ""
+	for _, daoWrapper := range daoList {
+		var instance = daoWrapper.DAO.Instance
+		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		if err != nil {
+			return
+		}
+		if !def.Exists {
+			continue
+		}
 
+		if len(maxTableName) == 0 || def.Name > maxTableName {
+			maxTableName = def.Name
+		}
+
+		tableQueries = append(tableQueries, &accessLogTableQuery{
+			daoWrapper:         daoWrapper,
+			name:               def.Name,
+			hasRemoteAddrField: def.HasRemoteAddr,
+			hasDomainField:     def.HasDomain,
+		})
+	}
+
+	// 检查各个分表是否一致
+
+	var newTableQueries = []*accessLogTableQuery{}
+	for _, tableQuery := range tableQueries {
+		if tableQuery.name != maxTableName {
+			continue
+		}
+		newTableQueries = append(newTableQueries, tableQuery)
+	}
+	tableQueries = newTableQueries
+
+	if len(tableQueries) == 0 {
+		return
+	}
 	locker := sync.Mutex{}
 	var result []*HTTPAccessLog
 	wg := &sync.WaitGroup{}
@@ -745,27 +1249,15 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 			defer wg.Done()
 
 			dwg := &sync.WaitGroup{}
-			dwg.Add(len(daoList))
+			dwg.Add(len(tableQueries))
 			l := sync.Mutex{}
 			serverLogs := make([]*HTTPAccessLog, 0)
-			for _, daoWrapper := range daoList {
-				go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+			for _, tableQuery := range tableQueries {
+				go func(tableQuery *accessLogTableQuery) {
 					defer dwg.Done()
 
-					dao := daoWrapper.DAO
-
-					tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-					if !exists {
-						// 表格不存在则跳过
-						return
-					}
-					if err != nil {
-						logs.Println("[DB_NODE]" + err.Error())
-						return
-					}
-
-					query := dao.Query(tx)
-
+					var dao = tableQuery.daoWrapper.DAO
+					var query = dao.Query(tx)
 					// 条件
 					query.Attr("serverId", serverId).
 						Reuse(false)
@@ -776,7 +1268,7 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 					var ones []*HTTPAccessLog
 					// 开始查询
 					_, err = query.
-						Table(tableName).
+						Table(tableQuery.name).
 						Group("remoteAddr").
 						Result("remoteAddr, COUNT(1) AS count").
 						Slice(&ones).
@@ -788,7 +1280,7 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 					l.Lock()
 					serverLogs = append(serverLogs, ones...)
 					l.Unlock()
-				}(daoWrapper)
+				}(tableQuery)
 			}
 			dwg.Wait()
 			// 统计
@@ -945,31 +1437,57 @@ func (this *HTTPAccessLogDAO) Statistics(tx *dbs.Tx, days []string, userId int64
 	}
 	counts = make([]int64, len(days))
 	locker := sync.Mutex{}
-
-	count := len(daoList)
 	wg := &sync.WaitGroup{}
-	wg.Add(count)
-	for _, daoWrapper := range daoList {
-		go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+	wg.Add(len(days))
+	for k, day := range days {
+		go func(k int, day string) {
 			defer wg.Done()
+			// 准备查询
+			var tableQueries = []*accessLogTableQuery{}
+			var maxTableName = ""
+			for _, daoWrapper := range daoList {
+				var instance = daoWrapper.DAO.Instance
+				def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+				if err != nil {
+					return
+				}
+				if !def.Exists {
+					continue
+				}
 
-			dao := daoWrapper.DAO
+				if len(maxTableName) == 0 || def.Name > maxTableName {
+					maxTableName = def.Name
+				}
+
+				tableQueries = append(tableQueries, &accessLogTableQuery{
+					daoWrapper:         daoWrapper,
+					name:               def.Name,
+					hasRemoteAddrField: def.HasRemoteAddr,
+					hasDomainField:     def.HasDomain,
+				})
+			}
+
+			// 检查各个分表是否一致
+
+			var newTableQueries = []*accessLogTableQuery{}
+			for _, tableQuery := range tableQueries {
+				if tableQuery.name != maxTableName {
+					continue
+				}
+				newTableQueries = append(newTableQueries, tableQuery)
+			}
+			tableQueries = newTableQueries
+
+			if len(tableQueries) == 0 {
+				return
+			}
 			dwg := &sync.WaitGroup{}
-			dwg.Add(len(days))
-			for k, day := range days {
-				go func(k int, day string) {
+			dwg.Add(len(tableQueries))
+			for _, tableQuery := range tableQueries {
+				go func(tableQuery *accessLogTableQuery) {
 					defer dwg.Done()
-					tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-					if !exists {
-						// 表格不存在则跳过
-						return
-					}
-					if err != nil {
-						logs.Println("[DB_NODE]" + err.Error())
-						return
-					}
-
-					query := dao.Query(tx)
+					var dao = tableQuery.daoWrapper.DAO
+					var query = dao.Query(tx)
 
 					// 条件
 					if userId > 0 && len(serverIds) > 0 {
@@ -980,7 +1498,7 @@ func (this *HTTPAccessLogDAO) Statistics(tx *dbs.Tx, days []string, userId int64
 					query.UseIndex("firewallPolicyId")
 					// 开始查询
 					c, err := query.
-						Table(tableName).
+						Table(tableQuery.name).
 						Count()
 
 					if err != nil {
@@ -990,10 +1508,10 @@ func (this *HTTPAccessLogDAO) Statistics(tx *dbs.Tx, days []string, userId int64
 					locker.Lock()
 					counts[k] += c
 					locker.Unlock()
-				}(k, day)
+				}(tableQuery)
 			}
 			dwg.Wait()
-		}(daoWrapper)
+		}(k, day)
 	}
 	wg.Wait()
 	return counts, nil
@@ -1028,7 +1546,44 @@ func (this *HTTPAccessLogDAO) StatisticsType(tx *dbs.Tx, day string, userId int6
 			NodeId: 0,
 		}}
 	}
+	// 准备查询
+	var tableQueries = []*accessLogTableQuery{}
+	var maxTableName = ""
+	for _, daoWrapper := range daoList {
+		var instance = daoWrapper.DAO.Instance
+		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		if err != nil {
+			return
+		}
+		if !def.Exists {
+			continue
+		}
 
+		if len(maxTableName) == 0 || def.Name > maxTableName {
+			maxTableName = def.Name
+		}
+
+		tableQueries = append(tableQueries, &accessLogTableQuery{
+			daoWrapper:         daoWrapper,
+			name:               def.Name,
+			hasRemoteAddrField: def.HasRemoteAddr,
+			hasDomainField:     def.HasDomain,
+		})
+	}
+
+	// 检查各个分表是否一致
+	var newTableQueries = []*accessLogTableQuery{}
+	for _, tableQuery := range tableQueries {
+		if tableQuery.name != maxTableName {
+			continue
+		}
+		newTableQueries = append(newTableQueries, tableQuery)
+	}
+	tableQueries = newTableQueries
+
+	if len(tableQueries) == 0 {
+		return
+	}
 	var attacks1 = make([]AttackType, 0)
 	attacks = make([]*AttackType, 0)
 
@@ -1060,37 +1615,25 @@ func (this *HTTPAccessLogDAO) StatisticsType(tx *dbs.Tx, day string, userId int6
 				go func(k int, group AttackType) {
 					defer gwg.Done()
 					dwg := &sync.WaitGroup{}
-					dwg.Add(len(daoList))
+					dwg.Add(len(tableQueries))
 					var count int64
-					for _, daoWrapper := range daoList {
-						go func(daoWrapper *HTTPAccessLogDAOWrapper, count *int64) {
+					for _, tableQuery := range tableQueries {
+						go func(tableQuery *accessLogTableQuery, count *int64) {
 							defer dwg.Done()
-							dao := daoWrapper.DAO
-							tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-							if !exists {
-								// 表格不存在则跳过
-								return
-							}
-							if err != nil {
-								logs.Println("[DB_NODE]" + err.Error())
-								return
-							}
-							query := dao.Query(tx)
-
+							var dao = tableQuery.daoWrapper.DAO
+							var query = dao.Query(tx)
 							// 条件
 							query.Attr("serverId", serverId).
 								Reuse(false)
-
 							query.Where("firewallPolicyId>0")
 							query.UseIndex("firewallPolicyId")
-
 							// 开始查询
 							var c int64
 							if len(group.ids) == 0 {
 								c = 0
 							} else {
 								c, err = query.
-									Table(tableName).
+									Table(tableQuery.name).
 									Where(fmt.Sprintf("firewallRuleGroupId in (%s)", func(ids []int64) string {
 										r := ""
 										for _, id := range ids {
@@ -1107,7 +1650,7 @@ func (this *HTTPAccessLogDAO) StatisticsType(tx *dbs.Tx, day string, userId int6
 							locker.Lock()
 							*count += c
 							locker.Unlock()
-						}(daoWrapper, &count)
+						}(tableQuery, &count)
 					}
 					dwg.Wait()
 					locker.Lock()
@@ -1157,34 +1700,65 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 			NodeId: 0,
 		}}
 	}
+	// 准备查询
+	var tableQueries = []*accessLogTableQuery{}
+	var maxTableName = ""
+	for _, daoWrapper := range daoList {
+		var instance = daoWrapper.DAO.Instance
+		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		if err != nil {
+			return
+		}
+		if !def.Exists {
+			continue
+		}
 
+		if len(maxTableName) == 0 || def.Name > maxTableName {
+			maxTableName = def.Name
+		}
+
+		tableQueries = append(tableQueries, &accessLogTableQuery{
+			daoWrapper:         daoWrapper,
+			name:               def.Name,
+			hasRemoteAddrField: def.HasRemoteAddr,
+			hasDomainField:     def.HasDomain,
+		})
+	}
+
+	// 检查各个分表是否一致
+	var newTableQueries = []*accessLogTableQuery{}
+	for _, tableQuery := range tableQueries {
+		if tableQuery.name != maxTableName {
+			continue
+		}
+		newTableQueries = append(newTableQueries, tableQuery)
+	}
+	tableQueries = newTableQueries
+
+	if len(tableQueries) == 0 {
+		return
+	}
 	locker := sync.Mutex{}
 	stats = make([]*AccessStatistics, 0)
 	count := len(serverIds)
 	wg := &sync.WaitGroup{}
 	wg.Add(count)
 	for _, serverId := range serverIds {
-
 		go func(serverId int64) {
 			defer wg.Done()
 
 			dwg := &sync.WaitGroup{}
-			dwg.Add(len(daoList))
+			dwg.Add(len(tableQueries))
 			stat := &AccessStatistics{ServerId: serverId}
 			//访问IP地址列表
 			svrAddrStats1 := []*HTTPAccessLog{}
 			// 攻击访问IP地址列表
 			svrAddrStats2 := []*HTTPAccessLog{}
-			for _, daoWrapper := range daoList {
-				go func(daoWrapper *HTTPAccessLogDAOWrapper, stat *AccessStatistics) {
+			for _, tableQuery := range tableQueries {
+				go func(tableQuery *accessLogTableQuery, stat *AccessStatistics) {
 					defer dwg.Done()
 
-					dao := daoWrapper.DAO
-					tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-					if !exists {
-						// 表格不存在则跳过
-						return
-					}
+					var dao = tableQuery.daoWrapper.DAO
 					if err != nil {
 						logs.Println("[DB_NODE]" + err.Error())
 						return
@@ -1192,7 +1766,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 					// 1. 统计该服务的服务总数
 					accessTotal, err := dao.Query(tx).Attr("serverId", serverId).
 						Reuse(false).
-						Table(tableName).
+						Table(tableQuery.name).
 						Count()
 					if err != nil {
 						logs.Println("[DB_NODE]" + err.Error())
@@ -1201,7 +1775,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 					// 2. 统计防护的总数
 					attackTotal, err := dao.Query(tx).Attr("serverId", serverId).
 						Reuse(false).Where("firewallPolicyId>0").UseIndex("firewallPolicyId").
-						Table(tableName).
+						Table(tableQuery.name).
 						Count()
 					if err != nil {
 						logs.Println("[DB_NODE]" + err.Error())
@@ -1210,7 +1784,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 					// 3. 访问IP列表
 					var logs1 []*HTTPAccessLog
 					_, err = dao.Query(tx).SQL(fmt.Sprintf("SELECT  `remoteAddr` FROM `%s`"+
-						" WHERE `serverId`=%d GROUP BY `remoteAddr`", tableName, serverId)).Slice(&logs1).
+						" WHERE `serverId`=%d GROUP BY `remoteAddr`", tableQuery.name, serverId)).Slice(&logs1).
 						FindAll()
 					if err != nil {
 						logs.Println("[DB_NODE]" + err.Error())
@@ -1222,7 +1796,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 					}
 					// 4. 拦截IP列表
 					var logs2 []*HTTPAccessLog
-					_, err = dao.Query(tx).SQL(fmt.Sprintf("SELECT  `remoteAddr` FROM `%s` WHERE `serverId`=%d and `firewallPolicyId`>0 GROUP BY `remoteAddr`", tableName, serverId)).Slice(&logs2).
+					_, err = dao.Query(tx).SQL(fmt.Sprintf("SELECT  `remoteAddr` FROM `%s` WHERE `serverId`=%d and `firewallPolicyId`>0 GROUP BY `remoteAddr`", tableQuery.name, serverId)).Slice(&logs2).
 						FindAll()
 					if err != nil {
 						logs.Println("[DB_NODE]" + err.Error())
@@ -1234,7 +1808,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 					svrAddrStats1 = append(svrAddrStats1, logs1...)
 					svrAddrStats2 = append(svrAddrStats2, logs2...)
 					locker.Unlock()
-				}(daoWrapper, stat)
+				}(tableQuery, stat)
 			}
 			dwg.Wait()
 			// 访问IP地址列表 差重map
@@ -1295,7 +1869,45 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64)
 	locker := sync.Mutex{}
 	hostStats := make([]*HTTPAccessLog, 0)
 	uriStats := make([]*HTTPAccessLog, 0)
+	// 准备查询
+	var tableQueries = []*accessLogTableQuery{}
+	var maxTableName = ""
+	for _, daoWrapper := range daoList {
+		var instance = daoWrapper.DAO.Instance
+		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		if err != nil {
+			return
+		}
+		if !def.Exists {
+			continue
+		}
 
+		if len(maxTableName) == 0 || def.Name > maxTableName {
+			maxTableName = def.Name
+		}
+
+		tableQueries = append(tableQueries, &accessLogTableQuery{
+			daoWrapper:         daoWrapper,
+			name:               def.Name,
+			hasRemoteAddrField: def.HasRemoteAddr,
+			hasDomainField:     def.HasDomain,
+		})
+	}
+
+	// 检查各个分表是否一致
+
+	var newTableQueries = []*accessLogTableQuery{}
+	for _, tableQuery := range tableQueries {
+		if tableQuery.name != maxTableName {
+			continue
+		}
+		newTableQueries = append(newTableQueries, tableQuery)
+	}
+	tableQueries = newTableQueries
+
+	if len(tableQueries) == 0 {
+		return
+	}
 	wg := &sync.WaitGroup{}
 	wg.Add(len(serverIds))
 	for _, serverId := range serverIds {
@@ -1303,27 +1915,15 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64)
 		l := sync.Mutex{}
 		serverHostStats := make([]*HTTPAccessLog, 0)
 		serverUriStats := make([]*HTTPAccessLog, 0)
-
-		dwg := &sync.WaitGroup{}
-		dwg.Add(len(daoList))
 		go func(serverId int64) {
 			defer wg.Done()
 
-			for _, daoWrapper := range daoList {
-				go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+			dwg := &sync.WaitGroup{}
+			dwg.Add(len(tableQueries))
+			for _, tableQuery := range tableQueries {
+				go func(tableQuery *accessLogTableQuery) {
 					defer dwg.Done()
-
-					dao := daoWrapper.DAO
-					tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-					if !exists {
-						// 表格不存在则跳过
-						return
-					}
-					if err != nil {
-						logs.Println("[DB_NODE]" + err.Error())
-						return
-					}
-
+					dao := tableQuery.daoWrapper.DAO
 					// 开始查询 - 统计域名
 					query := dao.Query(tx)
 
@@ -1338,7 +1938,7 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64)
 
 					// 开始查询
 					_, err = query.
-						Table(tableName).
+						Table(tableQuery.name).
 						Group("host").
 						Result("TRIM(BOTH '\"' FROM json_extract(content,'$.host')) AS host, COUNT(*) AS count").
 						Slice(&ones).
@@ -1364,7 +1964,7 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64)
 
 					// 开始查询
 					_, err = query.
-						Table(tableName).
+						Table(tableQuery.name).
 						Group("uri").
 						Result("TRIM(BOTH '\"' FROM json_extract(content,'$.requestURI')) AS uri, COUNT(*) AS count").
 						Slice(&ones).
@@ -1376,20 +1976,19 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64)
 					l.Lock()
 					serverUriStats = append(serverUriStats, ones...)
 					l.Unlock()
-				}(daoWrapper)
+				}(tableQuery)
 			}
+			dwg.Wait()
+			mergeHostStats, hostCountStu := statisticsHostTop(serverHostStats)
+			serverUriStats, uriCountStu := statisticsUriTop(serverUriStats)
+			locker.Lock()
+			hostStats = append(hostStats, mergeHostStats...)
+			uriStats = append(uriStats, serverUriStats...)
+			resp.Tops = append(resp.Tops, &AttackUrlTopItem1{ServerId: serverId, Hosts: hostCountStu, Uris: uriCountStu})
+			locker.Unlock()
 		}(serverId)
-		dwg.Wait()
-		mergeHostStats, hostCountStu := statisticsHostTop(serverHostStats)
-		serverUriStats, uriCountStu := statisticsUriTop(serverUriStats)
-		locker.Lock()
-		hostStats = append(hostStats, mergeHostStats...)
-		uriStats = append(uriStats, serverUriStats...)
-		resp.Tops = append(resp.Tops, &AttackUrlTopItem1{ServerId: serverId, Hosts: hostCountStu, Uris: uriCountStu})
-		locker.Unlock()
 	}
 	wg.Wait()
-
 	_, hostCountStu := statisticsHostTop(hostStats)
 	_, uriCountStu := statisticsUriTop(uriStats)
 	resp.Tops = append(resp.Tops, &AttackUrlTopItem1{ServerId: 0, Hosts: hostCountStu, Uris: uriCountStu})
@@ -1480,7 +2079,45 @@ func (this *HTTPAccessLogDAO) AccessIPTop(tx *dbs.Tx, day string, userId int64, 
 			NodeId: 0,
 		}}
 	}
+	// 准备查询
+	var tableQueries = []*accessLogTableQuery{}
+	var maxTableName = ""
+	for _, daoWrapper := range daoList {
+		var instance = daoWrapper.DAO.Instance
+		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		if err != nil {
+			return
+		}
+		if !def.Exists {
+			continue
+		}
 
+		if len(maxTableName) == 0 || def.Name > maxTableName {
+			maxTableName = def.Name
+		}
+
+		tableQueries = append(tableQueries, &accessLogTableQuery{
+			daoWrapper:         daoWrapper,
+			name:               def.Name,
+			hasRemoteAddrField: def.HasRemoteAddr,
+			hasDomainField:     def.HasDomain,
+		})
+	}
+
+	// 检查各个分表是否一致
+
+	var newTableQueries = []*accessLogTableQuery{}
+	for _, tableQuery := range tableQueries {
+		if tableQuery.name != maxTableName {
+			continue
+		}
+		newTableQueries = append(newTableQueries, tableQuery)
+	}
+	tableQueries = newTableQueries
+
+	if len(tableQueries) == 0 {
+		return
+	}
 	locker := sync.Mutex{}
 	stats := make([]*HTTPAccessLog, 0)
 	wg := &sync.WaitGroup{}
@@ -1494,22 +2131,11 @@ func (this *HTTPAccessLogDAO) AccessIPTop(tx *dbs.Tx, day string, userId int64, 
 			serverLogs := make([]*HTTPAccessLog, 0)
 
 			dwg := &sync.WaitGroup{}
-			dwg.Add(len(daoList))
-			for _, daoWrapper := range daoList {
-				go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+			dwg.Add(len(tableQueries))
+			for _, tableQuery := range tableQueries {
+				go func(tableQuery *accessLogTableQuery) {
 					defer dwg.Done()
-
-					dao := daoWrapper.DAO
-					tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-					if !exists {
-						// 表格不存在则跳过
-						return
-					}
-					if err != nil {
-						logs.Println("[DB_NODE]" + err.Error())
-						return
-					}
-
+					dao := tableQuery.daoWrapper.DAO
 					// 开始查询
 					query := dao.Query(tx)
 
@@ -1520,7 +2146,7 @@ func (this *HTTPAccessLogDAO) AccessIPTop(tx *dbs.Tx, day string, userId int64, 
 					var ones []*HTTPAccessLog
 					// 开始查询
 					_, err = query.
-						Table(tableName).
+						Table(tableQuery.name).
 						Group("remoteAddr").
 						Result("remoteAddr, COUNT(1) AS count").
 						Slice(&ones).
@@ -1532,7 +2158,7 @@ func (this *HTTPAccessLogDAO) AccessIPTop(tx *dbs.Tx, day string, userId int64, 
 					l.Lock()
 					serverLogs = append(serverLogs, ones...)
 					l.Unlock()
-				}(daoWrapper)
+				}(tableQuery)
 			}
 			dwg.Wait()
 			mergeStats, ipCountStu := statisticsAccessIpTop(serverLogs, top)
@@ -1633,7 +2259,45 @@ func (this *HTTPAccessLogDAO) StatusCodeStatistics(tx *dbs.Tx, day string, userI
 			NodeId: 0,
 		}}
 	}
+	// 准备查询
+	var tableQueries = []*accessLogTableQuery{}
+	var maxTableName = ""
+	for _, daoWrapper := range daoList {
+		var instance = daoWrapper.DAO.Instance
+		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		if err != nil {
+			return
+		}
+		if !def.Exists {
+			continue
+		}
 
+		if len(maxTableName) == 0 || def.Name > maxTableName {
+			maxTableName = def.Name
+		}
+
+		tableQueries = append(tableQueries, &accessLogTableQuery{
+			daoWrapper:         daoWrapper,
+			name:               def.Name,
+			hasRemoteAddrField: def.HasRemoteAddr,
+			hasDomainField:     def.HasDomain,
+		})
+	}
+
+	// 检查各个分表是否一致
+
+	var newTableQueries = []*accessLogTableQuery{}
+	for _, tableQuery := range tableQueries {
+		if tableQuery.name != maxTableName {
+			continue
+		}
+		newTableQueries = append(newTableQueries, tableQuery)
+	}
+	tableQueries = newTableQueries
+
+	if len(tableQueries) == 0 {
+		return
+	}
 	locker := sync.Mutex{}
 	stats := make([]*HTTPAccessLog, 0)
 	wg := &sync.WaitGroup{}
@@ -1647,24 +2311,12 @@ func (this *HTTPAccessLogDAO) StatusCodeStatistics(tx *dbs.Tx, day string, userI
 			serverLogs := make([]*HTTPAccessLog, 0)
 
 			dwg := &sync.WaitGroup{}
-			dwg.Add(len(daoList))
-			for _, daoWrapper := range daoList {
-				go func(daoWrapper *HTTPAccessLogDAOWrapper) {
+			dwg.Add(len(tableQueries))
+			for _, tableQuery := range tableQueries {
+				go func(tableQuery *accessLogTableQuery) {
 					defer dwg.Done()
-
-					dao := daoWrapper.DAO
-					tableName, _, _, exists, err := findHTTPAccessLogTableName(dao.Instance, day)
-					if !exists {
-						// 表格不存在则跳过
-						return
-					}
-					if err != nil {
-						logs.Println("[DB_NODE]" + err.Error())
-						return
-					}
-
 					// 开始查询
-					query := dao.Query(tx)
+					query := tableQuery.daoWrapper.DAO.Query(tx)
 
 					// 条件
 					query.Attr("serverId", serverId).
@@ -1673,7 +2325,7 @@ func (this *HTTPAccessLogDAO) StatusCodeStatistics(tx *dbs.Tx, day string, userI
 					var ones []*HTTPAccessLog
 					// 开始查询
 					_, err = query.
-						Table(tableName).
+						Table(tableQuery.name).
 						Group("status").
 						Result("status, COUNT(1) AS count").
 						Slice(&ones).
@@ -1685,7 +2337,7 @@ func (this *HTTPAccessLogDAO) StatusCodeStatistics(tx *dbs.Tx, day string, userI
 					l.Lock()
 					serverLogs = append(serverLogs, ones...)
 					l.Unlock()
-				}(daoWrapper)
+				}(tableQuery)
 			}
 			dwg.Wait()
 			mergeStats, codeCountStu := statisticsStatusCodeTop(serverLogs)

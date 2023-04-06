@@ -7,7 +7,9 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
+	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
 	_ "github.com/go-sql-driver/mysql"
@@ -145,30 +147,43 @@ func (this *ServerDAO) CreateServer(tx *dbs.Tx,
 	serverNamesJSON []byte,
 	isAuditing bool,
 	auditingServerNamesJSON []byte,
-	httpJSON string,
-	httpsJSON string,
-	tcpJSON string,
-	tlsJSON string,
-	unixJSON string,
-	udpJSON string,
+	httpJSON []byte,
+	httpsJSON []byte,
+	tcpJSON []byte,
+	tlsJSON []byte,
+	unixJSON []byte,
+	udpJSON []byte,
 	webId int64,
 	reverseProxyJSON []byte,
 	clusterId int64,
-	includeNodesJSON string,
-	excludeNodesJSON string,
+	includeNodesJSON []byte,
+	excludeNodesJSON []byte,
 	groupIds []int64,
 	userPlanId int64) (serverId int64, err error) {
-	op := NewServerOperator()
+	var op = NewServerOperator()
 	op.UserId = userId
 	op.AdminId = adminId
 	op.Name = name
 	op.Type = serverType
 	op.Description = description
 
-	if len(serverNamesJSON) > 0 {
+	if IsNotNull(serverNamesJSON) {
+		var serverNames = []*serverconfigs.ServerNameConfig{}
+		err := json.Unmarshal(serverNamesJSON, &serverNames)
+		if err != nil {
+			return 0, err
+		}
+
 		op.ServerNames = serverNamesJSON
+
+		plainServerNamesJSON, err := json.Marshal(serverconfigs.PlainServerNames(serverNames))
+		if err != nil {
+			return 0, err
+		}
+		op.PlainServerNames = plainServerNamesJSON
 	}
 	op.IsAuditing = isAuditing
+	op.AuditingAt = time.Now().Unix()
 	if len(auditingServerNamesJSON) > 0 {
 		op.AuditingServerNames = auditingServerNamesJSON
 	}
@@ -191,15 +206,15 @@ func (this *ServerDAO) CreateServer(tx *dbs.Tx,
 		op.Udp = udpJSON
 	}
 	op.WebId = webId
-	if len(reverseProxyJSON) > 0 {
+	if IsNotNull(reverseProxyJSON) {
 		op.ReverseProxy = reverseProxyJSON
 	}
 
 	op.ClusterId = clusterId
-	if len(includeNodesJSON) > 0 {
+	if IsNotNull(includeNodesJSON) {
 		op.IncludeNodes = includeNodesJSON
 	}
-	if len(excludeNodesJSON) > 0 {
+	if IsNotNull(excludeNodesJSON) {
 		op.ExcludeNodes = excludeNodesJSON
 	}
 
@@ -220,6 +235,7 @@ func (this *ServerDAO) CreateServer(tx *dbs.Tx,
 	op.DnsName = dnsName
 
 	op.UserPlanId = userPlanId
+	op.LastUserPlanId = userPlanId
 
 	op.Version = 1
 	op.IsOn = 1
@@ -254,11 +270,21 @@ func (this *ServerDAO) CreateServer(tx *dbs.Tx,
 }
 
 // UpdateServerBasic 修改服务基本信息
-func (this *ServerDAO) UpdateServerBasic(tx *dbs.Tx, serverId int64, name string, description string, clusterId int64, isOn bool, groupIds []int64) error {
+func (this *ServerDAO) UpdateServerBasic(tx *dbs.Tx, serverId int64, name string, description string, clusterId int64, keepOldConfigs bool, isOn bool, groupIds []int64) error {
 	if serverId <= 0 {
 		return errors.New("serverId should not be smaller than 0")
 	}
-	op := NewServerOperator()
+
+	// 老的集群ID
+	oldClusterId, err := this.Query(tx).
+		Pk(serverId).
+		Result("clusterId").
+		FindInt64Col(0)
+	if err != nil {
+		return err
+	}
+
+	var op = NewServerOperator()
 	op.Id = serverId
 	op.Name = name
 	op.Description = description
@@ -275,7 +301,7 @@ func (this *ServerDAO) UpdateServerBasic(tx *dbs.Tx, serverId int64, name string
 		op.GroupIds = groupIdsJSON
 	}
 
-	err := this.Save(tx, op)
+	err = this.Save(tx, op)
 	if err != nil {
 		return err
 	}
@@ -287,7 +313,48 @@ func (this *ServerDAO) UpdateServerBasic(tx *dbs.Tx, serverId int64, name string
 	}
 
 	// 因为可能有isOn的原因，所以需要修改
-	return this.NotifyDNSUpdate(tx, serverId)
+	err = this.NotifyDNSUpdate(tx, serverId)
+	if err != nil {
+		return err
+	}
+
+	if clusterId != oldClusterId {
+		// 服务配置更新
+		if !keepOldConfigs {
+			err = this.NotifyClusterUpdate(tx, oldClusterId, serverId)
+			if err != nil {
+				return err
+			}
+		}
+
+		// DNS更新
+		// 这里不受 keepOldConfigs 的限制
+		err = this.NotifyClusterDNSUpdate(tx, oldClusterId, serverId)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// UpdateServerGroupIds 修改服务所在分组
+func (this *ServerDAO) UpdateServerGroupIds(tx *dbs.Tx, serverId int64, groupIds []int64) error {
+	if groupIds == nil {
+		groupIds = []int64{}
+	}
+	groupIdsJSON, err := json.Marshal(groupIds)
+	if err != nil {
+		return err
+	}
+	err = this.Query(tx).
+		Pk(serverId).
+		Set("groupIds", groupIdsJSON).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+	return this.NotifyUpdate(tx, serverId)
 }
 
 // UpdateUserServerBasic 设置用户相关的基本信息
@@ -295,7 +362,7 @@ func (this *ServerDAO) UpdateUserServerBasic(tx *dbs.Tx, serverId int64, name st
 	if serverId <= 0 {
 		return errors.New("serverId should not be smaller than 0")
 	}
-	op := NewServerOperator()
+	var op = NewServerOperator()
 	op.Id = serverId
 	op.Name = name
 
@@ -533,37 +600,50 @@ func (this *ServerDAO) InitServerWeb(tx *dbs.Tx, serverId int64) (int64, error) 
 }
 
 // FindServerServerNames 查找ServerNames配置
-func (this *ServerDAO) FindServerServerNames(tx *dbs.Tx, serverId int64) (serverNamesJSON []byte, isAuditing bool, auditingServerNamesJSON []byte, auditingResultJSON []byte, err error) {
+func (this *ServerDAO) FindServerServerNames(tx *dbs.Tx, serverId int64) (serverNamesJSON []byte, isAuditing bool, auditingAt int64, auditingServerNamesJSON []byte, auditingResultJSON []byte, err error) {
 	if serverId <= 0 {
 		return
 	}
 	one, err := this.Query(tx).
 		Pk(serverId).
-		Result("serverNames", "isAuditing", "auditingServerNames", "auditingResult").
+		Result("serverNames", "isAuditing", "auditingAt", "auditingServerNames", "auditingResult").
 		Find()
 	if err != nil {
-		return nil, false, nil, nil, err
+		return nil, false, 0, nil, nil, err
 	}
 	if one == nil {
 		return
 	}
 	server := one.(*Server)
-	return []byte(server.ServerNames), server.IsAuditing == 1, []byte(server.AuditingServerNames), []byte(server.AuditingResult), nil
+	return server.ServerNames, server.IsAuditing, int64(server.AuditingAt), server.AuditingServerNames, server.AuditingResult, nil
 }
 
 // UpdateServerNames 修改ServerNames配置
-func (this *ServerDAO) UpdateServerNames(tx *dbs.Tx, serverId int64, serverNames []byte) error {
+func (this *ServerDAO) UpdateServerNames(tx *dbs.Tx, serverId int64, serverNamesJSON []byte) error {
 	if serverId <= 0 {
 		return errors.New("serverId should not be smaller than 0")
 	}
 
-	op := NewServerOperator()
+	var op = NewServerOperator()
 	op.Id = serverId
 
-	if len(serverNames) == 0 {
-		serverNames = []byte("[]")
+	if IsNull(serverNamesJSON) {
+		serverNamesJSON = []byte("[]")
+	} else {
+		var serverNames = []*serverconfigs.ServerNameConfig{}
+		err := json.Unmarshal(serverNamesJSON, &serverNames)
+		if err != nil {
+			return err
+		}
+
+		op.ServerNames = serverNamesJSON
+		plainServerNamesJSON, err := json.Marshal(serverconfigs.PlainServerNames(serverNames))
+		if err != nil {
+			return err
+		}
+		op.PlainServerNames = plainServerNamesJSON
 	}
-	op.ServerNames = serverNames
+	op.ServerNames = serverNamesJSON
 	err := this.Save(tx, op)
 	if err != nil {
 		return err
@@ -577,10 +657,13 @@ func (this *ServerDAO) UpdateAuditingServerNames(tx *dbs.Tx, serverId int64, isA
 		return errors.New("serverId should not be smaller than 0")
 	}
 
-	op := NewServerOperator()
+	var op = NewServerOperator()
 	op.Id = serverId
 	op.IsAuditing = isAuditing
-	if len(auditingServerNamesJSON) == 0 {
+	if isAuditing {
+		op.AuditingAt = time.Now().Unix()
+	}
+	if IsNull(auditingServerNamesJSON) {
 		op.AuditingServerNames = "[]"
 	} else {
 		op.AuditingServerNames = auditingServerNamesJSON
@@ -608,12 +691,35 @@ func (this *ServerDAO) UpdateServerAuditing(tx *dbs.Tx, serverId int64, result *
 		return err
 	}
 
-	op := NewServerOperator()
+	auditingServerNamesJSON, err := this.Query(tx).
+		Pk(serverId).
+		Result("auditingServerNames").
+		FindJSONCol()
+	if err != nil {
+		return err
+	}
+
+	var op = NewServerOperator()
 	op.Id = serverId
 	op.IsAuditing = false
 	op.AuditingResult = resultJSON
 	if result.IsOk {
 		op.ServerNames = dbs.SQL("auditingServerNames")
+
+		if IsNotNull(auditingServerNamesJSON) {
+			var serverNames = []*serverconfigs.ServerNameConfig{}
+			err := json.Unmarshal(auditingServerNamesJSON, &serverNames)
+			if err != nil {
+				return err
+			}
+			plainServerNamesJSON, err := json.Marshal(serverconfigs.PlainServerNames(serverNames))
+			if err != nil {
+				return err
+			}
+			op.PlainServerNames = plainServerNamesJSON
+		} else {
+			op.PlainServerNames = "[]"
+		}
 	}
 	err = this.Save(tx, op)
 	if err != nil {
@@ -633,7 +739,7 @@ func (this *ServerDAO) UpdateServerReverseProxy(tx *dbs.Tx, serverId int64, conf
 	if serverId <= 0 {
 		return errors.New("serverId should not be smaller than 0")
 	}
-	op := NewServerOperator()
+	var op = NewServerOperator()
 	op.Id = serverId
 	op.ReverseProxy = JSONBytes(config)
 	err := this.Save(tx, op)
@@ -652,21 +758,27 @@ func (this *ServerDAO) CountAllEnabledServers(tx *dbs.Tx) (int64, error) {
 }
 
 // CountAllEnabledServersMatch 计算所有可用服务数量
+// 参数：
+//
+//	groupId 分组ID，如果为-1，则搜索没有分组的服务
 func (this *ServerDAO) CountAllEnabledServersMatch(tx *dbs.Tx, groupId int64, keyword string, userId int64, clusterId int64, auditingFlag configutils.BoolState, protocolFamilies []string) (int64, error) {
 	query := this.Query(tx).
 		State(ServerStateEnabled)
 	if groupId > 0 {
 		query.Where("JSON_CONTAINS(groupIds, :groupId)").
 			Param("groupId", numberutils.FormatInt64(groupId))
+	} else if groupId < 0 { // 特殊的groupId
+		query.Where("JSON_LENGTH(groupIds)=0")
 	}
 	if len(keyword) > 0 {
 		if regexp.MustCompile(`^\d+$`).MatchString(keyword) {
-			query.Where("(name LIKE :keyword OR serverNames LIKE :keyword OR JSON_CONTAINS(http, :portRange, '$.listen') OR JSON_CONTAINS(https, :portRange, '$.listen') OR JSON_CONTAINS(tcp, :portRange, '$.listen') OR JSON_CONTAINS(tls, :portRange, '$.listen'))").
+			query.Where("(id=:serverId OR name LIKE :keyword OR serverNames LIKE :keyword OR JSON_CONTAINS(http, :portRange, '$.listen') OR JSON_CONTAINS(https, :portRange, '$.listen') OR JSON_CONTAINS(tcp, :portRange, '$.listen') OR JSON_CONTAINS(tls, :portRange, '$.listen'))").
 				Param("portRange", maps.Map{"portRange": keyword}.AsJSON()).
-				Param("keyword", "%"+keyword+"%")
+				Param("serverId", keyword).
+				Param("keyword", dbutils.QuoteLike(keyword))
 		} else {
 			query.Where("(name LIKE :keyword OR serverNames LIKE :keyword)").
-				Param("keyword", "%"+keyword+"%")
+				Param("keyword", dbutils.QuoteLike(keyword))
 		}
 	}
 	if userId > 0 {
@@ -698,26 +810,31 @@ func (this *ServerDAO) CountAllEnabledServersMatch(tx *dbs.Tx, groupId int64, ke
 }
 
 // ListEnabledServersMatch 列出单页的服务
-func (this *ServerDAO) ListEnabledServersMatch(tx *dbs.Tx, offset int64, size int64, groupId int64, keyword string, userId int64, clusterId int64, auditingFlag int32, protocolFamilies []string) (result []*Server, err error) {
+// 参数：
+//
+//	groupId 分组ID，如果为-1，则搜索没有分组的服务
+func (this *ServerDAO) ListEnabledServersMatch(tx *dbs.Tx, offset int64, size int64, groupId int64, keyword string, userId int64, clusterId int64, auditingFlag int32, protocolFamilies []string, order string) (result []*Server, err error) {
 	query := this.Query(tx).
 		State(ServerStateEnabled).
 		Offset(offset).
 		Limit(size).
-		DescPk().
 		Slice(&result)
 
 	if groupId > 0 {
 		query.Where("JSON_CONTAINS(groupIds, :groupId)").
 			Param("groupId", numberutils.FormatInt64(groupId))
+	} else if groupId < 0 { // 特殊的groupId
+		query.Where("JSON_LENGTH(groupIds)=0")
 	}
 	if len(keyword) > 0 {
 		if regexp.MustCompile(`^\d+$`).MatchString(keyword) {
-			query.Where("(name LIKE :keyword OR serverNames LIKE :keyword OR JSON_CONTAINS(http, :portRange, '$.listen') OR JSON_CONTAINS(https, :portRange, '$.listen') OR JSON_CONTAINS(tcp, :portRange, '$.listen') OR JSON_CONTAINS(tls, :portRange, '$.listen'))").
+			query.Where("(id=:serverId OR name LIKE :keyword OR serverNames LIKE :keyword OR JSON_CONTAINS(http, :portRange, '$.listen') OR JSON_CONTAINS(https, :portRange, '$.listen') OR JSON_CONTAINS(tcp, :portRange, '$.listen') OR JSON_CONTAINS(tls, :portRange, '$.listen'))").
 				Param("portRange", string(maps.Map{"portRange": keyword}.AsJSON())).
-				Param("keyword", "%"+keyword+"%")
+				Param("serverId", keyword).
+				Param("keyword", dbutils.QuoteLike(keyword))
 		} else {
 			query.Where("(name LIKE :keyword OR serverNames LIKE :keyword)").
-				Param("keyword", "%"+keyword+"%")
+				Param("keyword", dbutils.QuoteLike(keyword))
 		}
 	}
 	if userId > 0 {
@@ -744,7 +861,36 @@ func (this *ServerDAO) ListEnabledServersMatch(tx *dbs.Tx, offset int64, size in
 		query.Where("(" + strings.Join(protocolConds, " OR ") + ")")
 	}
 
+	// 排序
+	var timestamp = (time.Now().Unix()) / 300 * 300
+	var times = []string{
+		timeutil.FormatTime("YmdHi", timestamp),
+		timeutil.FormatTime("YmdHi", timestamp-300),
+		timeutil.FormatTime("YmdHi", timestamp-300*2),
+	}
+
+	switch order {
+	case "trafficOutAsc":
+		query.Asc("IF(FIND_IN_SET(bandwidthTime, :times), bandwidthBytes, 0)")
+		query.Param("times", strings.Join(times, ","))
+		query.DescPk()
+	case "trafficOutDesc":
+		query.Desc("IF(FIND_IN_SET(bandwidthTime, :times), bandwidthBytes, 0)")
+		query.Param("times", strings.Join(times, ","))
+		query.DescPk()
+	default:
+		query.DescPk()
+	}
+
 	_, err = query.FindAll()
+
+	// 修正带宽统计数据
+	for _, server := range result {
+		if len(server.BandwidthTime) > 0 && !lists.ContainsString(times, server.BandwidthTime) {
+			server.BandwidthBytes = 0
+		}
+	}
+
 	return
 }
 
@@ -758,6 +904,7 @@ func (this *ServerDAO) FindAllEnabledServersWithNode(tx *dbs.Tx, nodeId int64) (
 	for _, clusterId := range clusterIds {
 		ones, err := this.Query(tx).
 			Attr("clusterId", clusterId).
+			Where("(userId=0 OR userId IN (SELECT id FROM " + SharedUserDAO.Table + " WHERE isOn AND state=1))").
 			State(ServerStateEnabled).
 			AscPk().
 			FindAll()
@@ -881,11 +1028,12 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 		return cache.(*serverconfigs.ServerConfig), nil
 	}
 
-	config := &serverconfigs.ServerConfig{}
+	var config = &serverconfigs.ServerConfig{}
 	config.Id = int64(server.Id)
 	config.ClusterId = int64(server.ClusterId)
+	config.UserId = int64(server.UserId)
 	config.Type = server.Type
-	config.IsOn = server.IsOn == 1
+	config.IsOn = server.IsOn
 	config.Name = server.Name
 	config.Description = server.Description
 
@@ -904,9 +1052,9 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 	config.Group = groupConfig
 
 	// ServerNames
-	if len(server.ServerNames) > 0 && server.ServerNames != "null" {
-		serverNames := []*serverconfigs.ServerNameConfig{}
-		err := json.Unmarshal([]byte(server.ServerNames), &serverNames)
+	if IsNotNull(server.ServerNames) {
+		var serverNames = []*serverconfigs.ServerNameConfig{}
+		err := json.Unmarshal(server.ServerNames, &serverNames)
 		if err != nil {
 			return nil, err
 		}
@@ -921,21 +1069,30 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 			return nil, err
 		}
 		if clusterDNS != nil && clusterDNS.DnsDomainId > 0 {
+			clusterDNSConfig, err := clusterDNS.DecodeDNSConfig()
+			if err != nil {
+				return nil, err
+			}
+
 			domain, err := dns.SharedDNSDomainDAO.FindEnabledDNSDomain(tx, int64(clusterDNS.DnsDomainId), cacheMap)
 			if err != nil {
 				return nil, err
 			}
 			if domain != nil {
-				cname := server.DnsName + "." + domain.Name
-				config.AliasServerNames = append(config.AliasServerNames, cname)
+				var cname = server.DnsName + "." + domain.Name
+				config.CNameDomain = cname
+				if clusterDNSConfig.CNAMEAsDomain {
+					config.CNameAsDomain = true
+					config.AliasServerNames = append(config.AliasServerNames, cname)
+				}
 			}
 		}
 	}
 
 	// HTTP
-	if len(server.Http) > 0 && server.Http != "null" {
-		httpConfig := &serverconfigs.HTTPProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Http), httpConfig)
+	if IsNotNull(server.Http) {
+		var httpConfig = &serverconfigs.HTTPProtocolConfig{}
+		err := json.Unmarshal(server.Http, httpConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -943,9 +1100,9 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 	}
 
 	// HTTPS
-	if len(server.Https) > 0 && server.Https != "null" {
-		httpsConfig := &serverconfigs.HTTPSProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Https), httpsConfig)
+	if IsNotNull(server.Https) {
+		var httpsConfig = &serverconfigs.HTTPSProtocolConfig{}
+		err := json.Unmarshal(server.Https, httpsConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -965,9 +1122,9 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 	}
 
 	// TCP
-	if len(server.Tcp) > 0 && server.Tcp != "null" {
-		tcpConfig := &serverconfigs.TCPProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Tcp), tcpConfig)
+	if IsNotNull(server.Tcp) {
+		var tcpConfig = &serverconfigs.TCPProtocolConfig{}
+		err := json.Unmarshal(server.Tcp, tcpConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -975,9 +1132,9 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 	}
 
 	// TLS
-	if len(server.Tls) > 0 && server.Tls != "null" {
-		tlsConfig := &serverconfigs.TLSProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Tls), tlsConfig)
+	if IsNotNull(server.Tls) {
+		var tlsConfig = &serverconfigs.TLSProtocolConfig{}
+		err := json.Unmarshal(server.Tls, tlsConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -997,9 +1154,9 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 	}
 
 	// Unix
-	if len(server.Unix) > 0 && server.Unix != "null" {
-		unixConfig := &serverconfigs.UnixProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Unix), unixConfig)
+	if IsNotNull(server.Unix) {
+		var unixConfig = &serverconfigs.UnixProtocolConfig{}
+		err := json.Unmarshal(server.Unix, unixConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -1007,9 +1164,9 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 	}
 
 	// UDP
-	if len(server.Udp) > 0 && server.Udp != "null" {
-		udpConfig := &serverconfigs.UDPProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Udp), udpConfig)
+	if IsNotNull(server.Udp) {
+		var udpConfig = &serverconfigs.UDPProtocolConfig{}
+		err := json.Unmarshal(server.Udp, udpConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -1029,8 +1186,8 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 
 	// ReverseProxy
 	if IsNotNull(server.ReverseProxy) {
-		reverseProxyRef := &serverconfigs.ReverseProxyRef{}
-		err := json.Unmarshal([]byte(server.ReverseProxy), reverseProxyRef)
+		var reverseProxyRef = &serverconfigs.ReverseProxyRef{}
+		err := json.Unmarshal(server.ReverseProxy, reverseProxyRef)
 		if err != nil {
 			return nil, err
 		}
@@ -1046,7 +1203,7 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 	}
 
 	// WAF策略
-	clusterId := int64(server.ClusterId)
+	var clusterId = int64(server.ClusterId)
 	httpFirewallPolicyId, err := SharedNodeClusterDAO.FindClusterHTTPFirewallPolicyId(tx, clusterId, cacheMap)
 	if err != nil {
 		return nil, err
@@ -1067,7 +1224,7 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 	// traffic limit
 	if len(server.TrafficLimit) > 0 {
 		var trafficLimitConfig = &serverconfigs.TrafficLimitConfig{}
-		err = json.Unmarshal([]byte(server.TrafficLimit), trafficLimitConfig)
+		err = json.Unmarshal(server.TrafficLimit, trafficLimitConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -1080,7 +1237,7 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 		if err != nil {
 			return nil, err
 		}
-		if userPlan != nil && userPlan.IsOn == 1 {
+		if userPlan != nil && userPlan.IsOn {
 			if len(userPlan.DayTo) == 0 {
 				userPlan.DayTo = DefaultUserPlanMaxDay
 			}
@@ -1094,13 +1251,14 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 				config.UserPlan = &serverconfigs.UserPlanConfig{
 					DayTo: userPlan.DayTo,
 					Plan: &serverconfigs.PlanConfig{
-						Id: int64(plan.Id),
+						Id:   int64(plan.Id),
+						Name: plan.Name,
 					},
 				}
 
 				if len(plan.TrafficLimit) > 0 && (config.TrafficLimit == nil || !config.TrafficLimit.IsOn) {
 					var trafficLimitConfig = &serverconfigs.TrafficLimitConfig{}
-					err = json.Unmarshal([]byte(plan.TrafficLimit), trafficLimitConfig)
+					err = json.Unmarshal(plan.TrafficLimit, trafficLimitConfig)
 					if err != nil {
 						return nil, err
 					}
@@ -1113,13 +1271,25 @@ func (this *ServerDAO) ComposeServerConfig(tx *dbs.Tx, server *Server, cacheMap 
 	if config.TrafficLimit != nil && config.TrafficLimit.IsOn && !config.TrafficLimit.IsEmpty() {
 		if len(server.TrafficLimitStatus) > 0 {
 			var status = &serverconfigs.TrafficLimitStatus{}
-			err = json.Unmarshal([]byte(server.TrafficLimitStatus), status)
+			err = json.Unmarshal(server.TrafficLimitStatus, status)
 			if err != nil {
 				return nil, err
 			}
 			if status.IsValid() {
 				config.TrafficLimitStatus = status
 			}
+		}
+	}
+
+	// UAM
+	if teaconst.IsPlus && IsNotNull(server.Uam) {
+		var uamConfig = &serverconfigs.UAMConfig{}
+		err = json.Unmarshal(server.Uam, uamConfig)
+		if err != nil {
+			return nil, err
+		}
+		if uamConfig.IsOn {
+			config.UAM = uamConfig
 		}
 	}
 
@@ -1221,6 +1391,16 @@ func (this *ServerDAO) FindAllEnabledServerIdsWithSSLPolicyIds(tx *dbs.Tx, sslPo
 	return
 }
 
+// ExistEnabledUserServerWithSSLPolicyId 检查是否存在某个用户的策略
+func (this *ServerDAO) ExistEnabledUserServerWithSSLPolicyId(tx *dbs.Tx, userId int64, sslPolicyId int64) (bool, error) {
+	return this.Query(tx).
+		State(ServerStateEnabled).
+		Attr("userId", userId).
+		Where("(JSON_CONTAINS(https, :jsonQuery) OR JSON_CONTAINS(tls, :jsonQuery))").
+		Param("jsonQuery", maps.Map{"sslPolicyRef": maps.Map{"sslPolicyId": sslPolicyId}}.AsJSON()).
+		Exist()
+}
+
 // CountEnabledServersWithWebIds 计算使用某个缓存策略的所有服务数量
 func (this *ServerDAO) CountEnabledServersWithWebIds(tx *dbs.Tx, webIds []int64) (count int64, err error) {
 	if len(webIds) == 0 {
@@ -1257,9 +1437,13 @@ func (this *ServerDAO) CountAllEnabledServersWithNodeClusterId(tx *dbs.Tx, clust
 }
 
 // CountAllEnabledServersWithGroupId 计算使用某个分组的服务数量
-func (this *ServerDAO) CountAllEnabledServersWithGroupId(tx *dbs.Tx, groupId int64) (int64, error) {
-	return this.Query(tx).
-		State(ServerStateEnabled).
+func (this *ServerDAO) CountAllEnabledServersWithGroupId(tx *dbs.Tx, groupId int64, userId int64) (int64, error) {
+	var query = this.Query(tx).
+		State(ServerStateEnabled)
+	if userId > 0 {
+		query.Attr("userId", userId)
+	}
+	return query.
 		Where("JSON_CONTAINS(groupIds, :groupId)").
 		Param("groupId", numberutils.FormatInt64(groupId)).
 		Count()
@@ -1310,6 +1494,7 @@ func (this *ServerDAO) FindAllServersDNSWithClusterId(tx *dbs.Tx, clusterId int6
 }
 
 // FindAllEnabledServersWithDomain 根据域名查找服务
+// TODO 需要改成使用plainServerNames
 func (this *ServerDAO) FindAllEnabledServersWithDomain(tx *dbs.Tx, domain string) (result []*Server, err error) {
 	if len(domain) == 0 {
 		return
@@ -1357,6 +1542,49 @@ func (this *ServerDAO) FindAllEnabledServersWithDomain(tx *dbs.Tx, domain string
 	return
 }
 
+// FindEnabledServerWithDomain 根据域名查找服务集群ID
+func (this *ServerDAO) FindEnabledServerWithDomain(tx *dbs.Tx, domain string) (server *Server, err error) {
+	if len(domain) == 0 {
+		return
+	}
+
+	one, err := this.Query(tx).
+		State(ServerStateEnabled).
+		Where("JSON_CONTAINS(plainServerNames, :domain)").
+		Param("domain", strconv.Quote(domain)).
+		Result("id", "userId", "clusterId").
+		AscPk().
+		Find()
+	if err != nil {
+		return nil, err
+	}
+
+	if one != nil {
+		return one.(*Server), nil
+	}
+
+	// 尝试泛解析
+	var dotIndex = strings.Index(domain, ".")
+	if dotIndex > 0 {
+		var wildcardDomain = "*." + domain[dotIndex+1:]
+		one, err = this.Query(tx).
+			State(ServerStateEnabled).
+			Where("JSON_CONTAINS(plainServerNames, :domain)").
+			Param("domain", strconv.Quote(wildcardDomain)).
+			Result("id", "userId", "clusterId").
+			AscPk().
+			Find()
+		if err != nil {
+			return nil, err
+		}
+		if one != nil {
+			return one.(*Server), nil
+		}
+	}
+
+	return
+}
+
 // GenerateServerDNSName 重新生成子域名
 func (this *ServerDAO) GenerateServerDNSName(tx *dbs.Tx, serverId int64) (string, error) {
 	if serverId <= 0 {
@@ -1366,7 +1594,7 @@ func (this *ServerDAO) GenerateServerDNSName(tx *dbs.Tx, serverId int64) (string
 	if err != nil {
 		return "", err
 	}
-	op := NewServerOperator()
+	var op = NewServerOperator()
 	op.Id = serverId
 	op.DnsName = dnsName
 	err = this.Save(tx, op)
@@ -1385,6 +1613,33 @@ func (this *ServerDAO) GenerateServerDNSName(tx *dbs.Tx, serverId int64) (string
 	}
 
 	return dnsName, nil
+}
+
+// UpdateServerDNSName 设置CNAME
+func (this *ServerDAO) UpdateServerDNSName(tx *dbs.Tx, serverId int64, dnsName string) error {
+	if serverId <= 0 || len(dnsName) == 0 {
+		return nil
+	}
+	dnsName = strings.ToLower(dnsName)
+	err := this.Query(tx).
+		Pk(serverId).
+		Set("dnsName", dnsName).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyDNSUpdate(tx, serverId)
+}
+
+// FindServerIdWithDNSName 根据CNAME查询服务ID
+func (this *ServerDAO) FindServerIdWithDNSName(tx *dbs.Tx, clusterId int64, dnsName string) (int64, error) {
+	return this.Query(tx).
+		ResultPk().
+		State(ServerStateEnabled).
+		Attr("clusterId", clusterId).
+		Attr("dnsName", dnsName).
+		FindInt64Col(0)
 }
 
 // FindServerClusterId 查询当前服务的集群ID
@@ -1484,6 +1739,7 @@ func (this *ServerDAO) CheckUserServer(tx *dbs.Tx, userId int64, serverId int64)
 func (this *ServerDAO) UpdateUserServersClusterId(tx *dbs.Tx, userId int64, oldClusterId, newClusterId int64) error {
 	_, err := this.Query(tx).
 		Attr("userId", userId).
+		Attr("userPlanId", 0).
 		Set("clusterId", newClusterId).
 		Update()
 	if err != nil {
@@ -1491,11 +1747,11 @@ func (this *ServerDAO) UpdateUserServersClusterId(tx *dbs.Tx, userId int64, oldC
 	}
 
 	if oldClusterId > 0 {
-		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, oldClusterId, NodeTaskTypeConfigChanged)
+		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, oldClusterId, 0, NodeTaskTypeConfigChanged)
 		if err != nil {
 			return err
 		}
-		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, oldClusterId, NodeTaskTypeIPItemChanged)
+		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, oldClusterId, 0, NodeTaskTypeIPItemChanged)
 		if err != nil {
 			return err
 		}
@@ -1506,11 +1762,11 @@ func (this *ServerDAO) UpdateUserServersClusterId(tx *dbs.Tx, userId int64, oldC
 	}
 
 	if newClusterId > 0 {
-		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, newClusterId, NodeTaskTypeConfigChanged)
+		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, newClusterId, 0, NodeTaskTypeConfigChanged)
 		if err != nil {
 			return err
 		}
-		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, newClusterId, NodeTaskTypeIPItemChanged)
+		err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, newClusterId, 0, NodeTaskTypeIPItemChanged)
 		if err != nil {
 			return err
 		}
@@ -1528,8 +1784,6 @@ func (this *ServerDAO) FindAllEnabledServersWithUserId(tx *dbs.Tx, userId int64)
 	_, err = this.Query(tx).
 		State(ServerStateEnabled).
 		Attr("userId", userId).
-		//Attr("isAuditing", 0).
-		//Where("JSON_CONTAINS(auditingResult, '{\"isOk\": true}')").
 		DescPk().
 		Slice(&result).
 		FindAll()
@@ -1625,22 +1879,8 @@ func (this *ServerDAO) CheckPortIsUsing(tx *dbs.Tx, clusterId int64, protocolFam
 		Exist()
 }
 
-// ExistServerNameInCluster 检查ServerName是否已存在
-func (this *ServerDAO) ExistServerNameInCluster(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64) (bool, error) {
-	query := this.Query(tx).
-		Attr("clusterId", clusterId).
-		Where("(JSON_CONTAINS(serverNames, :jsonQuery1) OR JSON_CONTAINS(serverNames, :jsonQuery2))").
-		Param("jsonQuery1", maps.Map{"name": serverName}.AsJSON()).
-		Param("jsonQuery2", maps.Map{"subNames": serverName}.AsJSON())
-	if excludeServerId > 0 {
-		query.Neq("id", excludeServerId)
-	}
-	query.State(ServerStateEnabled)
-	return query.Exist()
-}
-
 // ExistServerNameInClusterAll 检查ServerName是否已存在包含审核通过和正在审核中的
-func (this *ServerDAO) ExistServerNameInClusterAll(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64) (bool, error) {
+func (this *ServerDAO) ExistServerNameInClusterAll(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64, supportWildcard bool) (bool, error) {
 	query := this.Query(tx).State(ServerStateEnabled).
 		Attr("clusterId", clusterId).
 		Where("((JSON_CONTAINS(serverNames, :jsonQuery1) OR JSON_CONTAINS(serverNames, :jsonQuery2)) OR ((JSON_CONTAINS(auditingServerNames, :jsonQuery1) OR JSON_CONTAINS(auditingServerNames, :jsonQuery2)) AND isAuditing = 1))").
@@ -1650,6 +1890,51 @@ func (this *ServerDAO) ExistServerNameInClusterAll(tx *dbs.Tx, clusterId int64, 
 		query.Neq("id", excludeServerId)
 	}
 	return query.Exist()
+}
+
+// ExistServerNameInCluster 检查ServerName是否已存在
+func (this *ServerDAO) ExistServerNameInCluster(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64, supportWildcard bool) (bool, error) {
+	var query = this.Query(tx).
+		Attr("clusterId", clusterId).
+		Where("(JSON_CONTAINS(serverNames, :jsonQuery1) OR JSON_CONTAINS(serverNames, :jsonQuery2))").
+		Param("jsonQuery1", maps.Map{"name": serverName}.AsJSON()).
+		Param("jsonQuery2", maps.Map{"subNames": serverName}.AsJSON())
+	if excludeServerId > 0 {
+		query.Neq("id", excludeServerId)
+	}
+	query.State(ServerStateEnabled)
+	exists, err := query.Exist()
+	if err != nil || exists {
+		return exists, err
+	}
+
+	if supportWildcard {
+		var countPieces = strings.Count(serverName, ".")
+		for {
+			var index = strings.Index(serverName, ".")
+			if index > 0 {
+				serverName = serverName[index+1:]
+				var search = strings.Repeat("*.", countPieces-strings.Count(serverName, ".")) + serverName
+				var query = this.Query(tx).
+					Attr("clusterId", clusterId).
+					Where("(JSON_CONTAINS(serverNames, :jsonQuery1) OR JSON_CONTAINS(serverNames, :jsonQuery2))").
+					Param("jsonQuery1", maps.Map{"name": search}.AsJSON()).
+					Param("jsonQuery2", maps.Map{"subNames": search}.AsJSON())
+				if excludeServerId > 0 {
+					query.Neq("id", excludeServerId)
+				}
+				query.State(ServerStateEnabled)
+				exists, err = query.Exist()
+				if err != nil || exists {
+					return exists, err
+				}
+			} else {
+				break
+			}
+		}
+	}
+
+	return false, nil
 }
 
 // GenDNSName 生成DNS Name
@@ -1824,9 +2109,9 @@ func (this *ServerDAO) NotifyServerPortsUpdate(tx *dbs.Tx, serverId int64) error
 	// HTTP
 	var tcpListens = []*serverconfigs.NetworkAddressConfig{}
 	var udpListens = []*serverconfigs.NetworkAddressConfig{}
-	if len(server.Http) > 0 && server.Http != "null" {
+	if IsNotNull(server.Http) {
 		httpConfig := &serverconfigs.HTTPProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Http), httpConfig)
+		err := json.Unmarshal(server.Http, httpConfig)
 		if err != nil {
 			return err
 		}
@@ -1834,9 +2119,9 @@ func (this *ServerDAO) NotifyServerPortsUpdate(tx *dbs.Tx, serverId int64) error
 	}
 
 	// HTTPS
-	if len(server.Https) > 0 && server.Https != "null" {
+	if IsNotNull(server.Https) {
 		httpsConfig := &serverconfigs.HTTPSProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Https), httpsConfig)
+		err := json.Unmarshal(server.Https, httpsConfig)
 		if err != nil {
 			return err
 		}
@@ -1844,9 +2129,9 @@ func (this *ServerDAO) NotifyServerPortsUpdate(tx *dbs.Tx, serverId int64) error
 	}
 
 	// TCP
-	if len(server.Tcp) > 0 && server.Tcp != "null" {
+	if IsNotNull(server.Tcp) {
 		tcpConfig := &serverconfigs.TCPProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Tcp), tcpConfig)
+		err := json.Unmarshal(server.Tcp, tcpConfig)
 		if err != nil {
 			return err
 		}
@@ -1854,9 +2139,9 @@ func (this *ServerDAO) NotifyServerPortsUpdate(tx *dbs.Tx, serverId int64) error
 	}
 
 	// TLS
-	if len(server.Tls) > 0 && server.Tls != "null" {
+	if IsNotNull(server.Tls) {
 		tlsConfig := &serverconfigs.TLSProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Tls), tlsConfig)
+		err := json.Unmarshal(server.Tls, tlsConfig)
 		if err != nil {
 			return err
 		}
@@ -1864,9 +2149,9 @@ func (this *ServerDAO) NotifyServerPortsUpdate(tx *dbs.Tx, serverId int64) error
 	}
 
 	// UDP
-	if len(server.Udp) > 0 && server.Udp != "null" {
+	if IsNotNull(server.Udp) {
 		udpConfig := &serverconfigs.UDPProtocolConfig{}
-		err := json.Unmarshal([]byte(server.Udp), udpConfig)
+		err := json.Unmarshal(server.Udp, udpConfig)
 		if err != nil {
 			return err
 		}
@@ -2001,7 +2286,7 @@ func (this *ServerDAO) CalculateServerTrafficLimitConfig(tx *dbs.Tx, serverId in
 		return limitConfig, nil
 	}
 
-	err = json.Unmarshal([]byte(trafficLimit), limitConfig)
+	err = json.Unmarshal(trafficLimit, limitConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -2053,6 +2338,7 @@ func (this *ServerDAO) UpdateServerTrafficLimitConfig(tx *dbs.Tx, serverId int64
 	return this.UpdateServerTrafficLimitStatus(tx, trafficLimitConfig, serverId, true)
 }
 
+// UpdateServerTrafficLimitStatus 修改服务的流量限制状态
 func (this *ServerDAO) UpdateServerTrafficLimitStatus(tx *dbs.Tx, trafficLimitConfig *serverconfigs.TrafficLimitConfig, serverId int64, isUpdatingConfig bool) error {
 	if !trafficLimitConfig.IsOn {
 		if isUpdatingConfig {
@@ -2075,8 +2361,8 @@ func (this *ServerDAO) UpdateServerTrafficLimitStatus(tx *dbs.Tx, trafficLimitCo
 	var server = serverOne.(*Server)
 
 	var oldStatus = &serverconfigs.TrafficLimitStatus{}
-	if len(server.TrafficLimitStatus) > 0 {
-		err = json.Unmarshal([]byte(server.TrafficLimitStatus), oldStatus)
+	if IsNotNull(server.TrafficLimitStatus) {
+		err = json.Unmarshal(server.TrafficLimitStatus, oldStatus)
 		if err != nil {
 			return err
 		}
@@ -2161,13 +2447,26 @@ func (this *ServerDAO) ResetServerTotalTraffic(tx *dbs.Tx, serverId int64) error
 		UpdateQuickly()
 }
 
-// FindEnabledServerIdWithUserPlanId 查找使用某个套餐的服务
+// FindEnabledServerIdWithUserPlanId 查找使用某个套餐的服务ID
 func (this *ServerDAO) FindEnabledServerIdWithUserPlanId(tx *dbs.Tx, userPlanId int64) (int64, error) {
 	return this.Query(tx).
 		State(ServerStateEnabled).
 		Attr("userPlanId", userPlanId).
 		ResultPk().
 		FindInt64Col(0)
+}
+
+// FindEnabledServerWithUserPlanId 查找使用某个套餐的服务
+func (this *ServerDAO) FindEnabledServerWithUserPlanId(tx *dbs.Tx, userPlanId int64) (*Server, error) {
+	one, err := this.Query(tx).
+		State(ServerStateEnabled).
+		Attr("userPlanId", userPlanId).
+		Result("id", "name", "serverNames", "type").
+		Find()
+	if err != nil || one == nil {
+		return nil, err
+	}
+	return one.(*Server), nil
 }
 
 // UpdateServersClusterIdWithPlanId 修改套餐所在集群
@@ -2181,6 +2480,40 @@ func (this *ServerDAO) UpdateServersClusterIdWithPlanId(tx *dbs.Tx, planId int64
 
 // UpdateServerUserPlanId 设置服务所属套餐
 func (this *ServerDAO) UpdateServerUserPlanId(tx *dbs.Tx, serverId int64, userPlanId int64) error {
+	// 取消套餐
+	if userPlanId <= 0 {
+		// 所属用户
+		userId, err := this.Query(tx).
+			Pk(serverId).
+			Result("userId").
+			FindInt64Col(0)
+		if err != nil {
+			return err
+		}
+		if userId <= 0 {
+			return errors.New("can not cancel the server plan, because the server has no user")
+		}
+
+		clusterId, err := SharedUserDAO.FindUserClusterId(tx, userId)
+		if err != nil {
+			return err
+		}
+		if clusterId <= 0 {
+			return errors.New("can not cancel the server plan, because the server use does not have a cluster")
+		}
+
+		err = this.Query(tx).
+			Pk(serverId).
+			Set("userPlanId", userPlanId).
+			Set("clusterId", clusterId).
+			UpdateQuickly()
+		if err != nil {
+			return err
+		}
+		return this.NotifyUpdate(tx, serverId)
+	}
+
+	// 设置新套餐
 	userPlan, err := SharedUserPlanDAO.FindEnabledUserPlan(tx, userPlanId, nil)
 	if err != nil {
 		return err
@@ -2200,6 +2533,7 @@ func (this *ServerDAO) UpdateServerUserPlanId(tx *dbs.Tx, serverId int64, userPl
 	err = this.Query(tx).
 		Pk(serverId).
 		Set("userPlanId", userPlanId).
+		Set("lastUserPlanId", userPlanId).
 		Set("clusterId", plan.ClusterId).
 		UpdateQuickly()
 	if err != nil {
@@ -2208,7 +2542,87 @@ func (this *ServerDAO) UpdateServerUserPlanId(tx *dbs.Tx, serverId int64, userPl
 	return this.NotifyUpdate(tx, serverId)
 }
 
-// NotifyUpdate 同步集群
+// FindServerLastUserPlanIdAndUserId 查找最后使用的套餐
+func (this *ServerDAO) FindServerLastUserPlanIdAndUserId(tx *dbs.Tx, serverId int64) (userPlanId int64, userId int64, err error) {
+	one, err := this.Query(tx).
+		Pk(serverId).
+		Result("lastUserPlanId", "userId").
+		Find()
+	if err != nil || one == nil {
+		return 0, 0, err
+	}
+
+	return int64(one.(*Server).LastUserPlanId), int64(one.(*Server).UserId), nil
+}
+
+// UpdateServerUAM 开启UAM
+func (this *ServerDAO) UpdateServerUAM(tx *dbs.Tx, serverId int64, uamConfig *serverconfigs.UAMConfig) error {
+	if uamConfig == nil {
+		return nil
+	}
+	configJSON, err := json.Marshal(uamConfig)
+	if err != nil {
+		return err
+	}
+
+	err = this.Query(tx).
+		Pk(serverId).
+		Set("uam", configJSON).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx, serverId)
+}
+
+// FindServerUAM 查找服务的UAM配置
+func (this *ServerDAO) FindServerUAM(tx *dbs.Tx, serverId int64) ([]byte, error) {
+	return this.Query(tx).
+		Pk(serverId).
+		Result("uam").
+		FindJSONCol()
+}
+
+// FindUserServerClusterIds 获取用户相关服务的集群ID组合
+func (this *ServerDAO) FindUserServerClusterIds(tx *dbs.Tx, userId int64) ([]int64, error) {
+	if userId <= 0 {
+		return nil, nil
+	}
+	ones, err := this.Query(tx).
+		State(ServerStateEnabled).
+		Attr("userId", userId).
+		Gt("clusterId", 0).
+		Result("DISTINCT(clusterId) AS clusterId").
+		FindAll()
+	if err != nil {
+		return nil, err
+	}
+
+	var clusterIds = []int64{}
+	for _, one := range ones {
+		clusterIds = append(clusterIds, int64(one.(*Server).ClusterId))
+	}
+	return clusterIds, nil
+}
+
+// UpdateServerBandwidth 更新服务带宽
+// fullTime YYYYMMDDHHII
+func (this *ServerDAO) UpdateServerBandwidth(tx *dbs.Tx, serverId int64, fullTime string, bandwidthBytes int64) error {
+	if serverId <= 0 {
+		return nil
+	}
+	if bandwidthBytes < 0 {
+		bandwidthBytes = 0
+	}
+	return this.Query(tx).
+		Pk(serverId).
+		Set("bandwidthTime", fullTime).
+		Set("bandwidthBytes", bandwidthBytes).
+		UpdateQuickly()
+}
+
+// NotifyUpdate 同步服务所在的集群
 func (this *ServerDAO) NotifyUpdate(tx *dbs.Tx, serverId int64) error {
 	// 创建任务
 	clusterId, err := this.FindServerClusterId(tx, serverId)
@@ -2218,10 +2632,18 @@ func (this *ServerDAO) NotifyUpdate(tx *dbs.Tx, serverId int64) error {
 	if clusterId == 0 {
 		return nil
 	}
-	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, NodeTaskTypeConfigChanged)
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, serverId, NodeTaskTypeConfigChanged)
 }
 
-// NotifyDNSUpdate 通知DNS更新
+// NotifyClusterUpdate 同步指定的集群
+func (this *ServerDAO) NotifyClusterUpdate(tx *dbs.Tx, clusterId, serverId int64) error {
+	if clusterId <= 0 {
+		return nil
+	}
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, serverId, NodeTaskTypeConfigChanged)
+}
+
+// NotifyDNSUpdate 通知当前集群DNS更新
 func (this *ServerDAO) NotifyDNSUpdate(tx *dbs.Tx, serverId int64) error {
 	clusterId, err := this.Query(tx).
 		Pk(serverId).
@@ -2243,7 +2665,22 @@ func (this *ServerDAO) NotifyDNSUpdate(tx *dbs.Tx, serverId int64) error {
 	if len(dnsInfo.DnsName) == 0 || dnsInfo.DnsDomainId <= 0 {
 		return nil
 	}
-	return dns.SharedDNSTaskDAO.CreateServerTask(tx, serverId, dns.DNSTaskTypeServerChange)
+	return dns.SharedDNSTaskDAO.CreateServerTask(tx, clusterId, serverId, dns.DNSTaskTypeServerChange)
+}
+
+// NotifyClusterDNSUpdate 通知某个集群中的DNS更新
+func (this *ServerDAO) NotifyClusterDNSUpdate(tx *dbs.Tx, clusterId int64, serverId int64) error {
+	dnsInfo, err := SharedNodeClusterDAO.FindClusterDNSInfo(tx, clusterId, nil)
+	if err != nil {
+		return err
+	}
+	if dnsInfo == nil {
+		return nil
+	}
+	if len(dnsInfo.DnsName) == 0 || dnsInfo.DnsDomainId <= 0 {
+		return nil
+	}
+	return dns.SharedDNSTaskDAO.CreateServerTask(tx, clusterId, serverId, dns.DNSTaskTypeServerChange)
 }
 
 // NotifyDisable 通知禁用
@@ -2260,6 +2697,26 @@ func (this *ServerDAO) NotifyDisable(tx *dbs.Tx, serverId int64) error {
 		}
 
 		err = SharedHTTPFirewallPolicyDAO.NotifyDisable(tx, policyId)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// NotifyUserClustersChange 通知用户相关集群更新
+func (this *ServerDAO) NotifyUserClustersChange(tx *dbs.Tx, userId int64) error {
+	if userId <= 0 {
+		return nil
+	}
+
+	clusterIds, err := this.FindUserServerClusterIds(tx, userId)
+	if err != nil {
+		return err
+	}
+	for _, clusterId := range clusterIds {
+		err = SharedNodeClusterDAO.NotifyUpdate(tx, clusterId)
 		if err != nil {
 			return err
 		}

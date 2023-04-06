@@ -42,10 +42,10 @@ func (this *BaseInstaller) Login(credentials *Credentials) error {
 	}
 
 	// 认证
-	methods := []ssh.AuthMethod{}
+	var methods = []ssh.AuthMethod{}
 	if credentials.Method == "user" {
 		{
-			authMethod := ssh.Password(credentials.Password)
+			var authMethod = ssh.Password(credentials.Password)
 			methods = append(methods, authMethod)
 		}
 
@@ -79,7 +79,7 @@ func (this *BaseInstaller) Login(credentials *Credentials) error {
 	if len(credentials.Username) == 0 {
 		credentials.Username = "root"
 	}
-	config := &ssh.ClientConfig{
+	var config = &ssh.ClientConfig{
 		User:            credentials.Username,
 		Auth:            methods,
 		HostKeyCallback: hostKeyCallback,
@@ -94,7 +94,13 @@ func (this *BaseInstaller) Login(credentials *Credentials) error {
 	if err != nil {
 		return err
 	}
+
+	if credentials.Sudo {
+		client.Sudo(credentials.Password)
+	}
+
 	this.client = client
+
 	return nil
 }
 
@@ -144,6 +150,10 @@ func (this *BaseInstaller) InstallHelper(targetDir string, role nodeconfigs.Node
 	uname, _, err := this.client.Exec("uname -a")
 	if err != nil {
 		return env, err
+	}
+
+	if len(uname) == 0 {
+		return nil, errors.New("unable to execute 'uname -a' on this system")
 	}
 
 	osName := ""

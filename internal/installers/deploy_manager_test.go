@@ -9,7 +9,6 @@ func TestDeployManager_LoadNodeFiles(t *testing.T) {
 	}
 }
 
-
 func TestDeployManager_LoadNSNodeFiles(t *testing.T) {
 	files := NewDeployManager().LoadNSNodeFiles()
 	for _, file := range files {

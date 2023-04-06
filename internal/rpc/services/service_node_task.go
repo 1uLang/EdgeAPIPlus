@@ -32,24 +32,25 @@ func (this *NodeTaskService) FindNodeTasks(ctx context.Context, req *pb.FindNode
 		return nil, err
 	}
 
-	pbTasks := []*pb.NodeTask{}
+	var pbTasks = []*pb.NodeTask{}
 	for _, task := range tasks {
 		pbTasks = append(pbTasks, &pb.NodeTask{
 			Id:        int64(task.Id),
 			Type:      task.Type,
 			Version:   int64(task.Version),
 			IsPrimary: primaryNodeId == nodeId,
+			ServerId:  int64(task.ServerId),
 		})
 	}
 
 	// 边缘节点版本更新任务
-	if nodeType == rpcutils.UserTypeNode {
+	if nodeType == rpcutils.UserTypeNode && installers.SharedUpgradeLimiter.CanUpgrade() {
 		status, err := models.SharedNodeDAO.FindNodeStatus(tx, nodeId)
 		if err != nil {
 			return nil, err
 		}
 		if status != nil && len(status.OS) > 0 && len(status.Arch) > 0 && len(status.BuildVersion) > 0 {
-			deployFile := installers.SharedDeployManager.FindNodeFile(status.OS, status.Arch)
+			var deployFile = installers.SharedDeployManager.FindNodeFile(status.OS, status.Arch)
 			if deployFile != nil {
 				if stringutil.VersionCompare(deployFile.Version, status.BuildVersion) > 0 {
 					pbTasks = append(pbTasks, &pb.NodeTask{
@@ -81,7 +82,7 @@ func (this *NodeTaskService) ReportNodeTaskDone(ctx context.Context, req *pb.Rep
 
 // FindNodeClusterTasks 获取所有正在同步的集群信息
 func (this *NodeTaskService) FindNodeClusterTasks(ctx context.Context, req *pb.FindNodeClusterTasksRequest) (*pb.FindNodeClusterTasksResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -124,19 +125,20 @@ func (this *NodeTaskService) FindNodeClusterTasks(ctx context.Context, req *pb.F
 			}
 
 			// 是否超时（N秒内没有更新）
-			if int64(task.UpdatedAt) < time.Now().Unix()-120 {
-				task.IsDone = 1
-				task.IsOk = 0
+			if int64(task.UpdatedAt) < time.Now().Unix()-180 {
+				task.IsDone = true
+				task.IsOk = false
 				task.Error = "节点响应超时"
 			}
 
 			pbNodeTasks = append(pbNodeTasks, &pb.NodeTask{
 				Id:        int64(task.Id),
 				Type:      task.Type,
-				IsDone:    task.IsDone == 1,
-				IsOk:      task.IsOk == 1,
+				IsDone:    task.IsDone,
+				IsOk:      task.IsOk,
 				Error:     task.Error,
 				UpdatedAt: int64(task.UpdatedAt),
+				ServerId:  int64(task.ServerId),
 				Node: &pb.Node{
 					Id:   int64(task.NodeId),
 					Name: nodeName,
@@ -153,7 +155,7 @@ func (this *NodeTaskService) FindNodeClusterTasks(ctx context.Context, req *pb.F
 
 // ExistsNodeTasks 检查是否有正在执行的任务
 func (this *NodeTaskService) ExistsNodeTasks(ctx context.Context, req *pb.ExistsNodeTasksRequest) (*pb.ExistsNodeTasksResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -163,13 +165,13 @@ func (this *NodeTaskService) ExistsNodeTasks(ctx context.Context, req *pb.Exists
 	var tx = this.NullTx()
 
 	// 是否有任务
-	existTask, err := models.SharedNodeTaskDAO.ExistsDoingNodeTasks(tx, nodeconfigs.NodeRoleNode)
+	existTask, err := models.SharedNodeTaskDAO.ExistsDoingNodeTasks(tx, nodeconfigs.NodeRoleNode, req.ExcludeTypes)
 	if err != nil {
 		return nil, err
 	}
 
 	// 是否有错误
-	existError, err := models.SharedNodeTaskDAO.ExistsErrorNodeTasks(tx, nodeconfigs.NodeRoleNode)
+	existError, err := models.SharedNodeTaskDAO.ExistsErrorNodeTasks(tx, nodeconfigs.NodeRoleNode, req.ExcludeTypes)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +184,7 @@ func (this *NodeTaskService) ExistsNodeTasks(ctx context.Context, req *pb.Exists
 
 // DeleteNodeTask 删除任务
 func (this *NodeTaskService) DeleteNodeTask(ctx context.Context, req *pb.DeleteNodeTaskRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +200,7 @@ func (this *NodeTaskService) DeleteNodeTask(ctx context.Context, req *pb.DeleteN
 
 // DeleteNodeTasks 批量删除任务
 func (this *NodeTaskService) DeleteNodeTasks(ctx context.Context, req *pb.DeleteNodeTasksRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +218,7 @@ func (this *NodeTaskService) DeleteNodeTasks(ctx context.Context, req *pb.Delete
 
 // CountDoingNodeTasks 计算正在执行的任务数量
 func (this *NodeTaskService) CountDoingNodeTasks(ctx context.Context, req *pb.CountDoingNodeTasksRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +235,7 @@ func (this *NodeTaskService) CountDoingNodeTasks(ctx context.Context, req *pb.Co
 
 // FindNotifyingNodeTasks 查找需要通知的任务
 func (this *NodeTaskService) FindNotifyingNodeTasks(ctx context.Context, req *pb.FindNotifyingNodeTasksRequest) (*pb.FindNotifyingNodeTasksResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -256,11 +258,12 @@ func (this *NodeTaskService) FindNotifyingNodeTasks(ctx context.Context, req *pb
 		pbTasks = append(pbTasks, &pb.NodeTask{
 			Id:        int64(task.Id),
 			Type:      task.Type,
-			IsDone:    task.IsDone == 1,
-			IsOk:      task.IsOk == 1,
+			IsDone:    task.IsDone,
+			IsOk:      task.IsOk,
 			Error:     task.Error,
 			UpdatedAt: int64(task.UpdatedAt),
 			Node:      &pb.Node{Id: int64(task.NodeId)},
+			ServerId:  int64(task.ServerId),
 		})
 	}
 
@@ -269,7 +272,7 @@ func (this *NodeTaskService) FindNotifyingNodeTasks(ctx context.Context, req *pb
 
 // UpdateNodeTasksNotified 设置任务已通知
 func (this *NodeTaskService) UpdateNodeTasksNotified(ctx context.Context, req *pb.UpdateNodeTasksNotifiedRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

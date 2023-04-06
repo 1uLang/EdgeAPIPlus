@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
@@ -16,12 +17,12 @@ type SSLPolicyService struct {
 // CreateSSLPolicy 创建Policy
 func (this *SSLPolicyService) CreateSSLPolicy(ctx context.Context, req *pb.CreateSSLPolicyRequest) (*pb.CreateSSLPolicyResponse, error) {
 	// 校验请求
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	adminId, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	if userId > 0 {
 		//  检查证书
@@ -43,7 +44,7 @@ func (this *SSLPolicyService) CreateSSLPolicy(ctx context.Context, req *pb.Creat
 		// TODO
 	}
 
-	policyId, err := models.SharedSSLPolicyDAO.CreatePolicy(tx, adminId, userId, req.Http2Enabled, req.MinVersion, req.SslCertsJSON, req.HstsJSON, req.ClientAuthType, req.ClientCACertsJSON, req.CipherSuitesIsOn, req.CipherSuites)
+	policyId, err := models.SharedSSLPolicyDAO.CreatePolicy(tx, adminId, userId, req.Http2Enabled, req.MinVersion, req.SslCertsJSON, req.HstsJSON, req.OcspIsOn, req.ClientAuthType, req.ClientCACertsJSON, req.CipherSuitesIsOn, req.CipherSuites)
 	if err != nil {
 		return nil, err
 	}
@@ -54,21 +55,21 @@ func (this *SSLPolicyService) CreateSSLPolicy(ctx context.Context, req *pb.Creat
 // UpdateSSLPolicy 修改Policy
 func (this *SSLPolicyService) UpdateSSLPolicy(ctx context.Context, req *pb.UpdateSSLPolicyRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	if userId > 0 {
-		err := models.SharedSSLPolicyDAO.CheckUserPolicy(tx, req.SslPolicyId, userId)
+		err := models.SharedSSLPolicyDAO.CheckUserPolicy(tx, userId, req.SslPolicyId)
 		if err != nil {
-			return nil, err
+			return nil, errors.New("check ssl policy failed: " + err.Error())
 		}
 	}
 
-	err = models.SharedSSLPolicyDAO.UpdatePolicy(tx, req.SslPolicyId, req.Http2Enabled, req.MinVersion, req.SslCertsJSON, req.HstsJSON, req.ClientAuthType, req.ClientCACertsJSON, req.CipherSuitesIsOn, req.CipherSuites)
+	err = models.SharedSSLPolicyDAO.UpdatePolicy(tx, req.SslPolicyId, req.Http2Enabled, req.MinVersion, req.SslCertsJSON, req.HstsJSON, req.OcspIsOn, req.ClientAuthType, req.ClientCACertsJSON, req.CipherSuitesIsOn, req.CipherSuites)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +86,7 @@ func (this *SSLPolicyService) FindEnabledSSLPolicyConfig(ctx context.Context, re
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	config, err := models.SharedSSLPolicyDAO.ComposePolicyConfig(tx, req.SslPolicyId, nil)
 	if err != nil {

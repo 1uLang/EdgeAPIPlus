@@ -6,14 +6,14 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 )
 
-// 文件相关服务
+// FileService 文件相关服务
 type FileService struct {
 	BaseService
 }
 
-// 查找文件
+// FindEnabledFile 查找文件
 func (this *FileService) FindEnabledFile(ctx context.Context, req *pb.FindEnabledFileRequest) (*pb.FindEnabledFileResponse, error) {
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, -1)
+	_, userId, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +27,7 @@ func (this *FileService) FindEnabledFile(ctx context.Context, req *pb.FindEnable
 		return &pb.FindEnabledFileResponse{File: nil}, nil
 	}
 
-	if file.IsPublic != 1 {
+	if !file.IsPublic {
 		// 校验权限
 		if userId > 0 && int64(file.UserId) != userId {
 			return nil, this.PermissionError()
@@ -40,35 +40,44 @@ func (this *FileService) FindEnabledFile(ctx context.Context, req *pb.FindEnable
 			Filename:  file.Filename,
 			Size:      int64(file.Size),
 			CreatedAt: int64(file.CreatedAt),
-			IsPublic:  file.IsPublic == 1,
+			IsPublic:  file.IsPublic,
+			MimeType:  file.MimeType,
+			Type:      file.Type,
 		},
 	}, nil
 }
 
-// 创建文件
+// CreateFile 创建文件
 func (this *FileService) CreateFile(ctx context.Context, req *pb.CreateFileRequest) (*pb.CreateFileResponse, error) {
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	adminId, userId, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	fileId, err := models.SharedFileDAO.CreateFile(tx, adminId, userId, "ipLibrary", "", req.Filename, req.Size, req.IsPublic)
+	fileId, err := models.SharedFileDAO.CreateFile(tx, adminId, userId, req.Type, "", req.Filename, req.Size, req.MimeType, req.IsPublic)
 	if err != nil {
 		return nil, err
 	}
 	return &pb.CreateFileResponse{FileId: fileId}, nil
 }
 
-// 将文件置为已完成
+// UpdateFileFinished 将文件置为已完成
 func (this *FileService) UpdateFileFinished(ctx context.Context, req *pb.UpdateFileFinishedRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
+
+	if userId > 0 {
+		err = models.SharedFileDAO.CheckUserFile(tx, userId, req.FileId)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	err = models.SharedFileDAO.UpdateFileIsFinished(tx, req.FileId)
 	if err != nil {

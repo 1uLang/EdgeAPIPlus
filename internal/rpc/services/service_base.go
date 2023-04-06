@@ -10,6 +10,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/authority"
 	"github.com/TeaOSLab/EdgeAPI/internal/encrypt"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/rpc"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/iwind/TeaGo/dbs"
@@ -22,19 +23,16 @@ type BaseService struct {
 }
 
 // ValidateAdmin 校验管理员
-func (this *BaseService) ValidateAdmin(ctx context.Context, reqAdminId int64) (adminId int64, err error) {
+func (this *BaseService) ValidateAdmin(ctx context.Context) (adminId int64, err error) {
 	_, _, reqUserId, err := rpcutils.ValidateRequest(ctx, rpcutils.UserTypeAdmin)
 	if err != nil {
 		return
-	}
-	if reqAdminId > 0 && reqUserId != reqAdminId {
-		return 0, this.PermissionError()
 	}
 	return reqUserId, nil
 }
 
 // ValidateAdminAndUser 校验管理员和用户
-func (this *BaseService) ValidateAdminAndUser(ctx context.Context, requireAdminId int64, requireUserId int64) (adminId int64, userId int64, err error) {
+func (this *BaseService) ValidateAdminAndUser(ctx context.Context, canRest bool) (adminId int64, userId int64, err error) {
 	reqUserType, _, reqUserId, err := rpcutils.ValidateRequest(ctx, rpcutils.UserTypeAdmin, rpcutils.UserTypeUser)
 	if err != nil {
 		return
@@ -49,22 +47,23 @@ func (this *BaseService) ValidateAdminAndUser(ctx context.Context, requireAdminI
 			err = errors.New("invalid 'adminId'")
 			return
 		}
-		if requireAdminId > 0 && adminId != requireAdminId {
-			err = this.PermissionError()
-			return
-		}
 	case rpcutils.UserTypeUser:
 		userId = reqUserId
-		if requireUserId >= 0 && userId <= 0 {
+		if userId < 0 { // 允许等于0
 			err = errors.New("invalid 'userId'")
-			return
-		}
-		if requireUserId > 0 && userId != requireUserId {
-			err = this.PermissionError()
 			return
 		}
 	default:
 		err = errors.New("invalid user type")
+	}
+
+	if err != nil {
+		return
+	}
+
+	if userId > 0 && !canRest && rpcutils.IsRest(ctx) {
+		err = errors.New("can not be called by rest")
+		return
 	}
 
 	return
@@ -83,7 +82,13 @@ func (this *BaseService) ValidateNSNode(ctx context.Context) (nodeId int64, err 
 }
 
 // ValidateUserNode 校验用户节点
-func (this *BaseService) ValidateUserNode(ctx context.Context) (userId int64, err error) {
+func (this *BaseService) ValidateUserNode(ctx context.Context, canRest bool) (userId int64, err error) {
+	// 不允许REST调用
+	if !canRest && rpcutils.IsRest(ctx) {
+		err = errors.New("can not be called by rest")
+		return
+	}
+
 	_, _, userId, err = rpcutils.ValidateRequest(ctx, rpcutils.UserTypeUser)
 	return
 }
@@ -102,6 +107,11 @@ func (this *BaseService) ValidateAuthorityNode(ctx context.Context) (nodeId int6
 
 // ValidateNodeId 获取节点ID
 func (this *BaseService) ValidateNodeId(ctx context.Context, roles ...rpcutils.UserType) (role rpcutils.UserType, nodeIntId int64, err error) {
+	// 默认包含大部分节点
+	if len(roles) == 0 {
+		roles = []rpcutils.UserType{rpcutils.UserTypeNode, rpcutils.UserTypeCluster, rpcutils.UserTypeAdmin, rpcutils.UserTypeUser, rpcutils.UserTypeDNS, rpcutils.UserTypeReport, rpcutils.UserTypeMonitor, rpcutils.UserTypeLog}
+	}
+
 	if ctx == nil {
 		err = errors.New("context should not be nil")
 		role = rpcutils.UserTypeNone
@@ -230,4 +240,26 @@ func (this *BaseService) RunTx(callback func(tx *dbs.Tx) error) error {
 		return err
 	}
 	return db.RunTx(callback)
+}
+
+// BeginTag 开始标签统计
+func (this *BaseService) BeginTag(ctx context.Context, name string) {
+	if !teaconst.Debug {
+		return
+	}
+	traceCtx, ok := ctx.(*rpc.Context)
+	if ok {
+		traceCtx.Begin(name)
+	}
+}
+
+// EndTag 结束标签统计
+func (this *BaseService) EndTag(ctx context.Context, name string) {
+	if !teaconst.Debug {
+		return
+	}
+	traceCtx, ok := ctx.(*rpc.Context)
+	if ok {
+		traceCtx.End(name)
+	}
 }

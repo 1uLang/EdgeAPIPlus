@@ -6,6 +6,8 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/configutils"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -115,22 +117,23 @@ func (this *NodeIPAddressDAO) FindAddressIsHealthy(tx *dbs.Tx, addressId int64) 
 		return false, err
 	}
 	var addr = one.(*NodeIPAddress)
-	return addr.IsHealthy == 1, nil
+	return addr.IsHealthy, nil
 }
 
 // CreateAddress 创建IP地址
-func (this *NodeIPAddressDAO) CreateAddress(tx *dbs.Tx, adminId int64, nodeId int64, role nodeconfigs.NodeRole, name string, ip string, canAccess bool, isUp bool) (addressId int64, err error) {
+func (this *NodeIPAddressDAO) CreateAddress(tx *dbs.Tx, adminId int64, nodeId int64, role nodeconfigs.NodeRole, name string, ip string, canAccess bool, isUp bool, groupId int64) (addressId int64, err error) {
 	if len(role) == 0 {
 		role = nodeconfigs.NodeRoleNode
 	}
 
-	op := NewNodeIPAddressOperator()
+	var op = NewNodeIPAddressOperator()
 	op.NodeId = nodeId
 	op.Role = role
 	op.Name = name
 	op.Ip = ip
 	op.CanAccess = canAccess
 	op.IsUp = isUp
+	op.GroupId = groupId
 
 	op.State = NodeIPAddressStateEnabled
 	addressId, err = this.SaveInt64(tx, op)
@@ -158,7 +161,7 @@ func (this *NodeIPAddressDAO) UpdateAddress(tx *dbs.Tx, adminId int64, addressId
 		return errors.New("invalid addressId")
 	}
 
-	op := NewNodeIPAddressOperator()
+	var op = NewNodeIPAddressOperator()
 	op.Id = addressId
 	op.Name = name
 	op.Ip = ip
@@ -186,7 +189,7 @@ func (this *NodeIPAddressDAO) UpdateAddressIP(tx *dbs.Tx, addressId int64, ip st
 	if addressId <= 0 {
 		return errors.New("invalid addressId")
 	}
-	op := NewNodeIPAddressOperator()
+	var op = NewNodeIPAddressOperator()
 	op.Id = addressId
 	op.Ip = ip
 	err := this.Save(tx, op)
@@ -232,17 +235,20 @@ func (this *NodeIPAddressDAO) FindAllEnabledAddressesWithNode(tx *dbs.Tx, nodeId
 }
 
 // FindFirstNodeAccessIPAddress 查找节点的第一个可访问的IP地址
-func (this *NodeIPAddressDAO) FindFirstNodeAccessIPAddress(tx *dbs.Tx, nodeId int64, role nodeconfigs.NodeRole) (ip string, addrId int64, err error) {
+func (this *NodeIPAddressDAO) FindFirstNodeAccessIPAddress(tx *dbs.Tx, nodeId int64, mustUp bool, role nodeconfigs.NodeRole) (ip string, addrId int64, err error) {
 	if len(role) == 0 {
 		role = nodeconfigs.NodeRoleNode
 	}
-	one, err := this.Query(tx).
+	var query = this.Query(tx).
 		Attr("nodeId", nodeId).
 		Attr("role", role).
 		State(NodeIPAddressStateEnabled).
 		Attr("canAccess", true).
-		Attr("isOn", true).
-		Attr("isUp", true).
+		Attr("isOn", true)
+	if mustUp {
+		query.Attr("isUp", true)
+	}
+	one, err := query.
 		Desc("order").
 		AscPk().
 		Result("id", "ip").
@@ -259,17 +265,20 @@ func (this *NodeIPAddressDAO) FindFirstNodeAccessIPAddress(tx *dbs.Tx, nodeId in
 }
 
 // FindFirstNodeAccessIPAddressId 查找节点的第一个可访问的IP地址ID
-func (this *NodeIPAddressDAO) FindFirstNodeAccessIPAddressId(tx *dbs.Tx, nodeId int64, role nodeconfigs.NodeRole) (int64, error) {
+func (this *NodeIPAddressDAO) FindFirstNodeAccessIPAddressId(tx *dbs.Tx, nodeId int64, mustUp bool, role nodeconfigs.NodeRole) (int64, error) {
 	if len(role) == 0 {
 		role = nodeconfigs.NodeRoleNode
 	}
-	return this.Query(tx).
+	var query = this.Query(tx).
 		Attr("nodeId", nodeId).
 		Attr("role", role).
 		State(NodeIPAddressStateEnabled).
 		Attr("canAccess", true).
-		Attr("isOn", true).
-		Attr("isUp", true).
+		Attr("isOn", true)
+	if mustUp {
+		query.Attr("isUp", true)
+	}
+	return query.
 		Desc("order").
 		AscPk().
 		Result("id").
@@ -322,7 +331,7 @@ func (this *NodeIPAddressDAO) CountAllEnabledIPAddresses(tx *dbs.Tx, role string
 	// 关键词
 	if len(keyword) > 0 {
 		query.Where("(ip LIKE :keyword OR name LIKE :keyword OR description LIKE :keyword OR nodeId IN (SELECT id FROM "+SharedNodeDAO.Table+" WHERE state=1 AND name LIKE :keyword))").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 
 	return query.Count()
@@ -354,7 +363,7 @@ func (this *NodeIPAddressDAO) ListEnabledIPAddresses(tx *dbs.Tx, role string, no
 	// 关键词
 	if len(keyword) > 0 {
 		query.Where("(ip LIKE :keyword OR name LIKE :keyword OR description LIKE :keyword OR nodeId IN (SELECT id FROM "+SharedNodeDAO.Table+" WHERE state=1 AND name LIKE :keyword))").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 
 	_, err = query.Offset(offset).
@@ -367,7 +376,15 @@ func (this *NodeIPAddressDAO) ListEnabledIPAddresses(tx *dbs.Tx, role string, no
 }
 
 // FindAllAccessibleIPAddressesWithClusterId 列出所有的正在启用的IP地址
-func (this *NodeIPAddressDAO) FindAllAccessibleIPAddressesWithClusterId(tx *dbs.Tx, role string, clusterId int64) (result []*NodeIPAddress, err error) {
+func (this *NodeIPAddressDAO) FindAllAccessibleIPAddressesWithClusterId(tx *dbs.Tx, role string, clusterId int64, cacheMap *utils.CacheMap) (result []*NodeIPAddress, err error) {
+	var cacheKey = this.Table + ":FindAllAccessibleIPAddressesWithClusterId:" + role + ":" + types.String(clusterId)
+	if cacheMap != nil {
+		cache, ok := cacheMap.Get(cacheKey)
+		if ok {
+			return cache.([]*NodeIPAddress), nil
+		}
+	}
+
 	_, err = this.Query(tx).
 		State(NodeIPAddressStateEnabled).
 		Attr("role", role).
@@ -377,6 +394,14 @@ func (this *NodeIPAddressDAO) FindAllAccessibleIPAddressesWithClusterId(tx *dbs.
 		Param("clusterId", clusterId).
 		Slice(&result).
 		FindAll()
+	if err != nil {
+		return
+	}
+
+	if cacheMap != nil {
+		cacheMap.Put(cacheKey, result)
+	}
+
 	return
 }
 
@@ -442,6 +467,7 @@ func (this *NodeIPAddressDAO) UpdateAddressBackupIP(tx *dbs.Tx, addressId int64,
 		return errors.New("invalid addressId")
 	}
 	var op = NewNodeIPAddressOperator()
+	op.IsUp = true // IP必须在线备用IP才会有用
 	op.Id = addressId
 	op.BackupThresholdId = thresholdId
 	op.BackupIP = ip
@@ -453,13 +479,13 @@ func (this *NodeIPAddressDAO) UpdateAddressBackupIP(tx *dbs.Tx, addressId int64,
 }
 
 // UpdateAddressHealthCount 计算IP健康状态
-func (this *NodeIPAddressDAO) UpdateAddressHealthCount(tx *dbs.Tx, addrId int64, isUp bool, maxUp int, maxDown int) (changed bool, err error) {
+func (this *NodeIPAddressDAO) UpdateAddressHealthCount(tx *dbs.Tx, addrId int64, newIsUp bool, maxUp int, maxDown int, autoUpDown bool) (changed bool, err error) {
 	if addrId <= 0 {
 		return false, errors.New("invalid address id")
 	}
 	one, err := this.Query(tx).
 		Pk(addrId).
-		Result("isHealthy", "countUp", "countDown").
+		Result("isHealthy", "isUp", "countUp", "countDown").
 		Find()
 	if err != nil {
 		return false, err
@@ -467,26 +493,57 @@ func (this *NodeIPAddressDAO) UpdateAddressHealthCount(tx *dbs.Tx, addrId int64,
 	if one == nil {
 		return false, nil
 	}
-	oldIsHealthy := one.(*NodeIPAddress).IsHealthy == 1
+	var oldIsHealthy = one.(*NodeIPAddress).IsHealthy
+	var oldIsUp = one.(*NodeIPAddress).IsUp
 
 	// 如果新老状态一致，则不做任何事情
-	if oldIsHealthy == isUp {
+	if oldIsHealthy == newIsUp {
+		// 如果自动上下线，则健康状况和是否在线保持一致
+		if autoUpDown {
+			if oldIsUp != oldIsHealthy {
+				err = this.Query(tx).
+					Pk(addrId).
+					Set("isUp", newIsUp).
+					UpdateQuickly()
+				if err != nil {
+					return false, err
+				}
+				err = this.NotifyUpdate(tx, addrId)
+				if err != nil {
+					return false, err
+				}
+
+				// 创建日志
+				if newIsUp {
+					err = SharedNodeIPAddressLogDAO.CreateLog(tx, 0, addrId, "健康检查上线")
+				} else {
+					err = SharedNodeIPAddressLogDAO.CreateLog(tx, 0, addrId, "健康检查下线")
+				}
+				if err != nil {
+					return true, err
+				}
+
+				return true, nil
+			}
+		}
 		return false, nil
 	}
 
-	countUp := int(one.(*NodeIPAddress).CountUp)
-	countDown := int(one.(*NodeIPAddress).CountDown)
+	var countUp = int(one.(*NodeIPAddress).CountUp)
+	var countDown = int(one.(*NodeIPAddress).CountDown)
 
-	op := NewNodeIPAddressOperator()
+	var op = NewNodeIPAddressOperator()
 	op.Id = addrId
 
-	if isUp {
+	if newIsUp {
 		countUp++
 		countDown = 0
 
 		if countUp >= maxUp {
 			changed = true
-			//op.IsUp = true
+			if autoUpDown {
+				op.IsUp = true
+			}
 			op.IsHealthy = true
 		}
 	} else {
@@ -495,7 +552,9 @@ func (this *NodeIPAddressDAO) UpdateAddressHealthCount(tx *dbs.Tx, addrId int64,
 
 		if countDown >= maxDown {
 			changed = true
-			//op.IsUp = false
+			if autoUpDown {
+				op.IsUp = false
+			}
 			op.IsHealthy = false
 		}
 	}
@@ -511,6 +570,15 @@ func (this *NodeIPAddressDAO) UpdateAddressHealthCount(tx *dbs.Tx, addrId int64,
 		err = this.NotifyUpdate(tx, addrId)
 		if err != nil {
 			return true, err
+		}
+
+		// 创建日志
+		if autoUpDown {
+			if newIsUp {
+				err = SharedNodeIPAddressLogDAO.CreateLog(tx, 0, addrId, "健康检查上线")
+			} else {
+				err = SharedNodeIPAddressLogDAO.CreateLog(tx, 0, addrId, "健康检查下线")
+			}
 		}
 	}
 
@@ -537,9 +605,21 @@ func (this *NodeIPAddressDAO) NotifyUpdate(tx *dbs.Tx, addressId int64) error {
 	switch role {
 	case nodeconfigs.NodeRoleNode:
 		err = dns.SharedDNSTaskDAO.CreateNodeTask(tx, nodeId, dns.DNSTaskTypeNodeChange)
-	}
-	if err != nil {
-		return err
+		if err != nil {
+			return err
+		}
+
+		// 检查是否为L2以上级别
+		level, err := SharedNodeDAO.FindNodeLevel(tx, nodeId)
+		if err != nil {
+			return err
+		}
+		if level > 1 {
+			err = SharedNodeDAO.NotifyLevelUpdate(tx, nodeId)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

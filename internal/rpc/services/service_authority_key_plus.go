@@ -8,7 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
+	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/authority"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	plusutils "github.com/TeaOSLab/EdgePlus/pkg/utils"
@@ -29,21 +31,41 @@ func (this *AuthorityKeyService) UpdateAuthorityKey(ctx context.Context, req *pb
 	}
 	var tx = this.NullTx()
 
-	m, err := plusutils.Decode([]byte(req.Value))
+	key, err := plusutils.DecodeKey([]byte(req.Value))
 	if err != nil {
 		return nil, err
 	}
 
 	var addresses = []string{}
-	var macAddresses = m.GetSlice("macAddresses")
+	var macAddresses = key.MacAddresses
 	for _, addr := range macAddresses {
 		addresses = append(addresses, types.String(addr))
 	}
 
-	err = authority.SharedAuthorityKeyDAO.UpdateKey(tx, req.Value, m.GetString("dayFrom"), m.GetString("dayTo"), m.GetString("hostname"), addresses, m.GetString("company"))
+	err = authority.SharedAuthorityKeyDAO.UpdateKey(tx, req.Value, key.DayFrom, key.DayTo, key.Hostname, addresses, key.Company)
 	if err != nil {
 		return nil, err
 	}
+
+	// 设置显示财务管理
+	if key.IsValid() {
+		adminConfig, err := models.SharedSysSettingDAO.ReadAdminUIConfig(tx, nil)
+		if err != nil {
+			return nil, err
+		}
+		if adminConfig != nil {
+			adminConfig.ShowFinance = true
+			adminConfigJSON, err := json.Marshal(adminConfig)
+			if err != nil {
+				return nil, err
+			}
+			err = models.SharedSysSettingDAO.UpdateSetting(tx, systemconfigs.SettingCodeAdminUIConfig, adminConfigJSON)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	return this.Success()
 }
 
@@ -66,36 +88,33 @@ func (this *AuthorityKeyService) ReadAuthorityKey(ctx context.Context, req *pb.R
 		return &pb.ReadAuthorityKeyResponse{AuthorityKey: nil}, nil
 	}
 
-	m, err := plusutils.Decode([]byte(key.Value))
+	m, err := plusutils.DecodeKey([]byte(key.Value))
 	if err != nil {
 		return nil, err
 	}
 
-	macAddresses := []string{}
-	if len(key.MacAddresses) > 0 {
-		err = json.Unmarshal([]byte(key.MacAddresses), &macAddresses)
-		if err != nil {
-			return nil, err
-		}
-	}
+	teaconst.MaxNodes = int32(m.Nodes)
 
-	teaconst.MaxNodes = m.GetInt32("nodes")
+	if len(m.Components) == 0 {
+		m.Components = []string{"*"}
+	}
 
 	return &pb.ReadAuthorityKeyResponse{AuthorityKey: &pb.AuthorityKey{
 		Value:        key.Value,
-		DayFrom:      m.GetString("dayFrom"),
-		DayTo:        m.GetString("dayTo"),
-		Nodes:        m.GetInt32("nodes"),
-		Hostname:     key.Hostname,
-		MacAddresses: macAddresses,
-		Company:      key.Company,
-		UpdatedAt:    int64(key.UpdatedAt),
+		DayFrom:      m.DayFrom,
+		DayTo:        m.DayTo,
+		Nodes:        int32(m.Nodes),
+		Hostname:     m.Hostname,
+		MacAddresses: m.MacAddresses,
+		Company:      m.Company,
+		UpdatedAt:    m.UpdatedAt,
+		Components:   m.Components,
 	}}, nil
 }
 
 // ResetAuthorityKey 重置Key
 func (this *AuthorityKeyService) ResetAuthorityKey(ctx context.Context, req *pb.ResetAuthorityKeyRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -108,16 +127,16 @@ func (this *AuthorityKeyService) ResetAuthorityKey(ctx context.Context, req *pb.
 
 // ValidateAuthorityKey 校验Key
 func (this *AuthorityKeyService) ValidateAuthorityKey(ctx context.Context, req *pb.ValidateAuthorityKeyRequest) (*pb.ValidateAuthorityKeyResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	m, err := plusutils.Decode([]byte(req.Key))
+	m, err := plusutils.DecodeKey([]byte(req.Key))
 	if err != nil {
 		return &pb.ValidateAuthorityKeyResponse{IsOk: false, Error: err.Error()}, nil
 	}
 
-	var dayTo = m.GetString("dayTo")
+	var dayTo = m.DayTo
 	if dayTo < timeutil.Format("Y-m-d") {
 		return &pb.ValidateAuthorityKeyResponse{IsOk: false, Error: "激活码已于" + dayTo + "过期"}, nil
 	}

@@ -2,13 +2,13 @@ package setup
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/dnsconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
 	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/acme"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeAPI/internal/db/models/stats"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/iwind/TeaGo/dbs"
@@ -17,7 +17,6 @@ import (
 	"github.com/iwind/TeaGo/rands"
 	"github.com/iwind/TeaGo/types"
 	stringutil "github.com/iwind/TeaGo/utils/string"
-	"regexp"
 )
 
 type upgradeVersion struct {
@@ -58,6 +57,33 @@ var upgradeFuncs = []*upgradeVersion{
 	},
 	{
 		"0.3.3", upgradeV0_3_3,
+	},
+	{
+		"0.3.7", upgradeV0_3_7,
+	},
+	{
+		"0.4.0", upgradeV0_4_0,
+	},
+	{
+		"0.4.1", upgradeV0_4_1,
+	},
+	{
+		"0.4.5", upgradeV0_4_5,
+	},
+	{
+		"0.4.7", upgradeV0_4_7,
+	},
+	{
+		"0.4.8", upgradeV0_4_8,
+	},
+	{
+		"0.4.9", upgradeV0_4_9,
+	},
+	{
+		"0.4.11", upgradeV0_4_11,
+	},
+	{
+		"v0.5.3", upgradeV0_5_3,
 	},
 }
 
@@ -270,75 +296,6 @@ func upgradeV0_2_5(db *dbs.DB) error {
 	return nil
 }
 
-// v0.2.8.1
-func upgradeV0_2_8_1(db *dbs.DB) error {
-	// 访问日志设置
-	{
-		one, err := db.FindOne("SELECT id FROM edgeSysSettings WHERE code=? LIMIT 1", systemconfigs.SettingCodeNSAccessLogSetting)
-		if err != nil {
-			return err
-		}
-		if len(one) == 0 {
-			ref := &dnsconfigs.NSAccessLogRef{
-				IsPrior:           false,
-				IsOn:              true,
-				LogMissingDomains: false,
-			}
-			refJSON, err := json.Marshal(ref)
-			if err != nil {
-				return err
-			}
-			_, err = db.Exec("INSERT edgeSysSettings (code, value) VALUES (?, ?)", systemconfigs.SettingCodeNSAccessLogSetting, refJSON)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	// 升级EdgeDNS线路
-	ones, _, err := db.FindOnes("SELECT id, dnsRoutes FROM edgeNodes WHERE dnsRoutes IS NOT NULL")
-	if err != nil {
-		return err
-	}
-	for _, one := range ones {
-		var nodeId = one.GetInt64("id")
-		var dnsRoutes = one.GetString("dnsRoutes")
-		if len(dnsRoutes) == 0 {
-			continue
-		}
-		var m = map[string][]string{}
-		err = json.Unmarshal([]byte(dnsRoutes), &m)
-		if err != nil {
-			continue
-		}
-		var isChanged = false
-		var reg = regexp.MustCompile(`^\d+$`)
-		for k, routes := range m {
-			for index, route := range routes {
-				if reg.MatchString(route) {
-					route = "id:" + route
-					isChanged = true
-				}
-				routes[index] = route
-			}
-			m[k] = routes
-		}
-
-		if isChanged {
-			mJSON, err := json.Marshal(m)
-			if err != nil {
-				return err
-			}
-			_, err = db.Exec("UPDATE edgeNodes SET dnsRoutes=? WHERE id=? LIMIT 1", string(mJSON), nodeId)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 // v0.3.0
 func upgradeV0_3_0(db *dbs.DB) error {
 	// 升级健康检查
@@ -528,6 +485,292 @@ func upgradeV0_3_3(db *dbs.DB) error {
 	err = models.NewNodeLogDAO().DeleteExpiredLogsWithLevel(nil, "info", 7)
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// v0.3.7
+func upgradeV0_3_7(db *dbs.DB) error {
+	// 修改所有edgeNodeGrants中的su为0
+	_, err := db.Exec("UPDATE edgeNodeGrants SET su=0 WHERE su=1")
+	if err != nil {
+		return err
+	}
+
+	// WAF预置分组
+	_, err = db.Exec("UPDATE edgeHTTPFirewallRuleGroups SET isTemplate=1 WHERE LENGTH(code)>0")
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// v0.4.0
+func upgradeV0_4_0(db *dbs.DB) error {
+	// 升级SYN Flood配置
+	synFloodJSON, err := json.Marshal(firewallconfigs.DefaultSYNFloodConfig())
+	if err == nil {
+		_, err := db.Exec("UPDATE edgeHTTPFirewallPolicies SET synFlood=? WHERE synFlood IS NULL AND state=1", string(synFloodJSON))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// v0.4.1
+func upgradeV0_4_1(db *dbs.DB) error {
+	// 升级 servers.lastUserPlanId
+	_, err := db.Exec("UPDATE edgeServers SET lastUserPlanId=userPlanId WHERE userPlanId>0")
+	if err != nil {
+		return err
+	}
+
+	// 执行域名统计清理
+	err = stats.NewServerDomainHourlyStatDAO().Clean(nil, 7)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// v0.4.5
+func upgradeV0_4_5(db *dbs.DB) error {
+	// 升级访问日志自动分表
+	{
+		var dao = models.NewSysSettingDAO()
+		valueJSON, err := dao.ReadSetting(nil, systemconfigs.SettingCodeAccessLogQueue)
+		if err != nil {
+			return err
+		}
+		if len(valueJSON) > 0 {
+			var config = &serverconfigs.AccessLogQueueConfig{}
+			err = json.Unmarshal(valueJSON, config)
+			if err == nil && config.RowsPerTable == 0 {
+				config.EnableAutoPartial = true
+				config.RowsPerTable = 500_000
+				configJSON, err := json.Marshal(config)
+				if err == nil {
+					err = dao.UpdateSetting(nil, systemconfigs.SettingCodeAccessLogQueue, configJSON)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	// 升级一个防SQL注入规则
+	{
+		ones, _, err := db.FindOnes(`SELECT id FROM edgeHTTPFirewallRules WHERE value=?`, "(updatexml|extractvalue|ascii|ord|char|chr|count|concat|rand|floor|substr|length|len|user|database|benchmark|analyse)\\s*\\(")
+		if err != nil {
+			return err
+		}
+		for _, one := range ones {
+			var ruleId = one.GetInt64("id")
+			_, err = db.Exec(`UPDATE edgeHTTPFirewallRules SET value=? WHERE id=? LIMIT 1`, `\b(updatexml|extractvalue|ascii|ord|char|chr|count|concat|rand|floor|substr|length|len|user|database|benchmark|analyse)\s*\(.*\)`, ruleId)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// v0.4.7
+func upgradeV0_4_7(db *dbs.DB) error {
+	// 升级 edgeServers 中的 plainServerNames
+	{
+		ones, _, err := db.FindOnes("SELECT id,serverNames FROM edgeServers WHERE state=1")
+		if err != nil {
+			return err
+		}
+		for _, one := range ones {
+			var serverId = one.GetInt64("id")
+			var serverNamesJSON = one.GetBytes("serverNames")
+			if len(serverNamesJSON) > 0 {
+				var serverNames = []*serverconfigs.ServerNameConfig{}
+				err = json.Unmarshal(serverNamesJSON, &serverNames)
+				if err != nil {
+					return err
+				}
+				plainServerNamesJSON, err := json.Marshal(serverconfigs.PlainServerNames(serverNames))
+				if err != nil {
+					return err
+				}
+				_, err = db.Exec("UPDATE edgeServers SET plainServerNames=? WHERE id=?", plainServerNamesJSON, serverId)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// v0.4.8
+func upgradeV0_4_8(db *dbs.DB) error {
+	// 设置edgeIPLists中的serverId
+	{
+		firewallPolicyOnes, _, err := db.FindOnes("SELECT inbound,serverId FROM edgeHTTPFirewallPolicies WHERE serverId>0")
+		if err != nil {
+			return err
+		}
+		for _, one := range firewallPolicyOnes {
+			var inboundBytes = one.GetBytes("inbound")
+			var serverId = one.GetInt64("serverId")
+
+			var listIds = []int64{}
+
+			if len(inboundBytes) > 0 {
+				var inbound = &firewallconfigs.HTTPFirewallInboundConfig{}
+				err = json.Unmarshal(inboundBytes, inbound)
+				if err == nil { // we ignore errors
+					if inbound.AllowListRef != nil && inbound.AllowListRef.ListId > 0 {
+						listIds = append(listIds, inbound.AllowListRef.ListId)
+					}
+					if inbound.DenyListRef != nil && inbound.DenyListRef.ListId > 0 {
+						listIds = append(listIds, inbound.DenyListRef.ListId)
+					}
+					if inbound.GreyListRef != nil && inbound.GreyListRef.ListId > 0 {
+						listIds = append(listIds, inbound.GreyListRef.ListId)
+					}
+				}
+			}
+
+			if len(listIds) == 0 {
+				continue
+			}
+			for _, listId := range listIds {
+				isPublicCol, err := db.FindCol(0, "SELECT isPublic FROM edgeIPLists WHERE id=? LIMIT 1", listId)
+				if err != nil {
+					return err
+				}
+				var isPublic = types.Bool(isPublicCol)
+				if !isPublic {
+					_, err = db.Exec("UPDATE edgeIPLists SET serverId=? WHERE id=?", serverId, listId)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// v0.4.9
+func upgradeV0_4_9(db *dbs.DB) error {
+	// 升级用户UI配置
+	{
+		one, err := db.FindOne("SELECT value FROM edgeSysSettings WHERE code=?", systemconfigs.SettingCodeUserUIConfig)
+		if err != nil {
+			return err
+		}
+		if one != nil {
+			var valueJSON = one.GetBytes("value")
+			if len(valueJSON) > 0 {
+				var config = &systemconfigs.UserUIConfig{}
+				err = json.Unmarshal(valueJSON, config)
+				if err == nil {
+					config.ShowTrafficCharts = true
+					config.ShowBandwidthCharts = true
+					config.BandwidthUnit = systemconfigs.BandwidthUnitBit
+					configJSON, err := json.Marshal(config)
+					if err != nil {
+						return errors.New("encode UserUIConfig failed: " + err.Error())
+					} else {
+						_, err := db.Exec("UPDATE edgeSysSettings SET value=? WHERE code=?", configJSON, systemconfigs.SettingCodeUserUIConfig)
+						if err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 升级管理配置
+	{
+		one, err := db.FindOne("SELECT value FROM edgeSysSettings WHERE code=?", systemconfigs.SettingCodeAdminSecurityConfig)
+		if err != nil {
+			return err
+		}
+		if one != nil {
+			var valueJSON = one.GetBytes("value")
+			if len(valueJSON) > 0 {
+				var config = &systemconfigs.SecurityConfig{}
+				err = json.Unmarshal(valueJSON, config)
+				if err == nil {
+					config.DenySearchEngines = true
+					config.DenySpiders = true
+					configJSON, err := json.Marshal(config)
+					if err != nil {
+						return errors.New("encode SecurityConfig failed: " + err.Error())
+					} else {
+						_, err := db.Exec("UPDATE edgeSysSettings SET value=? WHERE code=?", configJSON, systemconfigs.SettingCodeAdminSecurityConfig)
+						if err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// v0.4.11
+func upgradeV0_4_11(db *dbs.DB) error {
+	// 升级ns端口
+	{
+		// TCP
+		{
+			var config = &serverconfigs.TCPProtocolConfig{}
+			config.IsOn = true
+			config.Listen = []*serverconfigs.NetworkAddressConfig{
+				{
+					Protocol:  serverconfigs.ProtocolTCP,
+					PortRange: "53",
+				},
+			}
+			configJSON, err := json.Marshal(config)
+			if err != nil {
+				return err
+			}
+			_, err = db.Exec("UPDATE edgeNSClusters SET tcp=? WHERE tcp IS NULL", configJSON)
+			if err != nil {
+				return err
+			}
+		}
+
+		// UDP
+		{
+			var config = &serverconfigs.UDPProtocolConfig{}
+			config.IsOn = true
+			config.Listen = []*serverconfigs.NetworkAddressConfig{
+				{
+					Protocol:  serverconfigs.ProtocolUDP,
+					PortRange: "53",
+				},
+			}
+			configJSON, err := json.Marshal(config)
+			if err != nil {
+				return err
+			}
+			_, err = db.Exec("UPDATE edgeNSClusters SET udp=? WHERE udp IS NULL", configJSON)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil

@@ -16,7 +16,7 @@ type ServerStatBoardChartService struct {
 
 // EnableServerStatBoardChart 添加图表
 func (this *ServerStatBoardChartService) EnableServerStatBoardChart(ctx context.Context, req *pb.EnableServerStatBoardChartRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func (this *ServerStatBoardChartService) EnableServerStatBoardChart(ctx context.
 
 // DisableServerStatBoardChart 取消图表
 func (this *ServerStatBoardChartService) DisableServerStatBoardChart(ctx context.Context, req *pb.DisableServerStatBoardChartRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func (this *ServerStatBoardChartService) DisableServerStatBoardChart(ctx context
 
 // FindAllEnabledServerStatBoardCharts 读取看板中的图表
 func (this *ServerStatBoardChartService) FindAllEnabledServerStatBoardCharts(ctx context.Context, req *pb.FindAllEnabledServerStatBoardChartsRequest) (*pb.FindAllEnabledServerStatBoardChartsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -86,11 +86,11 @@ func (this *ServerStatBoardChartService) FindAllEnabledServerStatBoardCharts(ctx
 				Type:       metricChart.Type,
 				WidthDiv:   types.Int32(metricChart.WidthDiv),
 				ParamsJSON: nil,
-				IsOn:       metricChart.IsOn == 1,
+				IsOn:       metricChart.IsOn,
 				MaxItems:   types.Int32(metricChart.MaxItems),
 				MetricItem: &pb.MetricItem{
 					Id:         int64(metricItem.Id),
-					IsOn:       metricItem.IsOn == 1,
+					IsOn:       metricItem.IsOn,
 					Code:       metricItem.Code,
 					Category:   metricItem.Category,
 					Name:       metricItem.Name,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"os"
 	"path/filepath"
 	"regexp"
 )
@@ -76,12 +77,12 @@ func (this *NodeInstaller) Install(dir string, params interface{}, installStatus
 		_, err = this.client.Stat(exePath)
 		if err == nil {
 			_, _, _ = this.client.Exec(exePath + " quit")
-		}
 
-		// 删除可执行文件防止冲突
-		err = this.client.Remove(exePath)
-		if err != nil {
-			return errors.New("remove old file failed: " + err.Error())
+			// 删除可执行文件防止冲突
+			err = this.client.Remove(exePath)
+			if err != nil && err != os.ErrNotExist {
+				return errors.New("remove old file failed: " + err.Error())
+			}
 		}
 	}
 
@@ -97,6 +98,12 @@ func (this *NodeInstaller) Install(dir string, params interface{}, installStatus
 	// 修改配置文件
 	{
 		configFile := dir + "/edge-node/configs/api.yaml"
+
+		// sudo之后我们需要修改配置目录才能写入文件
+		if this.client.sudo {
+			_, _, _ = this.client.Exec("chown " + this.client.User() + " " + filepath.Dir(configFile))
+		}
+
 		var data = []byte(`rpc:
   endpoints: [ ${endpoints} ]
 nodeId: "${nodeId}"
@@ -108,7 +115,7 @@ secret: "${nodeSecret}"`)
 
 		_, err = this.client.WriteFile(configFile, data)
 		if err != nil {
-			return errors.New("write 'configs/api.yaml': " + err.Error())
+			return errors.New("write '" + configFile + "': " + err.Error())
 		}
 	}
 
@@ -116,7 +123,7 @@ secret: "${nodeSecret}"`)
 	_, stderr, err = this.client.Exec(dir + "/edge-node/bin/edge-node test")
 	if err != nil {
 		installStatus.ErrorCode = "TEST_FAILED"
-		return errors.New("test edge node failed: " + err.Error())
+		return errors.New("test edge node failed: " + err.Error() + ", stderr: " + stderr)
 	}
 	if len(stderr) > 0 {
 		if regexp.MustCompile(`(?i)rpc`).MatchString(stderr) {

@@ -1,7 +1,7 @@
 package nodes
 
 import (
-	"github.com/shirou/gopsutil/cpu"
+	"github.com/shirou/gopsutil/v3/cpu"
 	"testing"
 	"time"
 )
@@ -19,7 +19,7 @@ func TestNodeStatusExecutor_CPU(t *testing.T) {
 	}
 	t.Log("physical count:", countPhysicalCPU)
 
-	percents, err := cpu.Percent(100 * time.Millisecond, false)
+	percents, err := cpu.Percent(100*time.Millisecond, false)
 	if err != nil {
 		t.Fatal(err)
 	}

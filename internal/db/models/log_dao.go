@@ -1,7 +1,9 @@
 package models
 
 import (
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -33,11 +35,11 @@ func init() {
 	})
 }
 
-// 创建管理员日志
+// CreateLog 创建管理员日志
 func (this *LogDAO) CreateLog(tx *dbs.Tx, adminType string, adminId int64, level string, description string, action string, ip string) error {
-	op := NewLogOperator()
+	var op = NewLogOperator()
 	op.Level = level
-	op.Description = description
+	op.Description = utils.LimitString(description, 1000)
 	op.Action = action
 	op.Ip = ip
 	op.Type = adminType
@@ -57,7 +59,7 @@ func (this *LogDAO) CreateLog(tx *dbs.Tx, adminType string, adminId int64, level
 	return err
 }
 
-// 计算所有日志数量
+// CountLogs 计算所有日志数量
 func (this *LogDAO) CountLogs(tx *dbs.Tx, dayFrom string, dayTo string, keyword string, userType string) (int64, error) {
 	dayFrom = this.formatDay(dayFrom)
 	dayTo = this.formatDay(dayTo)
@@ -72,7 +74,7 @@ func (this *LogDAO) CountLogs(tx *dbs.Tx, dayFrom string, dayTo string, keyword 
 	}
 	if len(keyword) > 0 {
 		query.Where("(description LIKE :keyword OR ip LIKE :keyword OR action LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 
 	// 用户类型
@@ -86,7 +88,7 @@ func (this *LogDAO) CountLogs(tx *dbs.Tx, dayFrom string, dayTo string, keyword 
 	return query.Count()
 }
 
-// 列出单页日志
+// ListLogs 列出单页日志
 func (this *LogDAO) ListLogs(tx *dbs.Tx, offset int64, size int64, dayFrom string, dayTo string, keyword string, userType string) (result []*Log, err error) {
 	dayFrom = this.formatDay(dayFrom)
 	dayTo = this.formatDay(dayTo)
@@ -100,7 +102,7 @@ func (this *LogDAO) ListLogs(tx *dbs.Tx, offset int64, size int64, dayFrom strin
 	}
 	if len(keyword) > 0 {
 		query.Where("(description LIKE :keyword OR ip LIKE :keyword OR action LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 
 	// 用户类型
@@ -120,7 +122,7 @@ func (this *LogDAO) ListLogs(tx *dbs.Tx, offset int64, size int64, dayFrom strin
 	return
 }
 
-// 物理删除日志
+// DeleteLogPermanently 物理删除日志
 func (this *LogDAO) DeleteLogPermanently(tx *dbs.Tx, logId int64) error {
 	if logId <= 0 {
 		return errors.New("invalid logId")
@@ -129,14 +131,14 @@ func (this *LogDAO) DeleteLogPermanently(tx *dbs.Tx, logId int64) error {
 	return err
 }
 
-// 物理删除所有日志
+// DeleteAllLogsPermanently 物理删除所有日志
 func (this *LogDAO) DeleteAllLogsPermanently(tx *dbs.Tx) error {
 	_, err := this.Query(tx).
 		Delete()
 	return err
 }
 
-// 物理删除某些天之前的日志
+// DeleteLogsPermanentlyBeforeDays 物理删除某些天之前的日志
 func (this *LogDAO) DeleteLogsPermanentlyBeforeDays(tx *dbs.Tx, days int) error {
 	if days <= 0 {
 		days = 0
@@ -148,7 +150,7 @@ func (this *LogDAO) DeleteLogsPermanentlyBeforeDays(tx *dbs.Tx, days int) error 
 	return err
 }
 
-// 计算当前日志容量大小
+// SumLogsSize 计算当前日志容量大小
 func (this *LogDAO) SumLogsSize() (int64, error) {
 	col, err := this.Instance.FindCol(0, "SELECT DATA_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=? LIMIT 1", this.Instance.Name(), this.Table)
 	if err != nil {

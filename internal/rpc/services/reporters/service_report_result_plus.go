@@ -30,7 +30,7 @@ type ReportResultService struct {
 
 // CountAllReportResults 计算监控结果数量
 func (this *ReportResultService) CountAllReportResults(ctx context.Context, req *pb.CountAllReportResultsRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func (this *ReportResultService) CountAllReportResults(ctx context.Context, req 
 
 // ListReportResults 列出单页监控结果
 func (this *ReportResultService) ListReportResults(ctx context.Context, req *pb.ListReportResultsRequest) (*pb.ListReportResultsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (this *ReportResultService) ListReportResults(ctx context.Context, req *pb.
 			TargetId:     int64(result.TargetId),
 			TargetDesc:   result.TargetDesc,
 			ReportNodeId: int64(result.ReportNodeId),
-			IsOk:         result.IsOk == 1,
+			IsOk:         result.IsOk,
 			CostMs:       float32(result.CostMs),
 			Error:        result.Error,
 			UpdatedAt:    int64(result.UpdatedAt),
@@ -172,6 +172,7 @@ func (this *ReportResultService) UpdateReportResults(ctx context.Context, req *p
 							// 不阻断执行
 							remotelogs.Error("ReportResultService.UpdateReportResults", "notify url '"+url+"' failed: "+err.Error())
 						} else {
+							req.Header.Set("User-Agent", teaconst.ProductName+"/"+teaconst.Version)
 							resp, err := client.Do(req)
 							if err != nil {
 								// 不阻断执行
@@ -205,7 +206,7 @@ func (this *ReportResultService) UpdateReportResults(ctx context.Context, req *p
 
 // FindAllReportResults 查询某个对象的监控结果
 func (this *ReportResultService) FindAllReportResults(ctx context.Context, req *pb.FindAllReportResultsRequest) (*pb.FindAllReportResultsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +224,7 @@ func (this *ReportResultService) FindAllReportResults(ctx context.Context, req *
 			TargetId:     int64(result.TargetId),
 			TargetDesc:   result.TargetDesc,
 			ReportNodeId: int64(result.ReportNodeId),
-			IsOk:         result.IsOk == 1,
+			IsOk:         result.IsOk,
 			CostMs:       float32(result.CostMs),
 			Error:        result.Error,
 			UpdatedAt:    int64(result.UpdatedAt),

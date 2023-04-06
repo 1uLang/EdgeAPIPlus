@@ -18,7 +18,7 @@ type MessageReceiverService struct {
 
 // UpdateMessageReceivers 创建接收者
 func (this *MessageReceiverService) UpdateMessageReceivers(ctx context.Context, req *pb.UpdateMessageReceiversRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (this *MessageReceiverService) UpdateMessageReceivers(ctx context.Context, 
 
 // FindAllEnabledMessageReceivers 查找接收者
 func (this *MessageReceiverService) FindAllEnabledMessageReceivers(ctx context.Context, req *pb.FindAllEnabledMessageReceiversRequest) (*pb.FindAllEnabledMessageReceiversResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -113,14 +113,14 @@ func (this *MessageReceiverService) FindAllEnabledMessageReceivers(ctx context.C
 					Id:       int64(admin.Id),
 					Fullname: admin.Fullname,
 					Username: admin.Username,
-					IsOn:     admin.IsOn == 1,
+					IsOn:     admin.IsOn,
 				},
 				MessageMediaInstance: &pb.MessageMediaInstance{
 					Id:   int64(instance.Id),
 					Name: instance.Name,
-					IsOn: instance.IsOn == 1,
+					IsOn: instance.IsOn,
 				},
-				IsOn:                   recipient.IsOn == 1,
+				IsOn:                   recipient.IsOn,
 				MessageRecipientGroups: nil,
 				Description:            "",
 				User:                   "",
@@ -140,7 +140,7 @@ func (this *MessageReceiverService) FindAllEnabledMessageReceivers(ctx context.C
 			pbRecipientGroup = &pb.MessageRecipientGroup{
 				Id:   int64(group.Id),
 				Name: group.Name,
-				IsOn: group.IsOn == 1,
+				IsOn: group.IsOn,
 			}
 		}
 
@@ -150,7 +150,7 @@ func (this *MessageReceiverService) FindAllEnabledMessageReceivers(ctx context.C
 			NodeId:                int64(receiver.NodeId),
 			ServerId:              int64(receiver.ServerId),
 			Type:                  receiver.Type,
-			ParamsJSON:            []byte(receiver.Params),
+			ParamsJSON:            receiver.Params,
 			MessageRecipient:      pbRecipient,
 			MessageRecipientGroup: pbRecipientGroup,
 		})
@@ -160,7 +160,7 @@ func (this *MessageReceiverService) FindAllEnabledMessageReceivers(ctx context.C
 
 // DeleteMessageReceiver 删除接收者
 func (this *MessageReceiverService) DeleteMessageReceiver(ctx context.Context, req *pb.DeleteMessageReceiverRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (this *MessageReceiverService) DeleteMessageReceiver(ctx context.Context, r
 
 // CountAllEnabledMessageReceivers 计算接收者数量
 func (this *MessageReceiverService) CountAllEnabledMessageReceivers(ctx context.Context, req *pb.CountAllEnabledMessageReceiversRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

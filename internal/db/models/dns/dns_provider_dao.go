@@ -68,7 +68,7 @@ func (this *DNSProviderDAO) FindEnabledDNSProvider(tx *dbs.Tx, id int64) (*DNSPr
 
 // CreateDNSProvider 创建服务商
 func (this *DNSProviderDAO) CreateDNSProvider(tx *dbs.Tx, adminId int64, userId int64, providerType string, name string, apiParamsJSON []byte) (int64, error) {
-	op := NewDNSProviderOperator()
+	var op = NewDNSProviderOperator()
 	op.AdminId = adminId
 	op.UserId = userId
 	op.Type = providerType
@@ -90,7 +90,7 @@ func (this *DNSProviderDAO) UpdateDNSProvider(tx *dbs.Tx, dnsProviderId int64, n
 		return errors.New("invalid dnsProviderId")
 	}
 
-	op := NewDNSProviderOperator()
+	var op = NewDNSProviderOperator()
 	op.Id = dnsProviderId
 	op.Name = name
 
@@ -107,22 +107,39 @@ func (this *DNSProviderDAO) UpdateDNSProvider(tx *dbs.Tx, dnsProviderId int64, n
 }
 
 // CountAllEnabledDNSProviders 计算服务商数量
-func (this *DNSProviderDAO) CountAllEnabledDNSProviders(tx *dbs.Tx, adminId int64, userId int64, keyword string) (int64, error) {
+func (this *DNSProviderDAO) CountAllEnabledDNSProviders(tx *dbs.Tx, adminId int64, userId int64, keyword string, domain string, providerType string) (int64, error) {
 	var query = dbutils.NewQuery(tx, this, adminId, userId)
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
+
+	if len(domain) > 0 {
+		query.Where("id IN (SELECT providerId FROM " + SharedDNSDomainDAO.Table + " WHERE state=1 AND name=:domain)")
+		query.Param("domain", domain)
+	}
+
+	if len(providerType) > 0 {
+		query.Attr("type", providerType)
+	}
+
 	return query.State(DNSProviderStateEnabled).
 		Count()
 }
 
 // ListEnabledDNSProviders 列出单页服务商
-func (this *DNSProviderDAO) ListEnabledDNSProviders(tx *dbs.Tx, adminId int64, userId int64, keyword string, offset int64, size int64) (result []*DNSProvider, err error) {
+func (this *DNSProviderDAO) ListEnabledDNSProviders(tx *dbs.Tx, adminId int64, userId int64, keyword string, domain string, providerType string, offset int64, size int64) (result []*DNSProvider, err error) {
 	var query = dbutils.NewQuery(tx, this, adminId, userId)
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
+	}
+	if len(domain) > 0 {
+		query.Where("id IN (SELECT providerId FROM " + SharedDNSDomainDAO.Table + " WHERE state=1 AND name=:domain)")
+		query.Param("domain", domain)
+	}
+	if len(providerType) > 0 {
+		query.Attr("type", providerType)
 	}
 	_, err = query.
 		State(DNSProviderStateEnabled).

@@ -15,12 +15,12 @@ type APINodeService struct {
 
 // CreateAPINode 创建API节点
 func (this *APINodeService) CreateAPINode(ctx context.Context, req *pb.CreateAPINodeRequest) (*pb.CreateAPINodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodeId, err := models.SharedAPINodeDAO.CreateAPINode(tx, req.Name, req.Description, req.HttpJSON, req.HttpsJSON, req.RestIsOn, req.RestHTTPJSON, req.RestHTTPSJSON, req.AccessAddrsJSON, req.IsOn)
 	if err != nil {
@@ -32,14 +32,14 @@ func (this *APINodeService) CreateAPINode(ctx context.Context, req *pb.CreateAPI
 
 // UpdateAPINode 修改API节点
 func (this *APINodeService) UpdateAPINode(ctx context.Context, req *pb.UpdateAPINodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	err = models.SharedAPINodeDAO.UpdateAPINode(tx, req.ApiNodeId, req.Name, req.Description, req.HttpJSON, req.HttpsJSON, req.RestIsOn, req.RestHTTPJSON, req.RestHTTPSJSON, req.AccessAddrsJSON, req.IsOn)
+	err = models.SharedAPINodeDAO.UpdateAPINode(tx, req.ApiNodeId, req.Name, req.Description, req.HttpJSON, req.HttpsJSON, req.RestIsOn, req.RestHTTPJSON, req.RestHTTPSJSON, req.AccessAddrsJSON, req.IsOn, req.IsPrimary)
 	if err != nil {
 		return nil, err
 	}
@@ -49,12 +49,12 @@ func (this *APINodeService) UpdateAPINode(ctx context.Context, req *pb.UpdateAPI
 
 // DeleteAPINode 删除API节点
 func (this *APINodeService) DeleteAPINode(ctx context.Context, req *pb.DeleteAPINodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedAPINodeDAO.DisableAPINode(tx, req.ApiNodeId)
 	if err != nil {
@@ -71,7 +71,7 @@ func (this *APINodeService) FindAllEnabledAPINodes(ctx context.Context, req *pb.
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodes, err := models.SharedAPINodeDAO.FindAllEnabledAPINodes(tx)
 	if err != nil {
@@ -87,16 +87,17 @@ func (this *APINodeService) FindAllEnabledAPINodes(ctx context.Context, req *pb.
 
 		result = append(result, &pb.APINode{
 			Id:              int64(node.Id),
-			IsOn:            node.IsOn == 1,
+			IsOn:            node.IsOn,
 			NodeClusterId:   int64(node.ClusterId),
 			UniqueId:        node.UniqueId,
 			Secret:          node.Secret,
 			Name:            node.Name,
 			Description:     node.Description,
-			HttpJSON:        []byte(node.Http),
-			HttpsJSON:       []byte(node.Https),
-			AccessAddrsJSON: []byte(node.AccessAddrs),
+			HttpJSON:        node.Http,
+			HttpsJSON:       node.Https,
+			AccessAddrsJSON: node.AccessAddrs,
 			AccessAddrs:     accessAddrs,
+			IsPrimary:       node.IsPrimary,
 		})
 	}
 
@@ -105,12 +106,12 @@ func (this *APINodeService) FindAllEnabledAPINodes(ctx context.Context, req *pb.
 
 // CountAllEnabledAPINodes 计算API节点数量
 func (this *APINodeService) CountAllEnabledAPINodes(ctx context.Context, req *pb.CountAllEnabledAPINodesRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	count, err := models.SharedAPINodeDAO.CountAllEnabledAPINodes(tx)
 	if err != nil {
@@ -122,12 +123,12 @@ func (this *APINodeService) CountAllEnabledAPINodes(ctx context.Context, req *pb
 
 // CountAllEnabledAndOnAPINodes 计算API节点数量
 func (this *APINodeService) CountAllEnabledAndOnAPINodes(ctx context.Context, req *pb.CountAllEnabledAndOnAPINodesRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	count, err := models.SharedAPINodeDAO.CountAllEnabledAndOnAPINodes(tx)
 	if err != nil {
@@ -139,12 +140,12 @@ func (this *APINodeService) CountAllEnabledAndOnAPINodes(ctx context.Context, re
 
 // ListEnabledAPINodes 列出单页的API节点
 func (this *APINodeService) ListEnabledAPINodes(ctx context.Context, req *pb.ListEnabledAPINodesRequest) (*pb.ListEnabledAPINodesResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodes, err := models.SharedAPINodeDAO.ListEnabledAPINodes(tx, req.Offset, req.Size)
 	if err != nil {
@@ -160,20 +161,21 @@ func (this *APINodeService) ListEnabledAPINodes(ctx context.Context, req *pb.Lis
 
 		result = append(result, &pb.APINode{
 			Id:              int64(node.Id),
-			IsOn:            node.IsOn == 1,
+			IsOn:            node.IsOn,
 			NodeClusterId:   int64(node.ClusterId),
 			UniqueId:        node.UniqueId,
 			Secret:          node.Secret,
 			Name:            node.Name,
 			Description:     node.Description,
-			HttpJSON:        []byte(node.Http),
-			HttpsJSON:       []byte(node.Https),
+			HttpJSON:        node.Http,
+			HttpsJSON:       node.Https,
 			RestIsOn:        node.RestIsOn == 1,
-			RestHTTPJSON:    []byte(node.RestHTTP),
-			RestHTTPSJSON:   []byte(node.RestHTTPS),
-			AccessAddrsJSON: []byte(node.AccessAddrs),
+			RestHTTPJSON:    node.RestHTTP,
+			RestHTTPSJSON:   node.RestHTTPS,
+			AccessAddrsJSON: node.AccessAddrs,
 			AccessAddrs:     accessAddrs,
-			StatusJSON:      []byte(node.Status),
+			StatusJSON:      node.Status,
+			IsPrimary:       node.IsPrimary,
 		})
 	}
 
@@ -182,14 +184,14 @@ func (this *APINodeService) ListEnabledAPINodes(ctx context.Context, req *pb.Lis
 
 // FindEnabledAPINode 根据ID查找节点
 func (this *APINodeService) FindEnabledAPINode(ctx context.Context, req *pb.FindEnabledAPINodeRequest) (*pb.FindEnabledAPINodeResponse, error) {
-	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, _, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	node, err := models.SharedAPINodeDAO.FindEnabledAPINode(tx, req.ApiNodeId)
+	node, err := models.SharedAPINodeDAO.FindEnabledAPINode(tx, req.ApiNodeId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -205,19 +207,21 @@ func (this *APINodeService) FindEnabledAPINode(ctx context.Context, req *pb.Find
 
 	result := &pb.APINode{
 		Id:              int64(node.Id),
-		IsOn:            node.IsOn == 1,
+		IsOn:            node.IsOn,
 		NodeClusterId:   int64(node.ClusterId),
 		UniqueId:        node.UniqueId,
 		Secret:          node.Secret,
 		Name:            node.Name,
 		Description:     node.Description,
-		HttpJSON:        []byte(node.Http),
-		HttpsJSON:       []byte(node.Https),
+		HttpJSON:        node.Http,
+		HttpsJSON:       node.Https,
 		RestIsOn:        node.RestIsOn == 1,
-		RestHTTPJSON:    []byte(node.RestHTTP),
-		RestHTTPSJSON:   []byte(node.RestHTTPS),
-		AccessAddrsJSON: []byte(node.AccessAddrs),
+		RestHTTPJSON:    node.RestHTTP,
+		RestHTTPSJSON:   node.RestHTTPS,
+		AccessAddrsJSON: node.AccessAddrs,
 		AccessAddrs:     accessAddrs,
+		IsPrimary:       node.IsPrimary,
+		StatusJSON:      node.Status,
 	}
 	return &pb.FindEnabledAPINodeResponse{ApiNode: result}, nil
 }
@@ -234,14 +238,14 @@ func (this *APINodeService) FindCurrentAPINodeVersion(ctx context.Context, req *
 
 // FindCurrentAPINode 获取当前API节点的信息
 func (this *APINodeService) FindCurrentAPINode(ctx context.Context, req *pb.FindCurrentAPINodeRequest) (*pb.FindCurrentAPINodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var nodeId = teaconst.NodeId
 	var tx *dbs.Tx
-	node, err := models.SharedAPINodeDAO.FindEnabledAPINode(tx, nodeId)
+	node, err := models.SharedAPINodeDAO.FindEnabledAPINode(tx, nodeId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +260,7 @@ func (this *APINodeService) FindCurrentAPINode(ctx context.Context, req *pb.Find
 
 	return &pb.FindCurrentAPINodeResponse{ApiNode: &pb.APINode{
 		Id:              int64(node.Id),
-		IsOn:            node.IsOn == 1,
+		IsOn:            node.IsOn,
 		NodeClusterId:   0,
 		UniqueId:        "",
 		Secret:          "",
@@ -267,15 +271,17 @@ func (this *APINodeService) FindCurrentAPINode(ctx context.Context, req *pb.Find
 		RestIsOn:        false,
 		RestHTTPJSON:    nil,
 		RestHTTPSJSON:   nil,
-		AccessAddrsJSON: []byte(node.AccessAddrs),
+		AccessAddrsJSON: node.AccessAddrs,
 		AccessAddrs:     accessAddrs,
-		StatusJSON:      nil,
+		StatusJSON:      node.Status,
+		IsPrimary:       node.IsPrimary,
+		InstanceCode:    teaconst.InstanceCode,
 	}}, nil
 }
 
 // CountAllEnabledAPINodesWithSSLCertId 计算使用某个SSL证书的API节点数量
 func (this *APINodeService) CountAllEnabledAPINodesWithSSLCertId(ctx context.Context, req *pb.CountAllEnabledAPINodesWithSSLCertIdRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -294,4 +300,15 @@ func (this *APINodeService) CountAllEnabledAPINodesWithSSLCertId(ctx context.Con
 		return nil, err
 	}
 	return this.SuccessCount(count)
+}
+
+// DebugAPINode 修改调试模式状态
+func (this *APINodeService) DebugAPINode(ctx context.Context, req *pb.DebugAPINodeRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	teaconst.Debug = req.Debug
+	return this.Success()
 }

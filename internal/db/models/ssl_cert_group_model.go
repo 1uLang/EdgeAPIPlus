@@ -1,6 +1,5 @@
 package models
 
-//
 type SSLCertGroup struct {
 	Id        uint32 `field:"id"`        // ID
 	AdminId   uint32 `field:"adminId"`   // 管理员ID

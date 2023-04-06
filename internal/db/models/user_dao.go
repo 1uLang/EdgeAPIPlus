@@ -3,11 +3,14 @@ package models
 import (
 	"encoding/json"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"github.com/1uLang/EdgeCommon/pkg/userconfigs"
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
+	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/types"
 	stringutil "github.com/iwind/TeaGo/utils/string"
 	timeutil "github.com/iwind/TeaGo/utils/time"
@@ -40,19 +43,29 @@ func init() {
 }
 
 // EnableUser 启用条目
-func (this *UserDAO) EnableUser(tx *dbs.Tx, id int64) (rowsAffected int64, err error) {
-	return this.Query(tx).
-		Pk(id).
+func (this *UserDAO) EnableUser(tx *dbs.Tx, userId int64) error {
+	if userId <= 0 {
+		return errors.New("invalid 'userId'")
+	}
+
+	_, err := this.Query(tx).
+		Pk(userId).
 		Set("state", UserStateEnabled).
 		Update()
+	return err
 }
 
 // DisableUser 禁用条目
-func (this *UserDAO) DisableUser(tx *dbs.Tx, id int64) (rowsAffected int64, err error) {
-	return this.Query(tx).
-		Pk(id).
+func (this *UserDAO) DisableUser(tx *dbs.Tx, userId int64) error {
+	if userId <= 0 {
+		return errors.New("invalid 'userId'")
+	}
+
+	_, err := this.Query(tx).
+		Pk(userId).
 		Set("state", UserStateDisabled).
 		Update()
+	return err
 }
 
 // FindEnabledUser 查找启用的用户
@@ -94,6 +107,27 @@ func (this *UserDAO) FindEnabledBasicUser(tx *dbs.Tx, id int64) (*User, error) {
 	return result.(*User), err
 }
 
+// FindBasicUserWithoutState 查找用户基本信息，并忽略状态
+func (this *UserDAO) FindBasicUserWithoutState(tx *dbs.Tx, id int64) (*User, error) {
+	result, err := this.Query(tx).
+		Pk(id).
+		Result("id", "fullname", "username").
+		Find()
+	if result == nil {
+		return nil, err
+	}
+	return result.(*User), err
+}
+
+// FindEnabledUserIdWithUsername 根据用户名查找用户ID
+func (this *UserDAO) FindEnabledUserIdWithUsername(tx *dbs.Tx, username string) (int64, error) {
+	return this.Query(tx).
+		ResultPk().
+		State(UserStateEnabled).
+		Attr("username", username).
+		FindInt64Col(0)
+}
+
 // FindUserFullname 获取管理员名称
 func (this *UserDAO) FindUserFullname(tx *dbs.Tx, userId int64) (string, error) {
 	return this.Query(tx).
@@ -103,18 +137,43 @@ func (this *UserDAO) FindUserFullname(tx *dbs.Tx, userId int64) (string, error) 
 }
 
 // CreateUser 创建用户
-func (this *UserDAO) CreateUser(tx *dbs.Tx, username string, password string, fullname string, mobile string, tel string, email string, remark string, source string, clusterId int64) (int64, error) {
-	op := NewUserOperator()
+func (this *UserDAO) CreateUser(tx *dbs.Tx, username string,
+	password string,
+	fullname string,
+	mobile string,
+	tel string,
+	email string,
+	remark string,
+	source string,
+	clusterId int64,
+	features []string,
+	registeredIP string,
+	isVerified bool) (int64, error) {
+	var op = NewUserOperator()
 	op.Username = username
 	op.Password = stringutil.Md5(password)
 	op.Fullname = fullname
 	op.Mobile = mobile
 	op.Tel = tel
 	op.Email = email
+	op.EmailIsVerified = false
 	op.Remark = remark
 	op.Source = source
 	op.ClusterId = clusterId
 	op.Day = timeutil.Format("Ymd")
+	op.IsVerified = isVerified
+	op.RegisteredIP = registeredIP
+
+	// features
+	if len(features) == 0 {
+		op.Features = "[]"
+	} else {
+		featuresJSON, err := json.Marshal(features)
+		if err != nil {
+			return 0, err
+		}
+		op.Features = featuresJSON
+	}
 
 	op.IsOn = true
 	op.State = UserStateEnabled
@@ -130,7 +189,17 @@ func (this *UserDAO) UpdateUser(tx *dbs.Tx, userId int64, username string, passw
 	if userId <= 0 {
 		return errors.New("invalid userId")
 	}
-	op := NewUserOperator()
+
+	// 是否启用变化
+	oldIsOn, err := this.Query(tx).
+		Pk(userId).
+		Result("isOn").
+		FindBoolCol()
+	if err != nil {
+		return err
+	}
+
+	var op = NewUserOperator()
 	op.Id = userId
 	op.Username = username
 	if len(password) > 0 {
@@ -143,18 +212,28 @@ func (this *UserDAO) UpdateUser(tx *dbs.Tx, userId int64, username string, passw
 	op.Remark = remark
 	op.ClusterId = nodeClusterId
 	op.IsOn = isOn
-	err := this.Save(tx, op)
-	return err
+	err = this.Save(tx, op)
+	if err != nil {
+		return err
+	}
+
+	if oldIsOn != isOn {
+		return SharedServerDAO.NotifyUserClustersChange(tx, userId)
+	}
+
+	return nil
 }
 
 // UpdateUserInfo 修改用户基本信息
-func (this *UserDAO) UpdateUserInfo(tx *dbs.Tx, userId int64, fullname string) error {
+func (this *UserDAO) UpdateUserInfo(tx *dbs.Tx, userId int64, fullname string, mobile string, email string) error {
 	if userId <= 0 {
 		return errors.New("invalid userId")
 	}
-	op := NewUserOperator()
+	var op = NewUserOperator()
 	op.Id = userId
 	op.Fullname = fullname
+	op.Mobile = mobile
+	op.Email = email
 	return this.Save(tx, op)
 }
 
@@ -163,7 +242,7 @@ func (this *UserDAO) UpdateUserLogin(tx *dbs.Tx, userId int64, username string, 
 	if userId <= 0 {
 		return errors.New("invalid userId")
 	}
-	op := NewUserOperator()
+	var op = NewUserOperator()
 	op.Id = userId
 	op.Username = username
 	if len(password) > 0 {
@@ -174,7 +253,7 @@ func (this *UserDAO) UpdateUserLogin(tx *dbs.Tx, userId int64, username string, 
 }
 
 // CountAllEnabledUsers 计算用户数量
-func (this *UserDAO) CountAllEnabledUsers(tx *dbs.Tx, clusterId int64, keyword string) (int64, error) {
+func (this *UserDAO) CountAllEnabledUsers(tx *dbs.Tx, clusterId int64, keyword string, isVerifying bool) (int64, error) {
 	query := this.Query(tx)
 	query.State(UserStateEnabled)
 	if clusterId > 0 {
@@ -182,13 +261,26 @@ func (this *UserDAO) CountAllEnabledUsers(tx *dbs.Tx, clusterId int64, keyword s
 	}
 	if len(keyword) > 0 {
 		query.Where("(username LIKE :keyword OR fullname LIKE :keyword OR mobile LIKE :keyword OR email LIKE :keyword OR tel LIKE :keyword OR remark LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
+	}
+	if isVerifying {
+		query.Where("(isVerified=0 OR (id IN (SELECT userId FROM " + SharedUserIdentityDAO.Table + " WHERE status=:identityStatus AND state=1)))")
+		query.Param("identityStatus", userconfigs.UserIdentityStatusSubmitted)
 	}
 	return query.Count()
 }
 
+// CountAllVerifyingUsers 获取等待审核的用户数
+func (this *UserDAO) CountAllVerifyingUsers(tx *dbs.Tx) (int64, error) {
+	query := this.Query(tx)
+	query.State(UserStateEnabled)
+	query.Where("(isVerified=0 OR (id IN (SELECT userId FROM " + SharedUserIdentityDAO.Table + " WHERE status=:identityStatus AND state=1)))")
+	query.Param("identityStatus", userconfigs.UserIdentityStatusSubmitted)
+	return query.Count()
+}
+
 // ListEnabledUsers 列出单页用户
-func (this *UserDAO) ListEnabledUsers(tx *dbs.Tx, clusterId int64, keyword string, offset int64, size int64) (result []*User, err error) {
+func (this *UserDAO) ListEnabledUsers(tx *dbs.Tx, clusterId int64, keyword string, isVerifying bool, offset int64, size int64) (result []*User, err error) {
 	query := this.Query(tx)
 	query.State(UserStateEnabled)
 	if clusterId > 0 {
@@ -196,7 +288,11 @@ func (this *UserDAO) ListEnabledUsers(tx *dbs.Tx, clusterId int64, keyword strin
 	}
 	if len(keyword) > 0 {
 		query.Where("(username LIKE :keyword OR fullname LIKE :keyword OR mobile LIKE :keyword OR email LIKE :keyword OR tel LIKE :keyword OR remark LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
+	}
+	if isVerifying {
+		query.Where("(isVerified=0 OR (id IN (SELECT userId FROM " + SharedUserIdentityDAO.Table + " WHERE status=:identityStatus AND state=1)))")
+		query.Param("identityStatus", userconfigs.UserIdentityStatusSubmitted)
 	}
 	_, err = query.
 		DescPk().
@@ -257,7 +353,7 @@ func (this *UserDAO) FindUserClusterId(tx *dbs.Tx, userId int64) (int64, error) 
 		FindInt64Col(0)
 }
 
-// UpdateUserFeatures 更新用户Features
+// UpdateUserFeatures 更新单个用户Features
 func (this *UserDAO) UpdateUserFeatures(tx *dbs.Tx, userId int64, featuresJSON []byte) error {
 	if userId <= 0 {
 		return errors.New("invalid userId")
@@ -275,8 +371,76 @@ func (this *UserDAO) UpdateUserFeatures(tx *dbs.Tx, userId int64, featuresJSON [
 	return nil
 }
 
+// UpdateUsersFeatures 更新所有用户的Features
+func (this *UserDAO) UpdateUsersFeatures(tx *dbs.Tx, featureCodes []string, overwrite bool) error {
+	if featureCodes == nil {
+		featureCodes = []string{}
+	}
+	if overwrite {
+		featureCodesJSON, err := json.Marshal(featureCodes)
+		if err != nil {
+			return err
+		}
+		err = this.Query(tx).
+			State(UserStateEnabled).
+			Set("features", featureCodesJSON).
+			UpdateQuickly()
+		return err
+	}
+
+	var lastId int64
+	const size = 1000
+	for {
+		ones, _, err := this.Query(tx).
+			Result("id", "features").
+			State(UserStateEnabled).
+			Gt("id", lastId).
+			Limit(size).
+			AscPk().
+			FindOnes()
+		if err != nil {
+			return err
+		}
+		for _, one := range ones {
+			var userId = one.GetInt64("id")
+			var userFeaturesJSON = one.GetBytes("features")
+			var userFeatures = []string{}
+			if len(userFeaturesJSON) > 0 {
+				err = json.Unmarshal(userFeaturesJSON, &userFeatures)
+				if err != nil {
+					return err
+				}
+			}
+			for _, featureCode := range featureCodes {
+				if !lists.ContainsString(userFeatures, featureCode) {
+					userFeatures = append(userFeatures, featureCode)
+				}
+			}
+			userFeaturesJSON, err = json.Marshal(userFeatures)
+			if err != nil {
+				return err
+			}
+			err = this.Query(tx).
+				Pk(userId).
+				Set("features", userFeaturesJSON).
+				UpdateQuickly()
+			if err != nil {
+				return err
+			}
+		}
+
+		if len(ones) < size {
+			break
+		}
+
+		lastId += size
+	}
+
+	return nil
+}
+
 // FindUserFeatures 查找用户Features
-func (this *UserDAO) FindUserFeatures(tx *dbs.Tx, userId int64) ([]*UserFeature, error) {
+func (this *UserDAO) FindUserFeatures(tx *dbs.Tx, userId int64) ([]*userconfigs.UserFeature, error) {
 	featuresJSON, err := this.Query(tx).
 		Pk(userId).
 		Result("features").
@@ -295,12 +459,12 @@ func (this *UserDAO) FindUserFeatures(tx *dbs.Tx, userId int64) ([]*UserFeature,
 	}
 
 	// 检查是否还存在以及设置名称
-	result := []*UserFeature{}
+	result := []*userconfigs.UserFeature{}
 	if len(featureCodes) > 0 {
 		for _, featureCode := range featureCodes {
-			f := FindUserFeature(featureCode)
+			f := userconfigs.FindUserFeature(featureCode)
 			if f != nil {
-				result = append(result, &UserFeature{Name: f.Name, Code: f.Code, Description: f.Description})
+				result = append(result, &userconfigs.UserFeature{Name: f.Name, Code: f.Code, Description: f.Description})
 			}
 		}
 	}
@@ -353,4 +517,30 @@ func (this *UserDAO) CountDailyUsers(tx *dbs.Tx, dayFrom string, dayTo string) (
 	}
 
 	return result, nil
+}
+
+// UpdateUserIsVerified 审核用户
+func (this *UserDAO) UpdateUserIsVerified(tx *dbs.Tx, userId int64, isRejected bool, rejectReason string) error {
+	if userId <= 0 {
+		return errors.New("invalid userId")
+	}
+	var op = NewUserOperator()
+	op.Id = userId
+	op.IsRejected = isRejected
+	op.RejectReason = rejectReason
+	op.IsVerified = true
+	return this.Save(tx, op)
+}
+
+// FindUserByUserName 获取用户id通过用户名
+func (this *UserDAO) FindUserByUserName(tx *dbs.Tx, username string) (int64, error) {
+	result, err := this.Query(tx).
+		Attr("state", UserStateEnabled).
+		Attr("username", username).
+		Result("id").
+		Find()
+	if result == nil {
+		return 0, err
+	}
+	return int64(result.(*User).Id), err
 }

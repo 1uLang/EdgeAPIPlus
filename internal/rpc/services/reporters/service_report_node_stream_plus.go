@@ -13,6 +13,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/configs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/iwind/TeaGo/dbs"
@@ -55,7 +56,7 @@ func NextCommandRequestId() int64 {
 func init() {
 	dbs.OnReadyDone(func() {
 		// 清理WaitingChannelMap
-		go func() {
+		goman.New(func() {
 			ticker := time.NewTicker(30 * time.Second)
 			for range ticker.C {
 				nodeLocker.Lock()
@@ -67,10 +68,10 @@ func init() {
 				}
 				nodeLocker.Unlock()
 			}
-		}()
+		})
 
 		// 自动同步连接到本API节点的Report节点任务
-		go func() {
+		goman.New(func() {
 			defer func() {
 				_ = recover()
 			}()
@@ -100,7 +101,7 @@ func init() {
 				}
 				nodeLocker.Unlock()
 			}
-		}()
+		})
 	})
 }
 
@@ -113,7 +114,7 @@ func (this *ReportNodeService) ReportNodeStream(server pb.ReportNodeService_Repo
 		return err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 	err = validateClient(tx, nodeId, server.Context())
 	if err != nil {
 		return err
@@ -180,7 +181,7 @@ func (this *ReportNodeService) ReportNodeStream(server pb.ReportNodeService_Repo
 	}()
 
 	// 发送请求
-	go func() {
+	goman.New(func() {
 		for {
 			select {
 			case <-server.Context().Done():
@@ -206,7 +207,7 @@ func (this *ReportNodeService) ReportNodeStream(server pb.ReportNodeService_Repo
 				}
 			}
 		}
-	}()
+	})
 
 	// 接受请求
 	for {
@@ -244,7 +245,7 @@ func (this *ReportNodeService) ReportNodeStream(server pb.ReportNodeService_Repo
 // SendCommandToReportNode 向节点发送命令
 func (this *ReportNodeService) SendCommandToReportNode(ctx context.Context, req *pb.ReportNodeStreamMessage) (*pb.ReportNodeStreamMessage, error) {
 	// 校验请求
-	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

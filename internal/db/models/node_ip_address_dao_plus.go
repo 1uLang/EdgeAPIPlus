@@ -12,6 +12,7 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/reporterconfigs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
@@ -20,7 +21,7 @@ import (
 	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/rands"
 	"github.com/iwind/TeaGo/types"
-	"io/ioutil"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -30,14 +31,14 @@ import (
 func init() {
 	var ticker = time.NewTicker(1 * time.Minute)
 	dbs.OnReadyDone(func() {
-		go func() {
+		goman.New(func() {
 			for range ticker.C {
 				err := SharedNodeIPAddressDAO.loopTask(nil, nodeconfigs.NodeRoleNode)
 				if err != nil {
 					remotelogs.Error("NodeIPAddressDAO.LoopTasks", err.Error())
 				}
 			}
-		}()
+		})
 	})
 }
 
@@ -51,7 +52,7 @@ func (this *NodeIPAddressDAO) FireThresholds(tx *dbs.Tx, role nodeconfigs.NodeRo
 	if node == nil {
 		return nil
 	}
-	if node.IsOn == 0 {
+	if !node.IsOn {
 		return nil
 	}
 
@@ -227,6 +228,7 @@ func (this *NodeIPAddressDAO) runThreshold(tx *dbs.Tx, role string, clusterId in
 			if err != nil {
 				return false, err
 			}
+
 			if !isHealthy {
 				value = 0
 			} else {
@@ -256,16 +258,16 @@ func (this *NodeIPAddressDAO) runThreshold(tx *dbs.Tx, role string, clusterId in
 			for _, action := range actions {
 				switch action.Action {
 				case nodeconfigs.IPAddressThresholdActionUp:
-					if addr.IsUp == 1 {
-						addr.IsUp = 0
+					if addr.IsUp {
+						addr.IsUp = false
 						err = this.UpdateAddressIsUp(tx, int64(addr.Id), false)
 						if err != nil {
 							return false, err
 						}
 					}
 				case nodeconfigs.IPAddressThresholdActionDown:
-					if addr.IsUp == 0 {
-						addr.IsUp = 1
+					if !addr.IsUp {
+						addr.IsUp = true
 						err = this.UpdateAddressIsUp(tx, int64(addr.Id), true)
 						if err != nil {
 							return false, err
@@ -280,7 +282,7 @@ func (this *NodeIPAddressDAO) runThreshold(tx *dbs.Tx, role string, clusterId in
 						addr.BackupThresholdId = 0
 					}
 				case nodeconfigs.IPAddressThresholdActionWebHook:
-					if threshold.IsMatched == 1 {
+					if threshold.IsMatched {
 						if action.Options != nil {
 							var url = action.Options.GetString("url")
 							if len(url) > 0 {
@@ -340,7 +342,7 @@ func (this *NodeIPAddressDAO) runThreshold(tx *dbs.Tx, role string, clusterId in
 				return true, err
 			}
 		case nodeconfigs.IPAddressThresholdActionWebHook:
-			if threshold.IsMatched == 0 {
+			if !threshold.IsMatched {
 				if action.Options != nil {
 					var url = action.Options.GetString("url")
 					if len(url) > 0 {
@@ -411,7 +413,7 @@ func (this *NodeIPAddressDAO) loopTask(tx *dbs.Tx, role string) error {
 
 // 上线
 func (this *NodeIPAddressDAO) doUpAction(tx *dbs.Tx, role string, clusterId int64, nodeId int64, addr *NodeIPAddress, threshold *NodeIPAddressThreshold, summaryList []string) error {
-	if addr.IsUp == 1 {
+	if addr.IsUp {
 		return nil
 	}
 	_, err := this.Query(tx).
@@ -446,7 +448,7 @@ func (this *NodeIPAddressDAO) doUpAction(tx *dbs.Tx, role string, clusterId int6
 
 // 下线
 func (this *NodeIPAddressDAO) doDownAction(tx *dbs.Tx, role string, clusterId int64, nodeId int64, addr *NodeIPAddress, threshold *NodeIPAddressThreshold, summaryList []string) error {
-	if addr.IsUp == 0 {
+	if !addr.IsUp {
 		return nil
 	}
 	_, err := this.Query(tx).
@@ -600,7 +602,7 @@ func (this *NodeIPAddressDAO) doWebHookAction(tx *dbs.Tx, role string, clusterId
 		return nil
 	}
 
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}

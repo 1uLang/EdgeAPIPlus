@@ -3,12 +3,18 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
+	"github.com/1uLang/EdgeCommon/pkg/userconfigs"
+	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeAPI/internal/zero"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
+	"time"
 )
 
 type SysSettingDAO dbs.DAO
@@ -40,6 +46,16 @@ func (this *SysSettingDAO) UpdateSetting(tx *dbs.Tx, codeFormat string, valueJSO
 
 	countRetries := 3
 	var lastErr error
+
+	defer func() {
+		if lastErr == nil {
+			err := this.NotifyUpdate(tx, codeFormat)
+			if err != nil {
+				remotelogs.Error("SysSettingDAO", "notify update failed: "+err.Error())
+			}
+		}
+	}()
+
 	for i := 0; i < countRetries; i++ {
 		settingId, err := this.Query(tx).
 			Attr("code", codeFormat).
@@ -51,7 +67,7 @@ func (this *SysSettingDAO) UpdateSetting(tx *dbs.Tx, codeFormat string, valueJSO
 
 		if settingId == 0 {
 			// 新建
-			op := NewSysSettingOperator()
+			var op = NewSysSettingOperator()
 			op.Code = codeFormat
 			op.Value = valueJSON
 			err = this.Save(tx, op)
@@ -61,17 +77,21 @@ func (this *SysSettingDAO) UpdateSetting(tx *dbs.Tx, codeFormat string, valueJSO
 				// 因为错误的原因可能是因为code冲突，所以这里我们继续执行
 				continue
 			}
+
+			lastErr = nil
 			return nil
 		}
 
 		// 修改
-		op := NewSysSettingOperator()
+		var op = NewSysSettingOperator()
 		op.Id = settingId
 		op.Value = valueJSON
 		err = this.Save(tx, op)
 		if err != nil {
 			return err
 		}
+		lastErr = nil
+		break
 	}
 
 	return lastErr
@@ -120,4 +140,91 @@ func (this *SysSettingDAO) ReadGlobalConfig(tx *dbs.Tx) (*serverconfigs.GlobalCo
 		return nil, err
 	}
 	return config, nil
+}
+
+// ReadUserServerConfig 读取用户服务配置
+func (this *SysSettingDAO) ReadUserServerConfig(tx *dbs.Tx) (*userconfigs.UserServerConfig, error) {
+	valueJSON, err := this.ReadSetting(tx, systemconfigs.SettingCodeUserServerConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(valueJSON) == 0 {
+		return userconfigs.DefaultUserServerConfig(), nil
+	}
+
+	var config = userconfigs.DefaultUserServerConfig()
+	err = json.Unmarshal(valueJSON, config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+// ReadUserFinanceConfig 读取用户服务配置
+func (this *SysSettingDAO) ReadUserFinanceConfig(tx *dbs.Tx) (*userconfigs.UserFinanceConfig, error) {
+	valueJSON, err := this.ReadSetting(tx, systemconfigs.SettingCodeUserFinanceConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(valueJSON) == 0 {
+		return userconfigs.DefaultUserFinanceConfig(), nil
+	}
+
+	var config = userconfigs.DefaultUserFinanceConfig()
+	err = json.Unmarshal(valueJSON, config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+// ReadAdminUIConfig 读取管理员界面配置
+func (this *SysSettingDAO) ReadAdminUIConfig(tx *dbs.Tx, cacheMap *utils.CacheMap) (*systemconfigs.AdminUIConfig, error) {
+	var cacheKey = this.Table + ":ReadAdminUIConfig"
+	if cacheMap != nil {
+		cache, ok := cacheMap.Get(cacheKey)
+		if ok && cache != nil {
+			return cache.(*systemconfigs.AdminUIConfig), nil
+		}
+	}
+
+	valueJSON, err := this.ReadSetting(tx, systemconfigs.SettingCodeAdminUIConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(valueJSON) > 0 {
+		var config = &systemconfigs.AdminUIConfig{}
+		err = json.Unmarshal(valueJSON, config)
+		if err != nil {
+			return nil, err
+		}
+
+		if cacheMap != nil {
+			cacheMap.Put(cacheKey, config)
+		}
+
+		return config, nil
+	}
+	return &systemconfigs.AdminUIConfig{}, nil
+}
+
+// NotifyUpdate 通知更改
+func (this *SysSettingDAO) NotifyUpdate(tx *dbs.Tx, code string) error {
+	switch code {
+	case systemconfigs.SettingCodeAccessLogQueue:
+		accessLogQueueChanged <- zero.New()
+	case systemconfigs.SettingCodeAdminUIConfig:
+		// 修改当前时区
+		config, err := this.ReadAdminUIConfig(nil, nil)
+		if err == nil && config != nil {
+			if len(config.TimeZone) == 0 {
+				config.TimeZone = nodeconfigs.DefaultTimeZoneLocation
+			}
+			location, err := time.LoadLocation(config.TimeZone)
+			if err == nil && time.Local != location {
+				time.Local = location
+			}
+		}
+	}
+	return nil
 }

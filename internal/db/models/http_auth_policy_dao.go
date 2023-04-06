@@ -68,8 +68,9 @@ func (this *HTTPAuthPolicyDAO) FindEnabledHTTPAuthPolicy(tx *dbs.Tx, id int64) (
 }
 
 // CreateHTTPAuthPolicy 创建策略
-func (this *HTTPAuthPolicyDAO) CreateHTTPAuthPolicy(tx *dbs.Tx, name string, methodType string, paramsJSON []byte) (int64, error) {
-	op := NewHTTPAuthPolicyOperator()
+func (this *HTTPAuthPolicyDAO) CreateHTTPAuthPolicy(tx *dbs.Tx, userId int64, name string, methodType string, paramsJSON []byte) (int64, error) {
+	var op = NewHTTPAuthPolicyOperator()
+	op.UserId = userId
 	op.Name = name
 	op.Type = methodType
 	op.Params = paramsJSON
@@ -83,7 +84,7 @@ func (this *HTTPAuthPolicyDAO) UpdateHTTPAuthPolicy(tx *dbs.Tx, policyId int64, 
 	if policyId <= 0 {
 		return errors.New("invalid policyId")
 	}
-	op := NewHTTPAuthPolicyOperator()
+	var op = NewHTTPAuthPolicyOperator()
 	op.Id = policyId
 	op.Name = name
 	op.Params = paramsJSON
@@ -116,13 +117,13 @@ func (this *HTTPAuthPolicyDAO) ComposePolicyConfig(tx *dbs.Tx, policyId int64, c
 	var config = &serverconfigs.HTTPAuthPolicy{
 		Id:   int64(policy.Id),
 		Name: policy.Name,
-		IsOn: policy.IsOn == 1,
+		IsOn: policy.IsOn,
 		Type: policy.Type,
 	}
 
 	var params map[string]interface{}
 	if IsNotNull(policy.Params) {
-		err = json.Unmarshal([]byte(policy.Params), &params)
+		err = json.Unmarshal(policy.Params, &params)
 		if err != nil {
 			return nil, err
 		}
@@ -135,6 +136,20 @@ func (this *HTTPAuthPolicyDAO) ComposePolicyConfig(tx *dbs.Tx, policyId int64, c
 	}
 
 	return config, nil
+}
+
+// CheckUserPolicy 检查用户权限
+func (this *HTTPAuthPolicyDAO) CheckUserPolicy(tx *dbs.Tx, userId int64, policyId int64) error {
+	if userId <= 0 || policyId <= 0 {
+		return ErrNotFound
+	}
+
+	webId, err := SharedHTTPWebDAO.FindEnabledWebIdWithHTTPAuthPolicyId(tx, policyId)
+	if err != nil {
+		return err
+	}
+
+	return SharedHTTPWebDAO.CheckUserWeb(tx, userId, webId)
 }
 
 // NotifyUpdate 通知更改

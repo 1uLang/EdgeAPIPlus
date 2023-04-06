@@ -6,12 +6,11 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/configs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
-	"github.com/go-yaml/yaml"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/cmd"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
-	"io/ioutil"
+	"gopkg.in/yaml.v3"
 	"os"
 	"strconv"
 	"strings"
@@ -75,7 +74,7 @@ func (this *Setup) Run() error {
 
 	// 执行SQL
 	config := &dbs.Config{}
-	configData, err := ioutil.ReadFile(Tea.ConfigFile("db.yaml"))
+	configData, err := os.ReadFile(Tea.ConfigFile("db.yaml"))
 	if err != nil {
 		return err
 	}
@@ -167,7 +166,7 @@ func (this *Setup) Run() error {
 		apiNodeId = nodeId
 	}
 
-	apiNode, err := dao.FindEnabledAPINode(nil, apiNodeId)
+	apiNode, err := dao.FindEnabledAPINode(nil, apiNodeId, nil)
 	if err != nil {
 		return err
 	}

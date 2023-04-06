@@ -15,7 +15,7 @@ type ServerRegionProviderMonthlyStatService struct {
 
 // 查找前N个运营商
 func (this *ServerRegionProviderMonthlyStatService) FindTopServerRegionProviderMonthlyStats(ctx context.Context, req *pb.FindTopServerRegionProviderMonthlyStatsRequest) (*pb.FindTopServerRegionProviderMonthlyStatsResponse, error) {
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -32,12 +32,12 @@ func (this *ServerRegionProviderMonthlyStatService) FindTopServerRegionProviderM
 	if err != nil {
 		return nil, err
 	}
-	pbStats := []*pb.FindTopServerRegionProviderMonthlyStatsResponse_Stat{}
+	var pbStats = []*pb.FindTopServerRegionProviderMonthlyStatsResponse_Stat{}
 	for _, stat := range statList {
 		pbStat := &pb.FindTopServerRegionProviderMonthlyStatsResponse_Stat{
 			Count: int64(stat.Count),
 		}
-		provider, err := regions.SharedRegionProviderDAO.FindEnabledRegionProvider(tx, stat.ProviderId)
+		provider, err := regions.SharedRegionProviderDAO.FindEnabledRegionProvider(tx, int64(stat.ProviderId))
 		if err != nil {
 			return nil, err
 		}
@@ -46,7 +46,7 @@ func (this *ServerRegionProviderMonthlyStatService) FindTopServerRegionProviderM
 		}
 		pbStat.RegionProvider = &pb.RegionProvider{
 			Id:   int64(provider.Id),
-			Name: provider.Name,
+			Name: provider.DisplayName(),
 		}
 		pbStats = append(pbStats, pbStat)
 	}

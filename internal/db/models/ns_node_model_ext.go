@@ -3,16 +3,17 @@ package models
 import (
 	"encoding/json"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 	"time"
 )
 
 // DecodeInstallStatus 安装状态
 func (this *NSNode) DecodeInstallStatus() (*NodeInstallStatus, error) {
-	if len(this.InstallStatus) == 0 || this.InstallStatus == "null" {
+	if len(this.InstallStatus) == 0 {
 		return NewNodeInstallStatus(), nil
 	}
 	status := &NodeInstallStatus{}
-	err := json.Unmarshal([]byte(this.InstallStatus), status)
+	err := json.Unmarshal(this.InstallStatus, status)
 	if err != nil {
 		return NewNodeInstallStatus(), err
 	}
@@ -29,13 +30,50 @@ func (this *NSNode) DecodeInstallStatus() (*NodeInstallStatus, error) {
 
 // DecodeStatus 节点状态
 func (this *NSNode) DecodeStatus() (*nodeconfigs.NodeStatus, error) {
-	if len(this.Status) == 0 || this.Status == "null" {
+	if len(this.Status) == 0 {
 		return nil, nil
 	}
 	status := &nodeconfigs.NodeStatus{}
-	err := json.Unmarshal([]byte(this.Status), status)
+	err := json.Unmarshal(this.Status, status)
 	if err != nil {
 		return nil, err
 	}
 	return status, nil
+}
+
+// DecodeDDoSProtection 解析DDoS Protection设置
+func (this *NSNode) DecodeDDoSProtection() *ddosconfigs.ProtectionConfig {
+	if IsNull(this.DdosProtection) {
+		return nil
+	}
+
+	var result = &ddosconfigs.ProtectionConfig{}
+	err := json.Unmarshal(this.DdosProtection, &result)
+	if err != nil {
+		// ignore err
+	}
+	return result
+}
+
+// HasDDoSProtection 检查是否有DDOS设置
+func (this *NSNode) HasDDoSProtection() bool {
+	var config = this.DecodeDDoSProtection()
+	if config != nil {
+		return !config.IsPriorEmpty()
+	}
+	return false
+}
+
+// DecodeConnectedAPINodes 解析连接的API节点列表
+func (this *NSNode) DecodeConnectedAPINodes() []int64 {
+	if IsNull(this.ConnectedAPINodes) {
+		return nil
+	}
+
+	var result = []int64{}
+	err := json.Unmarshal(this.ConnectedAPINodes, &result)
+	if err != nil {
+		// ignore err
+	}
+	return result
 }

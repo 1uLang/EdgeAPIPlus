@@ -2,10 +2,11 @@ package models
 
 import (
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -44,12 +45,16 @@ func (this *NSClusterDAO) EnableNSCluster(tx *dbs.Tx, id int64) error {
 }
 
 // DisableNSCluster 禁用条目
-func (this *NSClusterDAO) DisableNSCluster(tx *dbs.Tx, id int64) error {
+func (this *NSClusterDAO) DisableNSCluster(tx *dbs.Tx, clusterId int64) error {
 	_, err := this.Query(tx).
-		Pk(id).
+		Pk(clusterId).
 		Set("state", NSClusterStateDisabled).
 		Update()
-	return err
+	if err != nil {
+		return err
+	}
+
+	return SharedNodeLogDAO.DeleteNodeLogsWithCluster(tx, nodeconfigs.NodeRoleDNS, clusterId)
 }
 
 // FindEnabledNSCluster 查找启用中的条目
@@ -71,32 +76,6 @@ func (this *NSClusterDAO) FindEnabledNSClusterName(tx *dbs.Tx, id int64) (string
 		State(NSClusterStateEnabled).
 		Result("name").
 		FindStringCol("")
-}
-
-// CreateCluster 创建集群
-func (this *NSClusterDAO) CreateCluster(tx *dbs.Tx, name string, accessLogRefJSON []byte) (int64, error) {
-	op := NewNSClusterOperator()
-	op.Name = name
-
-	if len(accessLogRefJSON) > 0 {
-		op.AccessLog = accessLogRefJSON
-	}
-
-	op.IsOn = true
-	op.State = NSClusterStateEnabled
-	return this.SaveInt64(tx, op)
-}
-
-// UpdateCluster 修改集群
-func (this *NSClusterDAO) UpdateCluster(tx *dbs.Tx, clusterId int64, name string, isOn bool) error {
-	if clusterId <= 0 {
-		return errors.New("invalid clusterId")
-	}
-	op := NewNSClusterOperator()
-	op.Id = clusterId
-	op.Name = name
-	op.IsOn = isOn
-	return this.Save(tx, op)
 }
 
 // CountAllEnabledClusters 计算可用集群数量
@@ -144,23 +123,6 @@ func (this *NSClusterDAO) FindAllEnabledClusterIds(tx *dbs.Tx) ([]int64, error) 
 	return result, nil
 }
 
-// UpdateClusterAccessLog 设置访问日志
-func (this *NSClusterDAO) UpdateClusterAccessLog(tx *dbs.Tx, clusterId int64, accessLogJSON []byte) error {
-	return this.Query(tx).
-		Pk(clusterId).
-		Set("accessLog", accessLogJSON).
-		UpdateQuickly()
-}
-
-// FindClusterAccessLog 读取访问日志配置
-func (this *NSClusterDAO) FindClusterAccessLog(tx *dbs.Tx, clusterId int64) ([]byte, error) {
-	accessLog, err := this.Query(tx).
-		Pk(clusterId).
-		Result("accessLog").
-		FindStringCol("")
-	return []byte(accessLog), err
-}
-
 // FindClusterGrantId 查找集群的认证ID
 func (this *NSClusterDAO) FindClusterGrantId(tx *dbs.Tx, clusterId int64) (int64, error) {
 	return this.Query(tx).
@@ -169,31 +131,23 @@ func (this *NSClusterDAO) FindClusterGrantId(tx *dbs.Tx, clusterId int64) (int64
 		FindInt64Col(0)
 }
 
-// UpdateRecursion 设置递归DNS
-func (this *NSClusterDAO) UpdateRecursion(tx *dbs.Tx, clusterId int64, recursionJSON []byte) error {
-	err := this.Query(tx).
-		Pk(clusterId).
-		Set("recursion", recursionJSON).
-		UpdateQuickly()
-	if err != nil {
-		return err
+// CountAllClustersWithSSLPolicyIds 计算使用SSL策略的所有NS集群数量
+func (this *NSClusterDAO) CountAllClustersWithSSLPolicyIds(tx *dbs.Tx, sslPolicyIds []int64) (count int64, err error) {
+	if len(sslPolicyIds) == 0 {
+		return
 	}
-	return this.NotifyUpdate(tx, clusterId)
-}
-
-// FindClusterRecursion 读取递归DNS配置
-func (this *NSClusterDAO) FindClusterRecursion(tx *dbs.Tx, clusterId int64) ([]byte, error) {
-	recursion, err := this.Query(tx).
-		Result("recursion").
-		Pk(clusterId).
-		FindStringCol("")
-	if err != nil {
-		return nil, err
+	policyStringIds := []string{}
+	for _, policyId := range sslPolicyIds {
+		policyStringIds = append(policyStringIds, strconv.FormatInt(policyId, 10))
 	}
-	return []byte(recursion), nil
+	return this.Query(tx).
+		State(NSClusterStateEnabled).
+		Where("(FIND_IN_SET(JSON_EXTRACT(tls, '$.sslPolicyRef.sslPolicyId'), :policyIds)) ").
+		Param("policyIds", strings.Join(policyStringIds, ",")).
+		Count()
 }
 
 // NotifyUpdate 通知更改
 func (this *NSClusterDAO) NotifyUpdate(tx *dbs.Tx, clusterId int64) error {
-	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleDNS, clusterId, NSNodeTaskTypeConfigChanged)
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleDNS, clusterId, 0, NSNodeTaskTypeConfigChanged)
 }

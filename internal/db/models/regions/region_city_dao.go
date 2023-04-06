@@ -2,11 +2,14 @@ package regions
 
 import (
 	"encoding/json"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
+	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/types"
+	"sort"
 	"strconv"
 )
 
@@ -38,7 +41,7 @@ func init() {
 	})
 }
 
-// 启用条目
+// EnableRegionCity 启用条目
 func (this *RegionCityDAO) EnableRegionCity(tx *dbs.Tx, id uint32) error {
 	_, err := this.Query(tx).
 		Pk(id).
@@ -47,7 +50,7 @@ func (this *RegionCityDAO) EnableRegionCity(tx *dbs.Tx, id uint32) error {
 	return err
 }
 
-// 禁用条目
+// DisableRegionCity 禁用条目
 func (this *RegionCityDAO) DisableRegionCity(tx *dbs.Tx, id uint32) error {
 	_, err := this.Query(tx).
 		Pk(id).
@@ -56,7 +59,7 @@ func (this *RegionCityDAO) DisableRegionCity(tx *dbs.Tx, id uint32) error {
 	return err
 }
 
-// 查找启用中的条目
+// FindEnabledRegionCity 查找启用中的条目
 func (this *RegionCityDAO) FindEnabledRegionCity(tx *dbs.Tx, id int64) (*RegionCity, error) {
 	result, err := this.Query(tx).
 		Pk(id).
@@ -68,7 +71,7 @@ func (this *RegionCityDAO) FindEnabledRegionCity(tx *dbs.Tx, id int64) (*RegionC
 	return result.(*RegionCity), err
 }
 
-// 根据主键查找名称
+// FindRegionCityName 根据主键查找名称
 func (this *RegionCityDAO) FindRegionCityName(tx *dbs.Tx, id uint32) (string, error) {
 	return this.Query(tx).
 		Pk(id).
@@ -76,7 +79,7 @@ func (this *RegionCityDAO) FindRegionCityName(tx *dbs.Tx, id uint32) (string, er
 		FindStringCol("")
 }
 
-// 根据数据ID查找城市
+// FindCityWithDataId 根据数据ID查找城市
 func (this *RegionCityDAO) FindCityWithDataId(tx *dbs.Tx, dataId string) (int64, error) {
 	return this.Query(tx).
 		Attr("dataId", dataId).
@@ -84,9 +87,9 @@ func (this *RegionCityDAO) FindCityWithDataId(tx *dbs.Tx, dataId string) (int64,
 		FindInt64Col(0)
 }
 
-// 创建城市
+// CreateCity 创建城市
 func (this *RegionCityDAO) CreateCity(tx *dbs.Tx, provinceId int64, name string, dataId string) (int64, error) {
-	op := NewRegionCityOperator()
+	var op = NewRegionCityOperator()
 	op.ProvinceId = provinceId
 	op.Name = name
 	op.DataId = dataId
@@ -105,7 +108,18 @@ func (this *RegionCityDAO) CreateCity(tx *dbs.Tx, provinceId int64, name string,
 	return types.Int64(op.Id), nil
 }
 
-// 根据城市名查找城市ID
+// FindCityIdWithName 根据城市名查找城市ID
+func (this *RegionCityDAO) FindCityIdWithName(tx *dbs.Tx, provinceId int64, cityName string) (int64, error) {
+	return this.Query(tx).
+		Attr("provinceId", provinceId).
+		Where("(name=:cityName OR customName=:cityName OR JSON_CONTAINS(codes, :cityNameJSON) OR JSON_CONTAINS(customCodes, :cityNameJSON))").
+		Param("cityName", cityName).
+		Param("cityNameJSON", strconv.Quote(cityName)). // 查询的需要是个JSON字符串，所以这里加双引号
+		ResultPk().
+		FindInt64Col(0)
+}
+
+// FindCityIdWithNameCacheable 根据城市名查找城市ID，并加入缓存
 func (this *RegionCityDAO) FindCityIdWithNameCacheable(tx *dbs.Tx, provinceId int64, cityName string) (int64, error) {
 	key := cityName + "@" + numberutils.FormatInt64(provinceId)
 
@@ -119,16 +133,100 @@ func (this *RegionCityDAO) FindCityIdWithNameCacheable(tx *dbs.Tx, provinceId in
 
 	cityId, err := this.Query(tx).
 		Attr("provinceId", provinceId).
-		Where("JSON_CONTAINS(codes, :cityName)").
-		Param("cityName", strconv.Quote(cityName)). // 查询的需要是个JSON字符串，所以这里加双引号
+		Where("(name=:cityName OR customName=:cityName OR JSON_CONTAINS(codes, :cityNameJSON) OR JSON_CONTAINS(customCodes, :cityNameJSON))").
+		Param("cityName", cityName).
+		Param("cityNameJSON", strconv.Quote(cityName)). // 查询的需要是个JSON字符串，所以这里加双引号
 		ResultPk().
 		FindInt64Col(0)
 	if err != nil {
 		return 0, err
 	}
-	SharedCacheLocker.Lock()
-	regionCityNameAndIdCacheMap[key] = cityId
-	SharedCacheLocker.Unlock()
+	if cityId > 0 {
+		SharedCacheLocker.Lock()
+		regionCityNameAndIdCacheMap[key] = cityId
+		SharedCacheLocker.Unlock()
+	}
 
 	return cityId, nil
+}
+
+// FindAllEnabledCities 获取所有城市信息
+func (this *RegionCityDAO) FindAllEnabledCities(tx *dbs.Tx) (result []*RegionCity, err error) {
+	_, err = this.Query(tx).
+		State(RegionCityStateEnabled).
+		Slice(&result).
+		FindAll()
+	return
+}
+
+// FindAllEnabledCitiesWithProvinceId 获取某个省份下的所有城市
+func (this *RegionCityDAO) FindAllEnabledCitiesWithProvinceId(tx *dbs.Tx, provinceId int64) (result []*RegionCity, err error) {
+	_, err = this.Query(tx).
+		Attr("provinceId", provinceId).
+		State(RegionCityStateEnabled).
+		Slice(&result).
+		FindAll()
+	return
+}
+
+// UpdateCityCustom 自定义城市信息
+func (this *RegionCityDAO) UpdateCityCustom(tx *dbs.Tx, cityId int64, customName string, customCodes []string) error {
+	if customCodes == nil {
+		customCodes = []string{}
+	}
+	customCodesJSON, err := json.Marshal(customCodes)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		SharedCacheLocker.Lock()
+		regionCityNameAndIdCacheMap = map[string]int64{}
+		SharedCacheLocker.Unlock()
+	}()
+
+	return this.Query(tx).
+		Pk(cityId).
+		Set("customName", customName).
+		Set("customCodes", customCodesJSON).
+		UpdateQuickly()
+}
+
+// FindSimilarCities 查找类似城市名
+func (this *RegionCityDAO) FindSimilarCities(cities []*RegionCity, cityName string, size int) (result []*RegionCity) {
+	if len(cities) == 0 {
+		return
+	}
+
+	var similarResult = []maps.Map{}
+
+	for _, city := range cities {
+		var similarityList = []float32{}
+		for _, code := range city.AllCodes() {
+			var similarity = utils.Similar(cityName, code)
+			if similarity > 0 {
+				similarityList = append(similarityList, similarity)
+			}
+		}
+		if len(similarityList) > 0 {
+			similarResult = append(similarResult, maps.Map{
+				"similarity": numberutils.Max(similarityList...),
+				"city":       city,
+			})
+		}
+	}
+
+	sort.Slice(similarResult, func(i, j int) bool {
+		return similarResult[i].GetFloat32("similarity") > similarResult[j].GetFloat32("similarity")
+	})
+
+	if len(similarResult) > size {
+		similarResult = similarResult[:size]
+	}
+
+	for _, r := range similarResult {
+		result = append(result, r.Get("city").(*RegionCity))
+	}
+
+	return
 }

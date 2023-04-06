@@ -2,14 +2,14 @@ package nameservers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/1uLang/EdgeCommon/pkg/messageconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/TeaOSLab/EdgeAPI/internal/configs"
+	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/iwind/TeaGo/dbs"
@@ -52,7 +52,7 @@ func NextCommandRequestId() int64 {
 func init() {
 	dbs.OnReadyDone(func() {
 		// 清理WaitingChannelMap
-		go func() {
+		goman.New(func() {
 			ticker := time.NewTicker(30 * time.Second)
 			for range ticker.C {
 				nodeLocker.Lock()
@@ -64,10 +64,10 @@ func init() {
 				}
 				nodeLocker.Unlock()
 			}
-		}()
+		})
 
 		// 自动同步连接到本API节点的NS节点任务
-		go func() {
+		goman.New(func() {
 			defer func() {
 				_ = recover()
 			}()
@@ -97,7 +97,7 @@ func init() {
 				}
 				nodeLocker.Unlock()
 			}
-		}()
+		})
 	})
 }
 
@@ -111,28 +111,14 @@ func (this *NSNodeService) NsNodeStream(server pb.NSNodeService_NsNodeStreamServ
 	}
 
 	// 返回连接成功
-	{
-		apiConfig, err := configs.SharedAPIConfig()
-		if err != nil {
-			return err
-		}
-		connectedMessage := &messageconfigs.NSConnectedAPINodeMessage{APINodeId: apiConfig.NumberId()}
-		connectedMessageJSON, err := json.Marshal(connectedMessage)
-		if err != nil {
-			return errors.Wrap(err)
-		}
-		err = server.Send(&pb.NSNodeStreamMessage{
-			Code:     messageconfigs.NSMessageCodeConnectedAPINode,
-			DataJSON: connectedMessageJSON,
-		})
-		if err != nil {
-			return err
-		}
+	err = models.SharedNSNodeDAO.UpdateNodeConnectedAPINodes(nil, nodeId, []int64{teaconst.NodeId})
+	if err != nil {
+		return err
 	}
 
 	//logs.Println("[RPC]accepted ns node '" + types.String(nodeId) + "' connection")
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 标记为活跃状态
 	oldIsActive, err := models.SharedNSNodeDAO.FindNodeActive(tx, nodeId)
@@ -140,25 +126,38 @@ func (this *NSNodeService) NsNodeStream(server pb.NSNodeService_NsNodeStreamServ
 		return err
 	}
 	if !oldIsActive {
-		err = models.SharedNSNodeDAO.UpdateNodeActive(tx, nodeId, true)
+		inactiveNotifiedAt, err := models.SharedNSNodeDAO.FindNodeInactiveNotifiedAt(tx, nodeId)
 		if err != nil {
 			return err
 		}
+		if inactiveNotifiedAt > 0 {
+			// 设置为活跃
+			err = models.SharedNSNodeDAO.UpdateNodeActive(tx, nodeId, true)
+			if err != nil {
+				return err
+			}
 
-		// 发送恢复消息
-		clusterId, err := models.SharedNSNodeDAO.FindNodeClusterId(tx, nodeId)
-		if err != nil {
-			return err
-		}
-		nodeName, err := models.SharedNSNodeDAO.FindEnabledNSNodeName(tx, nodeId)
-		if err != nil {
-			return err
-		}
-		subject := "DNS节点\"" + nodeName + "\"已经恢复在线"
-		msg := "DNS节点\"" + nodeName + "\"已经恢复在线"
-		err = models.SharedMessageDAO.CreateNodeMessage(tx, nodeconfigs.NodeRoleDNS, clusterId, nodeId, models.MessageTypeNSNodeActive, models.MessageLevelSuccess, subject, msg, nil, false)
-		if err != nil {
-			return err
+			// 发送恢复消息
+			clusterId, err := models.SharedNSNodeDAO.FindNodeClusterId(tx, nodeId)
+			if err != nil {
+				return err
+			}
+			nodeName, err := models.SharedNSNodeDAO.FindEnabledNSNodeName(tx, nodeId)
+			if err != nil {
+				return err
+			}
+			subject := "NS节点\"" + nodeName + "\"已经恢复在线"
+			msg := "NS节点\"" + nodeName + "\"已经恢复在线"
+			err = models.SharedMessageDAO.CreateNodeMessage(tx, nodeconfigs.NodeRoleDNS, clusterId, nodeId, models.MessageTypeNSNodeActive, models.MessageLevelSuccess, subject, msg, nil, false)
+			if err != nil {
+				return err
+			}
+		} else {
+			// 设置为活跃
+			err = models.SharedNSNodeDAO.UpdateNodeActive(tx, nodeId, true)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -177,7 +176,7 @@ func (this *NSNodeService) NsNodeStream(server pb.NSNodeService_NsNodeStreamServ
 	}()
 
 	// 发送请求
-	go func() {
+	goman.New(func() {
 		for {
 			select {
 			case <-server.Context().Done():
@@ -203,7 +202,7 @@ func (this *NSNodeService) NsNodeStream(server pb.NSNodeService_NsNodeStreamServ
 				}
 			}
 		}
-	}()
+	})
 
 	// 接受请求
 	for {
@@ -241,7 +240,7 @@ func (this *NSNodeService) NsNodeStream(server pb.NSNodeService_NsNodeStreamServ
 // SendCommandToNSNode 向节点发送命令
 func (this *NSNodeService) SendCommandToNSNode(ctx context.Context, req *pb.NSNodeStreamMessage) (*pb.NSNodeStreamMessage, error) {
 	// 校验请求
-	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, _, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}

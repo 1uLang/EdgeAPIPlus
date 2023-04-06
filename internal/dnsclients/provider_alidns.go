@@ -17,18 +17,26 @@ type AliDNSProvider struct {
 
 	accessKeyId     string
 	accessKeySecret string
+	regionId        string
 }
 
 // Auth 认证
 func (this *AliDNSProvider) Auth(params maps.Map) error {
 	this.accessKeyId = params.GetString("accessKeyId")
 	this.accessKeySecret = params.GetString("accessKeySecret")
+	this.regionId = params.GetString("regionId")
+
 	if len(this.accessKeyId) == 0 {
 		return errors.New("'accessKeyId' should not be empty")
 	}
 	if len(this.accessKeySecret) == 0 {
 		return errors.New("'accessKeySecret' should not be empty")
 	}
+
+	if len(this.regionId) == 0 {
+		this.regionId = "cn-hangzhou"
+	}
+
 	return nil
 }
 
@@ -150,13 +158,13 @@ func (this *AliDNSProvider) AddRecord(domain string, newRecord *dnstypes.Record)
 	resp := alidns.CreateAddDomainRecordResponse()
 	err := this.doAPI(req, resp)
 	if err != nil {
-		return err
+		return this.WrapError(err, domain, newRecord)
 	}
 	if resp.IsSuccess() {
 		return nil
 	}
 
-	return errors.New(resp.GetHttpContentString())
+	return this.WrapError(errors.New(resp.GetHttpContentString()), domain, newRecord)
 }
 
 // UpdateRecord 修改记录
@@ -174,7 +182,7 @@ func (this *AliDNSProvider) UpdateRecord(domain string, record *dnstypes.Record,
 
 	resp := alidns.CreateUpdateDomainRecordResponse()
 	err := this.doAPI(req, resp)
-	return err
+	return this.WrapError(err, domain, newRecord)
 }
 
 // DeleteRecord 删除记录
@@ -184,7 +192,7 @@ func (this *AliDNSProvider) DeleteRecord(domain string, record *dnstypes.Record)
 
 	resp := alidns.CreateDeleteDomainRecordResponse()
 	err := this.doAPI(req, resp)
-	return err
+	return this.WrapError(err, domain, record)
 }
 
 // DefaultRoute 默认线路
@@ -196,7 +204,7 @@ func (this *AliDNSProvider) DefaultRoute() string {
 func (this *AliDNSProvider) doAPI(req requests.AcsRequest, resp responses.AcsResponse) error {
 	req.SetScheme("https")
 
-	client, err := alidns.NewClientWithAccessKey("cn-hangzhou", this.accessKeyId, this.accessKeySecret)
+	client, err := alidns.NewClientWithAccessKey(this.regionId, this.accessKeyId, this.accessKeySecret)
 	if err != nil {
 		return err
 	}

@@ -4,6 +4,7 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/userconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
@@ -16,7 +17,7 @@ import (
 
 func init() {
 	dbs.OnReadyDone(func() {
-		go func() {
+		goman.New(func() {
 			// 自动支付账单任务
 			var ticker = time.NewTicker(12 * time.Hour)
 			for range ticker.C {
@@ -29,7 +30,7 @@ func init() {
 					}
 				}
 			}
-		}()
+		})
 	})
 }
 
@@ -108,7 +109,7 @@ func (this *UserAccountDAO) UpdateUserAccount(tx *dbs.Tx, accountId int64, delta
 	if account == nil {
 		return errors.New("invalid account id '" + types.String(accountId) + "'")
 	}
-	var userId = int64(account.Id)
+	var userId = int64(account.UserId)
 	var deltaFloat64 = float64(delta)
 	if deltaFloat64 < 0 && account.Total < -deltaFloat64 {
 		return errors.New("not enough account quota to decrease")
@@ -233,5 +234,20 @@ func (this *UserAccountDAO) PayBills(tx *dbs.Tx) error {
 		}
 	}
 
+	return nil
+}
+
+// CheckUserAccount 检查用户账户
+func (this *UserAccountDAO) CheckUserAccount(tx *dbs.Tx, userId int64, accountId int64) error {
+	exists, err := this.Query(tx).
+		Pk(accountId).
+		Attr("userId", userId).
+		Exist()
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return models.ErrNotFound
+	}
 	return nil
 }

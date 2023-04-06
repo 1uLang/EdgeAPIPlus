@@ -2,9 +2,13 @@ package regions
 
 import (
 	"encoding/json"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
+	"github.com/iwind/TeaGo/maps"
+	"sort"
 	"strconv"
 )
 
@@ -36,7 +40,7 @@ func init() {
 	})
 }
 
-// 启用条目
+// EnableRegionProvider 启用条目
 func (this *RegionProviderDAO) EnableRegionProvider(tx *dbs.Tx, id uint32) error {
 	_, err := this.Query(tx).
 		Pk(id).
@@ -45,7 +49,7 @@ func (this *RegionProviderDAO) EnableRegionProvider(tx *dbs.Tx, id uint32) error
 	return err
 }
 
-// 禁用条目
+// DisableRegionProvider 禁用条目
 func (this *RegionProviderDAO) DisableRegionProvider(tx *dbs.Tx, id uint32) error {
 	_, err := this.Query(tx).
 		Pk(id).
@@ -54,8 +58,8 @@ func (this *RegionProviderDAO) DisableRegionProvider(tx *dbs.Tx, id uint32) erro
 	return err
 }
 
-// 查找启用中的条目
-func (this *RegionProviderDAO) FindEnabledRegionProvider(tx *dbs.Tx, id uint32) (*RegionProvider, error) {
+// FindEnabledRegionProvider 查找启用中的条目
+func (this *RegionProviderDAO) FindEnabledRegionProvider(tx *dbs.Tx, id int64) (*RegionProvider, error) {
 	result, err := this.Query(tx).
 		Pk(id).
 		Attr("state", RegionProviderStateEnabled).
@@ -66,7 +70,7 @@ func (this *RegionProviderDAO) FindEnabledRegionProvider(tx *dbs.Tx, id uint32) 
 	return result.(*RegionProvider), err
 }
 
-// 根据主键查找名称
+// FindRegionProviderName 根据主键查找名称
 func (this *RegionProviderDAO) FindRegionProviderName(tx *dbs.Tx, id uint32) (string, error) {
 	return this.Query(tx).
 		Pk(id).
@@ -74,7 +78,17 @@ func (this *RegionProviderDAO) FindRegionProviderName(tx *dbs.Tx, id uint32) (st
 		FindStringCol("")
 }
 
-// 根据服务商名称查找服务商ID
+// FindProviderIdWithName 根据服务商名称查找服务商ID
+func (this *RegionProviderDAO) FindProviderIdWithName(tx *dbs.Tx, providerName string) (int64, error) {
+	return this.Query(tx).
+		Where("(name=:providerName OR customName=:providerName OR JSON_CONTAINS(codes, :providerNameJSON) OR JSON_CONTAINS(customCodes, :providerNameJSON))").
+		Param("providerName", providerName).
+		Param("providerNameJSON", strconv.Quote(providerName)). // 查询的需要是个JSON字符串，所以这里加双引号
+		ResultPk().
+		FindInt64Col(0)
+}
+
+// FindProviderIdWithNameCacheable 根据服务商名称查找服务商ID，并保存进缓存
 func (this *RegionProviderDAO) FindProviderIdWithNameCacheable(tx *dbs.Tx, providerName string) (int64, error) {
 	SharedCacheLocker.RLock()
 	providerId, ok := regionProviderNameAndIdCacheMap[providerName]
@@ -85,24 +99,27 @@ func (this *RegionProviderDAO) FindProviderIdWithNameCacheable(tx *dbs.Tx, provi
 	SharedCacheLocker.RUnlock()
 
 	providerId, err := this.Query(tx).
-		Where("JSON_CONTAINS(codes, :providerName)").
-		Param("providerName", strconv.Quote(providerName)). // 查询的需要是个JSON字符串，所以这里加双引号
+		Where("(name=:providerName OR customName=:providerName OR JSON_CONTAINS(codes, :providerNameJSON) OR JSON_CONTAINS(customCodes, :providerNameJSON))").
+		Param("providerName", providerName).
+		Param("providerNameJSON", strconv.Quote(providerName)). // 查询的需要是个JSON字符串，所以这里加双引号
 		ResultPk().
 		FindInt64Col(0)
 	if err != nil {
 		return 0, err
 	}
 
-	SharedCacheLocker.Lock()
-	regionProviderNameAndIdCacheMap[providerName] = providerId
-	SharedCacheLocker.Unlock()
+	if providerId > 0 {
+		SharedCacheLocker.Lock()
+		regionProviderNameAndIdCacheMap[providerName] = providerId
+		SharedCacheLocker.Unlock()
+	}
 
 	return providerId, nil
 }
 
-// 创建Provider
+// CreateProvider 创建Provider
 func (this *RegionProviderDAO) CreateProvider(tx *dbs.Tx, name string) (int64, error) {
-	op := NewRegionProviderOperator()
+	var op = NewRegionProviderOperator()
 	op.Name = name
 
 	codesJSON, err := json.Marshal([]string{name})
@@ -111,4 +128,75 @@ func (this *RegionProviderDAO) CreateProvider(tx *dbs.Tx, name string) (int64, e
 	}
 	op.Codes = codesJSON
 	return this.SaveInt64(tx, op)
+}
+
+// FindAllEnabledProviders 查找所有服务商
+func (this *RegionProviderDAO) FindAllEnabledProviders(tx *dbs.Tx) (result []*RegionProvider, err error) {
+	_, err = this.Query(tx).
+		State(RegionProviderStateEnabled).
+		Slice(&result).
+		FindAll()
+	return
+}
+
+// UpdateProviderCustom 修改ISP自定义信息
+func (this *RegionProviderDAO) UpdateProviderCustom(tx *dbs.Tx, providerId int64, customName string, customCodes []string) error {
+	if customCodes == nil {
+		customCodes = []string{}
+	}
+	customCodesJSON, err := json.Marshal(customCodes)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		SharedCacheLocker.Lock()
+		regionProviderNameAndIdCacheMap = map[string]int64{}
+		SharedCacheLocker.Unlock()
+	}()
+
+	return this.Query(tx).
+		Pk(providerId).
+		Set("customName", customName).
+		Set("customCodes", customCodesJSON).
+		UpdateQuickly()
+}
+
+// FindSimilarProviders 查找类似ISP运营商
+func (this *RegionProviderDAO) FindSimilarProviders(providers []*RegionProvider, providerName string, size int) (result []*RegionProvider) {
+	if len(providers) == 0 {
+		return
+	}
+
+	var similarResult = []maps.Map{}
+
+	for _, provider := range providers {
+		var similarityList = []float32{}
+		for _, code := range provider.AllCodes() {
+			var similarity = utils.Similar(providerName, code)
+			if similarity > 0 {
+				similarityList = append(similarityList, similarity)
+			}
+		}
+		if len(similarityList) > 0 {
+			similarResult = append(similarResult, maps.Map{
+				"similarity": numberutils.Max(similarityList...),
+				"provider":   provider,
+			})
+		}
+	}
+
+	sort.Slice(similarResult, func(i, j int) bool {
+		return similarResult[i].GetFloat32("similarity") > similarResult[j].GetFloat32("similarity")
+	})
+
+	if len(similarResult) > size {
+		similarResult = similarResult[:size]
+	}
+
+	for _, r := range similarResult {
+		result = append(result, r.Get("provider").(*RegionProvider))
+	}
+
+	return
 }

@@ -2,45 +2,48 @@ package tasks
 
 import (
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/iwind/TeaGo/dbs"
-	"github.com/iwind/TeaGo/logs"
 	"time"
 )
 
 func init() {
-	dbs.OnReady(func() {
-		go NewNodeLogCleanerTask().Start()
+	dbs.OnReadyDone(func() {
+		goman.New(func() {
+			NewNodeLogCleanerTask(24 * time.Hour).Start()
+		})
 	})
 }
 
 // NodeLogCleanerTask 清理节点日志的任务
 type NodeLogCleanerTask struct {
-	duration time.Duration
+	BaseTask
+
+	ticker *time.Ticker
 }
 
-func NewNodeLogCleanerTask() *NodeLogCleanerTask {
+func NewNodeLogCleanerTask(duration time.Duration) *NodeLogCleanerTask {
 	return &NodeLogCleanerTask{
-		duration: 24 * time.Hour,
+		ticker: time.NewTicker(duration),
 	}
 }
 
 func (this *NodeLogCleanerTask) Start() {
-	ticker := time.NewTicker(this.duration)
-	for range ticker.C {
-		err := this.loop()
+	for range this.ticker.C {
+		err := this.Loop()
 		if err != nil {
-			logs.Println("[TASK]" + err.Error())
+			this.logErr("NodeLogCleanerTask", err.Error())
 		}
 	}
 }
 
-func (this *NodeLogCleanerTask) loop() error {
-	// 删除7天以前的info日志
-	err := models.SharedNodeLogDAO.DeleteExpiredLogsWithLevel(nil, "info", 7)
+func (this *NodeLogCleanerTask) Loop() error {
+	// 删除 N天 以前的info日志
+	err := models.SharedNodeLogDAO.DeleteExpiredLogsWithLevel(nil, "info", 3)
 	if err != nil {
 		return err
 	}
 
-	// TODO 14天这个数值改成可以设置
-	return models.SharedNodeLogDAO.DeleteExpiredLogs(nil, 14)
+	// TODO 7天这个数值改成可以设置
+	return models.SharedNodeLogDAO.DeleteExpiredLogs(nil, 7)
 }

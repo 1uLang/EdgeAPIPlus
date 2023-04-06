@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/reporterconfigs"
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
@@ -49,12 +50,17 @@ func (this *ReportNodeDAO) EnableReportNode(tx *dbs.Tx, id int64) error {
 }
 
 // DisableReportNode 禁用条目
-func (this *ReportNodeDAO) DisableReportNode(tx *dbs.Tx, id int64) error {
+func (this *ReportNodeDAO) DisableReportNode(tx *dbs.Tx, nodeId int64) error {
 	_, err := this.Query(tx).
-		Pk(id).
+		Pk(nodeId).
 		Set("state", ReportNodeStateDisabled).
 		Update()
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 删除运行日志
+	return SharedNodeLogDAO.DeleteNodeLogs(tx, nodeconfigs.NodeRoleReport, nodeId)
 }
 
 // FindEnabledReportNode 查找启用中的条目
@@ -92,7 +98,7 @@ func (this *ReportNodeDAO) CreateReportNode(tx *dbs.Tx, name string, location st
 		return 0, err
 	}
 
-	op := NewReportNodeOperator()
+	var op = NewReportNodeOperator()
 	op.UniqueId = uniqueId
 	op.Secret = secret
 	op.Name = name
@@ -130,7 +136,7 @@ func (this *ReportNodeDAO) UpdateReportNode(tx *dbs.Tx, nodeId int64, name strin
 		return errors.New("invalid nodeId")
 	}
 
-	op := NewReportNodeOperator()
+	var op = NewReportNodeOperator()
 	op.Id = nodeId
 	op.Name = name
 	op.Location = location
@@ -169,7 +175,7 @@ func (this *ReportNodeDAO) CountAllEnabledReportNodes(tx *dbs.Tx, groupId int64,
 	}
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword OR location LIKE :keyword OR isp LIKE :keyword OR allowIPs LIKE :keyword OR (status IS NOT NULL AND JSON_EXTRACT(status, 'ip') LIKE :keyword))")
-		query.Param("keyword", "%"+keyword+"%")
+		query.Param("keyword", dbutils.QuoteLike(keyword))
 	}
 	return query.Count()
 }
@@ -201,7 +207,7 @@ func (this *ReportNodeDAO) ListEnabledReportNodes(tx *dbs.Tx, groupId int64, key
 			OR (LENGTH(location)=0 AND JSON_EXTRACT(status, '$.location') LIKE :keyword) 
 			OR (LENGTH(isp)=0 AND JSON_EXTRACT(status, '$.isp') LIKE :keyword)
        ))`)
-		query.Param("keyword", "%"+keyword+"%")
+		query.Param("keyword", dbutils.QuoteLike(keyword))
 	}
 	query.Slice(&result)
 	_, err = query.Asc("isActive").
@@ -263,13 +269,19 @@ func (this *ReportNodeDAO) FindEnabledNodeIdWithUniqueId(tx *dbs.Tx, uniqueId st
 }
 
 // UpdateNodeStatus 更改节点状态
-func (this ReportNodeDAO) UpdateNodeStatus(tx *dbs.Tx, nodeId int64, statusJSON []byte) error {
-	if statusJSON == nil {
+func (this *ReportNodeDAO) UpdateNodeStatus(tx *dbs.Tx, nodeId int64, nodeStatus *reporterconfigs.Status) error {
+	if nodeStatus == nil {
 		return nil
 	}
-	_, err := this.Query(tx).
+
+	nodeStatusJSON, err := json.Marshal(nodeStatus)
+	if err != nil {
+		return err
+	}
+
+	_, err = this.Query(tx).
 		Pk(nodeId).
-		Set("status", string(statusJSON)).
+		Set("status", nodeStatusJSON).
 		Update()
 	return err
 }
@@ -308,6 +320,7 @@ func (this *ReportNodeDAO) FindNodeAllowIPs(tx *dbs.Tx, nodeId int64) ([]string,
 func (this *ReportNodeDAO) CountAllLowerVersionNodes(tx *dbs.Tx, version string) (int64, error) {
 	return this.Query(tx).
 		State(ReportNodeStateEnabled).
+		Attr("isOn", true).
 		Where("status IS NOT NULL").
 		Where("(JSON_EXTRACT(status, '$.buildVersionCode') IS NULL OR JSON_EXTRACT(status, '$.buildVersionCode')<:version)").
 		Param("version", utils.VersionToLong(version)).

@@ -4,6 +4,7 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ipconfigs"
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
@@ -22,11 +23,11 @@ var listTypeCacheMap = map[int64]*IPList{} // listId => *IPList
 var DefaultGlobalIPList = &IPList{
 	Id:       uint32(firewallconfigs.GlobalListId),
 	Name:     "全局封锁名单",
-	IsPublic: 1,
-	IsGlobal: 1,
+	IsPublic: true,
+	IsGlobal: true,
 	Type:     "black",
 	State:    IPListStateEnabled,
-	IsOn:     1,
+	IsOn:     true,
 }
 
 type IPListDAO dbs.DAO
@@ -137,10 +138,11 @@ func (this *IPListDAO) FindIPListCacheable(tx *dbs.Tx, listId int64) (*IPList, e
 }
 
 // CreateIPList 创建名单
-func (this *IPListDAO) CreateIPList(tx *dbs.Tx, userId int64, listType ipconfigs.IPListType, name string, code string, timeoutJSON []byte, description string, isPublic bool, isGlobal bool) (int64, error) {
-	op := NewIPListOperator()
+func (this *IPListDAO) CreateIPList(tx *dbs.Tx, userId int64, serverId int64, listType ipconfigs.IPListType, name string, code string, timeoutJSON []byte, description string, isPublic bool, isGlobal bool) (int64, error) {
+	var op = NewIPListOperator()
 	op.IsOn = true
 	op.UserId = userId
+	op.ServerId = serverId
 	op.State = IPListStateEnabled
 	op.Type = listType
 	op.Name = name
@@ -163,7 +165,7 @@ func (this *IPListDAO) UpdateIPList(tx *dbs.Tx, listId int64, name string, code 
 	if listId <= 0 {
 		return errors.New("invalid listId")
 	}
-	op := NewIPListOperator()
+	var op = NewIPListOperator()
 	op.Id = listId
 	op.Name = name
 	op.Code = code
@@ -184,16 +186,31 @@ func (this *IPListDAO) IncreaseVersion(tx *dbs.Tx) (int64, error) {
 
 // CheckUserIPList 检查用户权限
 func (this *IPListDAO) CheckUserIPList(tx *dbs.Tx, userId int64, listId int64) error {
-	ok, err := this.Query(tx).
+	if userId == 0 || listId == 0 {
+		return ErrNotFound
+	}
+
+	// 获取名单信息
+	listOne, err := this.Query(tx).
 		Pk(listId).
-		Attr("userId", userId).
-		Exist()
+		Result("userId", "serverId").
+		Find()
 	if err != nil {
 		return err
 	}
-	if ok {
+	if listOne == nil {
+		return ErrNotFound
+	}
+	var list = listOne.(*IPList)
+	if int64(list.UserId) == userId {
 		return nil
 	}
+
+	var serverId = int64(list.ServerId)
+	if serverId > 0 {
+		return SharedServerDAO.CheckUserServer(tx, userId, serverId)
+	}
+
 	return ErrNotFound
 }
 
@@ -205,7 +222,7 @@ func (this *IPListDAO) CountAllEnabledIPLists(tx *dbs.Tx, listType string, isPub
 		Attr("isPublic", isPublic)
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword OR description LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 	return query.Count()
 }
@@ -218,7 +235,7 @@ func (this *IPListDAO) ListEnabledIPLists(tx *dbs.Tx, listType string, isPublic 
 		Attr("isPublic", isPublic)
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword OR description LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 	_, err = query.Offset(offset).
 		Limit(size).
@@ -284,7 +301,7 @@ func (this *IPListDAO) NotifyUpdate(tx *dbs.Tx, listId int64, taskType NodeTaskT
 
 	if len(resultClusterIds) > 0 {
 		for _, clusterId := range resultClusterIds {
-			err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, taskType)
+			err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, taskType)
 			if err != nil {
 				return err
 			}
@@ -292,4 +309,23 @@ func (this *IPListDAO) NotifyUpdate(tx *dbs.Tx, listId int64, taskType NodeTaskT
 	}
 
 	return nil
+}
+
+// FindOrCreateGlobalBlackIPList 查询或创建全局黑名单分组
+func (this *IPListDAO) FindOrCreateGlobalBlackIPList(tx *dbs.Tx) (id int64, err error) {
+	id, err = this.Query(tx).
+		State(IPListStateEnabled).
+		Attr("type", "black").
+		Attr("isPublic", 1).
+		Attr("isGlobal", 1).
+		Limit(1).ResultPk().
+		FindInt64Col(0)
+	if err != nil {
+		return
+	}
+	if id == 0 { //无全局黑名单则创建
+		return this.CreateIPList(tx, 0, 0, ipconfigs.IPListTypeBlack, "全局黑名单", "", nil, "默认全局黑名单", true, true)
+	} else {
+		return
+	}
 }

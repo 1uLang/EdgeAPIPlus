@@ -75,7 +75,7 @@ func (this *NodeRegionDAO) FindNodeRegionName(tx *dbs.Tx, id int64) (string, err
 
 // CreateRegion 创建区域
 func (this *NodeRegionDAO) CreateRegion(tx *dbs.Tx, adminId int64, name string, description string) (int64, error) {
-	op := NewNodeRegionOperator()
+	var op = NewNodeRegionOperator()
 	op.AdminId = adminId
 	op.Name = name
 	op.Description = description
@@ -89,7 +89,7 @@ func (this *NodeRegionDAO) UpdateRegion(tx *dbs.Tx, regionId int64, name string,
 	if regionId <= 0 {
 		return errors.New("invalid regionId")
 	}
-	op := NewNodeRegionOperator()
+	var op = NewNodeRegionOperator()
 	op.Id = regionId
 	op.Name = name
 	op.Description = description
@@ -162,8 +162,8 @@ func (this *NodeRegionDAO) UpdateRegionItemPrice(tx *dbs.Tx, regionId int64, ite
 	}
 	prices := one.(*NodeRegion).Prices
 	pricesMap := map[string]float32{}
-	if len(prices) > 0 && prices != "null" {
-		err = json.Unmarshal([]byte(prices), &pricesMap)
+	if IsNotNull(prices) {
+		err = json.Unmarshal(prices, &pricesMap)
 		if err != nil {
 			return err
 		}

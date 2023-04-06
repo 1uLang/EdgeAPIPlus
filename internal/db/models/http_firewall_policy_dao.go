@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
@@ -116,7 +117,7 @@ func (this *HTTPFirewallPolicyDAO) FindAllEnabledFirewallPolicies(tx *dbs.Tx) (r
 
 // CreateFirewallPolicy 创建策略
 func (this *HTTPFirewallPolicyDAO) CreateFirewallPolicy(tx *dbs.Tx, userId int64, serverGroupId int64, serverId int64, isOn bool, name string, description string, inboundJSON []byte, outboundJSON []byte) (int64, error) {
-	op := NewHTTPFirewallPolicyOperator()
+	var op = NewHTTPFirewallPolicyOperator()
 	op.UserId = userId
 	op.GroupId = serverGroupId
 	op.ServerId = serverId
@@ -130,6 +131,33 @@ func (this *HTTPFirewallPolicyDAO) CreateFirewallPolicy(tx *dbs.Tx, userId int64
 	if len(outboundJSON) > 0 {
 		op.Outbound = outboundJSON
 	}
+
+	if userId <= 0 && serverGroupId <= 0 && serverId <= 0 {
+		// synFlood
+		var synFloodConfig = firewallconfigs.DefaultSYNFloodConfig()
+		synFloodJSON, err := json.Marshal(synFloodConfig)
+		if err != nil {
+			return 0, err
+		}
+		op.SynFlood = synFloodJSON
+
+		// block options
+		var blockOptions = firewallconfigs.DefaultHTTPFirewallBlockAction()
+		blockOptionsJSON, err := json.Marshal(blockOptions)
+		if err != nil {
+			return 0, err
+		}
+		op.BlockOptions = blockOptionsJSON
+
+		// captcha options
+		var captchaOptions = firewallconfigs.DefaultHTTPFirewallCaptchaAction()
+		captchaOptionsJSON, err := json.Marshal(captchaOptions)
+		if err != nil {
+			return 0, err
+		}
+		op.CaptchaOptions = captchaOptionsJSON
+	}
+
 	err := this.Save(tx, op)
 	return types.Int64(op.Id), err
 }
@@ -149,8 +177,8 @@ func (this *HTTPFirewallPolicyDAO) CreateDefaultFirewallPolicy(tx *dbs.Tx, name 
 		groupCodes = append(groupCodes, group.Code)
 	}
 
-	inboundConfig := &firewallconfigs.HTTPFirewallInboundConfig{IsOn: true}
-	outboundConfig := &firewallconfigs.HTTPFirewallOutboundConfig{IsOn: true}
+	var inboundConfig = &firewallconfigs.HTTPFirewallInboundConfig{IsOn: true}
+	var outboundConfig = &firewallconfigs.HTTPFirewallOutboundConfig{IsOn: true}
 	if templatePolicy.Inbound != nil {
 		for _, group := range templatePolicy.Inbound.Groups {
 			isOn := lists.ContainsString(groupCodes, group.Code)
@@ -196,6 +224,7 @@ func (this *HTTPFirewallPolicyDAO) CreateDefaultFirewallPolicy(tx *dbs.Tx, name 
 	if err != nil {
 		return 0, err
 	}
+
 	return policyId, nil
 }
 
@@ -204,7 +233,7 @@ func (this *HTTPFirewallPolicyDAO) UpdateFirewallPolicyInboundAndOutbound(tx *db
 	if policyId <= 0 {
 		return errors.New("invalid policyId")
 	}
-	op := NewHTTPFirewallPolicyOperator()
+	var op = NewHTTPFirewallPolicyOperator()
 	op.Id = policyId
 	if len(inboundJSON) > 0 {
 		op.Inbound = inboundJSON
@@ -233,7 +262,7 @@ func (this *HTTPFirewallPolicyDAO) UpdateFirewallPolicyInbound(tx *dbs.Tx, polic
 	if policyId <= 0 {
 		return errors.New("invalid policyId")
 	}
-	op := NewHTTPFirewallPolicyOperator()
+	var op = NewHTTPFirewallPolicyOperator()
 	op.Id = policyId
 	if len(inboundJSON) > 0 {
 		op.Inbound = inboundJSON
@@ -249,11 +278,23 @@ func (this *HTTPFirewallPolicyDAO) UpdateFirewallPolicyInbound(tx *dbs.Tx, polic
 }
 
 // UpdateFirewallPolicy 修改策略
-func (this *HTTPFirewallPolicyDAO) UpdateFirewallPolicy(tx *dbs.Tx, policyId int64, isOn bool, name string, description string, inboundJSON []byte, outboundJSON []byte, blockOptionsJSON []byte, mode firewallconfigs.FirewallMode) error {
+func (this *HTTPFirewallPolicyDAO) UpdateFirewallPolicy(tx *dbs.Tx,
+	policyId int64,
+	isOn bool,
+	name string,
+	description string,
+	inboundJSON []byte,
+	outboundJSON []byte,
+	blockOptionsJSON []byte,
+	captchaOptionsJSON []byte,
+	mode firewallconfigs.FirewallMode,
+	useLocalFirewall bool,
+	synFloodConfig *firewallconfigs.SYNFloodConfig,
+	logConfig *firewallconfigs.HTTPFirewallPolicyLogConfig) error {
 	if policyId <= 0 {
 		return errors.New("invalid policyId")
 	}
-	op := NewHTTPFirewallPolicyOperator()
+	var op = NewHTTPFirewallPolicyOperator()
 	op.Id = policyId
 	op.IsOn = isOn
 	op.Name = name
@@ -269,9 +310,34 @@ func (this *HTTPFirewallPolicyDAO) UpdateFirewallPolicy(tx *dbs.Tx, policyId int
 	} else {
 		op.Outbound = "null"
 	}
-	if len(blockOptionsJSON) > 0 {
+	if IsNotNull(blockOptionsJSON) {
 		op.BlockOptions = blockOptionsJSON
 	}
+	if IsNotNull(captchaOptionsJSON) {
+		op.CaptchaOptions = captchaOptionsJSON
+	}
+
+	if synFloodConfig != nil {
+		synFloodConfigJSON, err := json.Marshal(synFloodConfig)
+		if err != nil {
+			return err
+		}
+		op.SynFlood = synFloodConfigJSON
+	} else {
+		op.SynFlood = "null"
+	}
+
+	if logConfig != nil {
+		logJSON, err := json.Marshal(logConfig)
+		if err != nil {
+			return err
+		}
+		op.Log = logJSON
+	} else {
+		op.Log = "null"
+	}
+
+	op.UseLocalFirewall = useLocalFirewall
 	err := this.Save(tx, op)
 	if err != nil {
 		return err
@@ -281,11 +347,15 @@ func (this *HTTPFirewallPolicyDAO) UpdateFirewallPolicy(tx *dbs.Tx, policyId int
 }
 
 // CountAllEnabledFirewallPolicies 计算所有可用的策略数量
-func (this *HTTPFirewallPolicyDAO) CountAllEnabledFirewallPolicies(tx *dbs.Tx, keyword string) (int64, error) {
+func (this *HTTPFirewallPolicyDAO) CountAllEnabledFirewallPolicies(tx *dbs.Tx, clusterId int64, keyword string) (int64, error) {
 	query := this.Query(tx)
+	if clusterId > 0 {
+		query.Where("id IN (SELECT httpFirewallPolicyId FROM " + SharedNodeClusterDAO.Table + " WHERE id=:clusterId)")
+		query.Param("clusterId", clusterId)
+	}
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 	return query.
 		State(HTTPFirewallPolicyStateEnabled).
@@ -296,11 +366,15 @@ func (this *HTTPFirewallPolicyDAO) CountAllEnabledFirewallPolicies(tx *dbs.Tx, k
 }
 
 // ListEnabledFirewallPolicies 列出单页的策略
-func (this *HTTPFirewallPolicyDAO) ListEnabledFirewallPolicies(tx *dbs.Tx, keyword string, offset int64, size int64) (result []*HTTPFirewallPolicy, err error) {
+func (this *HTTPFirewallPolicyDAO) ListEnabledFirewallPolicies(tx *dbs.Tx, clusterId int64, keyword string, offset int64, size int64) (result []*HTTPFirewallPolicy, err error) {
 	query := this.Query(tx)
+	if clusterId > 0 {
+		query.Where("id IN (SELECT httpFirewallPolicyId FROM " + SharedNodeClusterDAO.Table + " WHERE id=:clusterId)")
+		query.Param("clusterId", clusterId)
+	}
 	if len(keyword) > 0 {
 		query.Where("(name LIKE :keyword)").
-			Param("keyword", "%"+keyword+"%")
+			Param("keyword", dbutils.QuoteLike(keyword))
 	}
 	_, err = query.
 		State(HTTPFirewallPolicyStateEnabled).
@@ -334,11 +408,12 @@ func (this *HTTPFirewallPolicyDAO) ComposeFirewallPolicy(tx *dbs.Tx, policyId in
 		return nil, nil
 	}
 
-	config := &firewallconfigs.HTTPFirewallPolicy{}
+	var config = &firewallconfigs.HTTPFirewallPolicy{}
 	config.Id = int64(policy.Id)
-	config.IsOn = policy.IsOn == 1
+	config.IsOn = policy.IsOn
 	config.Name = policy.Name
 	config.Description = policy.Description
+	config.UseLocalFirewall = policy.UseLocalFirewall == 1
 
 	if len(policy.Mode) == 0 {
 		policy.Mode = firewallconfigs.FirewallModeDefend
@@ -348,7 +423,7 @@ func (this *HTTPFirewallPolicyDAO) ComposeFirewallPolicy(tx *dbs.Tx, policyId in
 	// Inbound
 	inbound := &firewallconfigs.HTTPFirewallInboundConfig{}
 	if IsNotNull(policy.Inbound) {
-		err = json.Unmarshal([]byte(policy.Inbound), inbound)
+		err = json.Unmarshal(policy.Inbound, inbound)
 		if err != nil {
 			return nil, err
 		}
@@ -376,7 +451,7 @@ func (this *HTTPFirewallPolicyDAO) ComposeFirewallPolicy(tx *dbs.Tx, policyId in
 	// Outbound
 	outbound := &firewallconfigs.HTTPFirewallOutboundConfig{}
 	if IsNotNull(policy.Outbound) {
-		err = json.Unmarshal([]byte(policy.Outbound), outbound)
+		err = json.Unmarshal(policy.Outbound, outbound)
 		if err != nil {
 			return nil, err
 		}
@@ -403,12 +478,44 @@ func (this *HTTPFirewallPolicyDAO) ComposeFirewallPolicy(tx *dbs.Tx, policyId in
 
 	// Block动作配置
 	if IsNotNull(policy.BlockOptions) {
-		blockAction := &firewallconfigs.HTTPFirewallBlockAction{}
-		err = json.Unmarshal([]byte(policy.BlockOptions), blockAction)
+		var blockAction = &firewallconfigs.HTTPFirewallBlockAction{}
+		err = json.Unmarshal(policy.BlockOptions, blockAction)
 		if err != nil {
 			return config, err
 		}
 		config.BlockOptions = blockAction
+	}
+
+	// Captcha动作配置
+	if IsNotNull(policy.CaptchaOptions) {
+		var captchaAction = &firewallconfigs.HTTPFirewallCaptchaAction{}
+		err = json.Unmarshal(policy.CaptchaOptions, captchaAction)
+		if err != nil {
+			return config, err
+		}
+		config.CaptchaOptions = captchaAction
+	}
+
+	// syn flood
+	if IsNotNull(policy.SynFlood) {
+		var synFloodConfig = &firewallconfigs.SYNFloodConfig{}
+		err = json.Unmarshal(policy.SynFlood, synFloodConfig)
+		if err != nil {
+			return nil, err
+		}
+		config.SYNFlood = synFloodConfig
+	}
+
+	// log
+	if IsNotNull(policy.Log) {
+		var logConfig = &firewallconfigs.HTTPFirewallPolicyLogConfig{}
+		err = json.Unmarshal(policy.Log, logConfig)
+		if err != nil {
+			return nil, err
+		}
+		config.Log = logConfig
+	} else {
+		config.Log = firewallconfigs.DefaultHTTPFirewallPolicyLogConfig
 	}
 
 	if cacheMap != nil {
@@ -451,6 +558,7 @@ func (this *HTTPFirewallPolicyDAO) CheckUserFirewallPolicy(tx *dbs.Tx, userId in
 }
 
 // FindEnabledFirewallPolicyIdsWithIPListId 查找包含某个IPList的所有策略
+// TODO 改成通过 serverId 查询
 func (this *HTTPFirewallPolicyDAO) FindEnabledFirewallPolicyIdsWithIPListId(tx *dbs.Tx, ipListId int64) ([]int64, error) {
 	ones, err := this.Query(tx).
 		ResultPk().
@@ -469,6 +577,7 @@ func (this *HTTPFirewallPolicyDAO) FindEnabledFirewallPolicyIdsWithIPListId(tx *
 }
 
 // FindEnabledFirewallPolicyWithIPListId 查找使用某个IPList的策略
+// TODO 改成通过 serverId 查询
 func (this *HTTPFirewallPolicyDAO) FindEnabledFirewallPolicyWithIPListId(tx *dbs.Tx, ipListId int64) (*HTTPFirewallPolicy, error) {
 	one, err := this.Query(tx).
 		State(HTTPFirewallPolicyStateEnabled).

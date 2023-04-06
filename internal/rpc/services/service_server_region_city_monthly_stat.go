@@ -15,7 +15,7 @@ type ServerRegionCityMonthlyStatService struct {
 
 // 查找前N个城市
 func (this *ServerRegionCityMonthlyStatService) FindTopServerRegionCityMonthlyStats(ctx context.Context, req *pb.FindTopServerRegionCityMonthlyStatsRequest) (*pb.FindTopServerRegionCityMonthlyStatsResponse, error) {
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func (this *ServerRegionCityMonthlyStatService) FindTopServerRegionCityMonthlySt
 	if err != nil {
 		return nil, err
 	}
-	pbStats := []*pb.FindTopServerRegionCityMonthlyStatsResponse_Stat{}
+	var pbStats = []*pb.FindTopServerRegionCityMonthlyStatsResponse_Stat{}
 	for _, stat := range statList {
 		pbStat := &pb.FindTopServerRegionCityMonthlyStatsResponse_Stat{
 			Count: int64(stat.Count),
@@ -63,15 +63,15 @@ func (this *ServerRegionCityMonthlyStatService) FindTopServerRegionCityMonthlySt
 		}
 		pbStat.RegionCountry = &pb.RegionCountry{
 			Id:   int64(country.Id),
-			Name: country.Name,
+			Name: country.DisplayName(),
 		}
 		pbStat.RegionProvince = &pb.RegionProvince{
 			Id:   int64(province.Id),
-			Name: province.Name,
+			Name: province.DisplayName(),
 		}
 		pbStat.RegionCity = &pb.RegionCity{
 			Id:   int64(city.Id),
-			Name: city.Name,
+			Name: city.DisplayName(),
 		}
 		pbStats = append(pbStats, pbStat)
 	}

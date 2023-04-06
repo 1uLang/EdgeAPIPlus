@@ -1,4 +1,5 @@
-// Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
+// Copyright 2021-2022 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
+//go:build plus
 
 package nameservers
 
@@ -8,15 +9,20 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/configutils"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
+	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/installers"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/logs"
 	stringutil "github.com/iwind/TeaGo/utils/string"
 	"io"
 	"path/filepath"
+	"time"
 )
 
 // NSNodeService 域名服务器节点服务
@@ -24,9 +30,9 @@ type NSNodeService struct {
 	services.BaseService
 }
 
-// FindAllEnabledNSNodesWithNSClusterId 根据集群查找所有节点
-func (this *NSNodeService) FindAllEnabledNSNodesWithNSClusterId(ctx context.Context, req *pb.FindAllEnabledNSNodesWithNSClusterIdRequest) (*pb.FindAllEnabledNSNodesWithNSClusterIdResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+// FindAllNSNodesWithNSClusterId 根据集群查找所有节点
+func (this *NSNodeService) FindAllNSNodesWithNSClusterId(ctx context.Context, req *pb.FindAllNSNodesWithNSClusterIdRequest) (*pb.FindAllNSNodesWithNSClusterIdResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -41,23 +47,24 @@ func (this *NSNodeService) FindAllEnabledNSNodesWithNSClusterId(ctx context.Cont
 	pbNodes := []*pb.NSNode{}
 	for _, node := range nodes {
 		pbNodes = append(pbNodes, &pb.NSNode{
-			Id:          int64(node.Id),
-			Name:        node.Name,
-			IsOn:        node.IsOn == 1,
-			UniqueId:    node.UniqueId,
-			Secret:      node.Secret,
-			IsInstalled: node.IsInstalled == 1,
-			InstallDir:  node.InstallDir,
-			IsUp:        node.IsUp == 1,
-			NsCluster:   nil,
+			Id:                  int64(node.Id),
+			Name:                node.Name,
+			IsOn:                node.IsOn,
+			UniqueId:            node.UniqueId,
+			Secret:              node.Secret,
+			IsInstalled:         node.IsInstalled,
+			InstallDir:          node.InstallDir,
+			IsUp:                node.IsUp,
+			ConnectedAPINodeIds: node.DecodeConnectedAPINodes(),
+			NsCluster:           nil,
 		})
 	}
-	return &pb.FindAllEnabledNSNodesWithNSClusterIdResponse{NsNodes: pbNodes}, nil
+	return &pb.FindAllNSNodesWithNSClusterIdResponse{NsNodes: pbNodes}, nil
 }
 
-// CountAllEnabledNSNodes 所有可用的节点数量
-func (this *NSNodeService) CountAllEnabledNSNodes(ctx context.Context, req *pb.CountAllEnabledNSNodesRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+// CountAllNSNodes 所有可用的节点数量
+func (this *NSNodeService) CountAllNSNodes(ctx context.Context, req *pb.CountAllNSNodesRequest) (*pb.RPCCountResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -70,9 +77,9 @@ func (this *NSNodeService) CountAllEnabledNSNodes(ctx context.Context, req *pb.C
 	return this.SuccessCount(count)
 }
 
-// CountAllEnabledNSNodesMatch 计算匹配的节点数量
-func (this *NSNodeService) CountAllEnabledNSNodesMatch(ctx context.Context, req *pb.CountAllEnabledNSNodesMatchRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+// CountAllNSNodesMatch 计算匹配的节点数量
+func (this *NSNodeService) CountAllNSNodesMatch(ctx context.Context, req *pb.CountAllNSNodesMatchRequest) (*pb.RPCCountResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -85,9 +92,9 @@ func (this *NSNodeService) CountAllEnabledNSNodesMatch(ctx context.Context, req 
 	return this.SuccessCount(count)
 }
 
-// ListEnabledNSNodesMatch 列出单页节点
-func (this *NSNodeService) ListEnabledNSNodesMatch(ctx context.Context, req *pb.ListEnabledNSNodesMatchRequest) (*pb.ListEnabledNSNodesMatchResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+// ListNSNodesMatch 列出单页节点
+func (this *NSNodeService) ListNSNodesMatch(ctx context.Context, req *pb.ListNSNodesMatchRequest) (*pb.ListNSNodesMatchResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -119,30 +126,30 @@ func (this *NSNodeService) ListEnabledNSNodesMatch(ctx context.Context, req *pb.
 		pbNodes = append(pbNodes, &pb.NSNode{
 			Id:            int64(node.Id),
 			Name:          node.Name,
-			IsOn:          node.IsOn == 1,
+			IsOn:          node.IsOn,
 			UniqueId:      node.UniqueId,
 			Secret:        node.Secret,
-			IsActive:      node.IsActive == 1,
-			IsInstalled:   node.IsInstalled == 1,
+			IsActive:      node.IsActive,
+			IsInstalled:   node.IsInstalled,
 			InstallDir:    node.InstallDir,
-			IsUp:          node.IsUp == 1,
-			StatusJSON:    []byte(node.Status),
+			IsUp:          node.IsUp,
+			StatusJSON:    node.Status,
 			InstallStatus: installStatusResult,
 			NsCluster:     nil,
 		})
 	}
-	return &pb.ListEnabledNSNodesMatchResponse{NsNodes: pbNodes}, nil
+	return &pb.ListNSNodesMatchResponse{NsNodes: pbNodes}, nil
 }
 
 // CountAllUpgradeNSNodesWithNSClusterId 计算需要升级的节点数量
 func (this *NSNodeService) CountAllUpgradeNSNodesWithNSClusterId(ctx context.Context, req *pb.CountAllUpgradeNSNodesWithNSClusterIdRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	deployFiles := installers.SharedDeployManager.LoadNSNodeFiles()
 	total := int64(0)
@@ -159,12 +166,12 @@ func (this *NSNodeService) CountAllUpgradeNSNodesWithNSClusterId(ctx context.Con
 
 // CreateNSNode 创建节点
 func (this *NSNodeService) CreateNSNode(ctx context.Context, req *pb.CreateNSNodeRequest) (*pb.CreateNSNodeResponse, error) {
-	adminId, err := this.ValidateAdmin(ctx, 0)
+	adminId, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodeId, err := models.SharedNSNodeDAO.CreateNode(tx, adminId, req.Name, req.NodeClusterId)
 	if err != nil {
@@ -186,12 +193,12 @@ func (this *NSNodeService) CreateNSNode(ctx context.Context, req *pb.CreateNSNod
 
 // DeleteNSNode 删除节点
 func (this *NSNodeService) DeleteNSNode(ctx context.Context, req *pb.DeleteNSNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedNSNodeDAO.DisableNSNode(tx, req.NsNodeId)
 	if err != nil {
@@ -207,21 +214,21 @@ func (this *NSNodeService) DeleteNSNode(ctx context.Context, req *pb.DeleteNSNod
 	return this.Success()
 }
 
-// FindEnabledNSNode 查询单个节点信息
-func (this *NSNodeService) FindEnabledNSNode(ctx context.Context, req *pb.FindEnabledNSNodeRequest) (*pb.FindEnabledNSNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+// FindNSNode 查询单个节点信息
+func (this *NSNodeService) FindNSNode(ctx context.Context, req *pb.FindNSNodeRequest) (*pb.FindNSNodeResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	node, err := models.SharedNSNodeDAO.FindEnabledNSNode(tx, req.NsNodeId)
 	if err != nil {
 		return nil, err
 	}
 	if node == nil {
-		return &pb.FindEnabledNSNodeResponse{NsNode: nil}, nil
+		return &pb.FindNSNodeResponse{NsNode: nil}, nil
 	}
 
 	// 集群信息
@@ -241,7 +248,7 @@ func (this *NSNodeService) FindEnabledNSNode(ctx context.Context, req *pb.FindEn
 			Id:     int64(login.Id),
 			Name:   login.Name,
 			Type:   login.Type,
-			Params: []byte(login.Params),
+			Params: login.Params,
 		}
 	}
 
@@ -262,33 +269,33 @@ func (this *NSNodeService) FindEnabledNSNode(ctx context.Context, req *pb.FindEn
 		}
 	}
 
-	return &pb.FindEnabledNSNodeResponse{NsNode: &pb.NSNode{
+	return &pb.FindNSNodeResponse{NsNode: &pb.NSNode{
 		Id:          int64(node.Id),
 		Name:        node.Name,
-		StatusJSON:  []byte(node.Status),
+		StatusJSON:  node.Status,
 		UniqueId:    node.UniqueId,
 		Secret:      node.Secret,
-		IsInstalled: node.IsInstalled == 1,
+		IsInstalled: node.IsInstalled,
 		InstallDir:  node.InstallDir,
 		NsCluster: &pb.NSCluster{
 			Id:   int64(node.ClusterId),
 			Name: clusterName,
 		},
 		InstallStatus: installStatusResult,
-		IsOn:          node.IsOn == 1,
-		IsActive:      node.IsActive == 1,
+		IsOn:          node.IsOn,
+		IsActive:      node.IsActive,
 		NodeLogin:     respLogin,
 	}}, nil
 }
 
 // UpdateNSNode 修改节点
 func (this *NSNodeService) UpdateNSNode(ctx context.Context, req *pb.UpdateNSNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedNSNodeDAO.UpdateNode(tx, req.NsNodeId, req.Name, req.NsClusterId, req.IsOn)
 	if err != nil {
@@ -320,17 +327,17 @@ func (this *NSNodeService) UpdateNSNode(ctx context.Context, req *pb.UpdateNSNod
 
 // InstallNSNode 安装节点
 func (this *NSNodeService) InstallNSNode(ctx context.Context, req *pb.InstallNSNodeRequest) (*pb.InstallNSNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	go func() {
+	goman.New(func() {
 		err = installers.SharedNSNodeQueue().InstallNodeProcess(req.NsNodeId, false)
 		if err != nil {
 			logs.Println("[RPC]install dns node:" + err.Error())
 		}
-	}()
+	})
 
 	return &pb.InstallNSNodeResponse{}, nil
 }
@@ -338,12 +345,12 @@ func (this *NSNodeService) InstallNSNode(ctx context.Context, req *pb.InstallNSN
 // FindNSNodeInstallStatus 读取节点安装状态
 func (this *NSNodeService) FindNSNodeInstallStatus(ctx context.Context, req *pb.FindNSNodeInstallStatusRequest) (*pb.FindNSNodeInstallStatusResponse, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	installStatus, err := models.SharedNSNodeDAO.FindNodeInstallStatus(tx, req.NsNodeId)
 	if err != nil {
@@ -366,12 +373,12 @@ func (this *NSNodeService) FindNSNodeInstallStatus(ctx context.Context, req *pb.
 
 // UpdateNSNodeIsInstalled 修改节点安装状态
 func (this *NSNodeService) UpdateNSNodeIsInstalled(ctx context.Context, req *pb.UpdateNSNodeIsInstalledRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedNSNodeDAO.UpdateNodeIsInstalled(tx, req.NsNodeId, req.IsInstalled)
 	if err != nil {
@@ -397,9 +404,18 @@ func (this *NSNodeService) UpdateNSNodeStatus(ctx context.Context, req *pb.Updat
 		return nil, errors.New("'nodeId' should be greater than 0")
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	err = models.SharedNSNodeDAO.UpdateNodeStatus(tx, nodeId, req.StatusJSON)
+	// 修改时间戳
+	var nodeStatus = &nodeconfigs.NodeStatus{}
+	err = json.Unmarshal(req.StatusJSON, nodeStatus)
+	if err != nil {
+		return nil, errors.New("decode node status json failed: " + err.Error())
+	}
+	nodeStatus.UpdatedAt = time.Now().Unix()
+
+	// 保存
+	err = models.SharedNSNodeDAO.UpdateNodeStatus(tx, nodeId, nodeStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -449,14 +465,24 @@ func (this *NSNodeService) CheckNSNodeLatestVersion(ctx context.Context, req *pb
 	return &pb.CheckNSNodeLatestVersionResponse{HasNewVersion: false}, nil
 }
 
-// DownloadNSNodeInstallationFile 下载最新DNS节点安装文件
-func (this *NSNodeService) DownloadNSNodeInstallationFile(ctx context.Context, req *pb.DownloadNSNodeInstallationFileRequest) (*pb.DownloadNSNodeInstallationFileResponse, error) {
-	_, err := this.ValidateNSNode(ctx)
+// FindLatestNSNodeVersion 获取NS节点最新版本
+func (this *NSNodeService) FindLatestNSNodeVersion(ctx context.Context, req *pb.FindLatestNSNodeVersionRequest) (*pb.FindLatestNSNodeVersionResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	file := installers.SharedDeployManager.FindNSNodeFile(req.Os, req.Arch)
+	return &pb.FindLatestNSNodeVersionResponse{Version: teaconst.DNSNodeVersion}, nil
+}
+
+// DownloadNSNodeInstallationFile 下载最新DNS节点安装文件
+func (this *NSNodeService) DownloadNSNodeInstallationFile(ctx context.Context, req *pb.DownloadNSNodeInstallationFileRequest) (*pb.DownloadNSNodeInstallationFileResponse, error) {
+	nodeId, err := this.ValidateNSNode(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var file = installers.SharedDeployManager.FindNSNodeFile(req.Os, req.Arch)
 	if file == nil {
 		return &pb.DownloadNSNodeInstallationFileResponse{}, nil
 	}
@@ -470,6 +496,9 @@ func (this *NSNodeService) DownloadNSNodeInstallationFile(ctx context.Context, r
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
+
+	// 增加下载速度监控
+	installers.SharedUpgradeLimiter.UpdateNodeBytes(nodeconfigs.NodeRoleDNS, nodeId, int64(len(data)))
 
 	return &pb.DownloadNSNodeInstallationFileResponse{
 		Sum:       sum,
@@ -488,7 +517,7 @@ func (this *NSNodeService) UpdateNSNodeConnectedAPINodes(ctx context.Context, re
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedNSNodeDAO.UpdateNodeConnectedAPINodes(tx, nodeId, req.ApiNodeIds)
 	if err != nil {
@@ -501,12 +530,12 @@ func (this *NSNodeService) UpdateNSNodeConnectedAPINodes(ctx context.Context, re
 // UpdateNSNodeLogin 修改节点登录信息
 func (this *NSNodeService) UpdateNSNodeLogin(ctx context.Context, req *pb.UpdateNSNodeLoginRequest) (*pb.RPCSuccess, error) {
 	// 校验请求
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	if req.NodeLogin.Id <= 0 {
 		_, err := models.SharedNodeLoginDAO.CreateNodeLogin(tx, nodeconfigs.NodeRoleDNS, req.NsNodeId, req.NodeLogin.Name, req.NodeLogin.Type, req.NodeLogin.Params)
@@ -523,7 +552,7 @@ func (this *NSNodeService) UpdateNSNodeLogin(ctx context.Context, req *pb.Update
 // StartNSNode 启动节点
 func (this *NSNodeService) StartNSNode(ctx context.Context, req *pb.StartNSNodeRequest) (*pb.StartNSNodeResponse, error) {
 	// 校验节点
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -549,7 +578,7 @@ func (this *NSNodeService) StartNSNode(ctx context.Context, req *pb.StartNSNodeR
 // StopNSNode 停止节点
 func (this *NSNodeService) StopNSNode(ctx context.Context, req *pb.StopNSNodeRequest) (*pb.StopNSNodeResponse, error) {
 	// 校验节点
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -570,4 +599,89 @@ func (this *NSNodeService) StopNSNode(ctx context.Context, req *pb.StopNSNodeReq
 	}
 
 	return &pb.StopNSNodeResponse{IsOk: true}, nil
+}
+
+// FindNSNodeDDoSProtection 获取集群的DDoS设置
+func (this *NSNodeService) FindNSNodeDDoSProtection(ctx context.Context, req *pb.FindNSNodeDDoSProtectionRequest) (*pb.FindNSNodeDDoSProtectionResponse, error) {
+	var nodeId = req.NsNodeId
+	var isFromNode = false
+
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		// 检查是否来自节点
+		currentNodeId, err2 := this.ValidateNSNode(ctx)
+		if err2 != nil {
+			return nil, err
+		}
+
+		if nodeId > 0 && currentNodeId != nodeId {
+			return nil, errors.New("invalid 'nsNodeId'")
+		}
+
+		nodeId = currentNodeId
+		isFromNode = true
+	}
+
+	var tx *dbs.Tx
+	ddosProtection, err := models.SharedNSNodeDAO.FindNodeDDoSProtection(tx, nodeId)
+	if err != nil {
+		return nil, err
+	}
+	if ddosProtection == nil {
+		ddosProtection = ddosconfigs.DefaultProtectionConfig()
+	}
+
+	// 组合父级节点配置
+	// 只有从节点读取配置时才需要组合
+	if isFromNode {
+		clusterId, err := models.SharedNSNodeDAO.FindNodeClusterId(tx, nodeId)
+		if err != nil {
+			return nil, err
+		}
+
+		if clusterId > 0 {
+			clusterDDoSProtection, err := models.SharedNSClusterDAO.FindClusterDDoSProtection(tx, clusterId)
+			if err != nil {
+				return nil, err
+			}
+			if clusterDDoSProtection == nil {
+				clusterDDoSProtection = ddosconfigs.DefaultProtectionConfig()
+			}
+
+			clusterDDoSProtection.Merge(ddosProtection)
+			ddosProtection = clusterDDoSProtection
+		}
+	}
+
+	ddosProtectionJSON, err := json.Marshal(ddosProtection)
+	if err != nil {
+		return nil, err
+	}
+
+	var result = &pb.FindNSNodeDDoSProtectionResponse{
+		DdosProtectionJSON: ddosProtectionJSON,
+	}
+
+	return result, nil
+}
+
+// UpdateNSNodeDDoSProtection 修改集群的DDoS设置
+func (this *NSNodeService) UpdateNSNodeDDoSProtection(ctx context.Context, req *pb.UpdateNSNodeDDoSProtectionRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var ddosProtection = &ddosconfigs.ProtectionConfig{}
+	err = json.Unmarshal(req.DdosProtectionJSON, ddosProtection)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx *dbs.Tx
+	err = models.SharedNSNodeDAO.UpdateNodeDDoSProtection(tx, req.NsNodeId, ddosProtection)
+	if err != nil {
+		return nil, err
+	}
+	return this.Success()
 }

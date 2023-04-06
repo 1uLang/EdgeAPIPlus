@@ -1,3 +1,6 @@
+//go:build plus
+// +build plus
+
 package accesslogs
 
 import (
@@ -10,8 +13,10 @@ import (
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
-	"io/ioutil"
+	"github.com/iwind/TeaGo/maps"
+	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -28,7 +33,7 @@ func NewESStorage(config *serverconfigs.AccessLogESStorageConfig) *ESStorage {
 	return &ESStorage{config: config}
 }
 
-func (this *ESStorage) Config() interface{} {
+func (this *ESStorage) Config() any {
 	return this.config
 }
 
@@ -40,12 +45,20 @@ func (this *ESStorage) Start() error {
 	if !regexp.MustCompile(`(?i)^(http|https)://`).MatchString(this.config.Endpoint) {
 		this.config.Endpoint = "http://" + this.config.Endpoint
 	}
+
+	// 去除endpoint中的路径部分
+	u, err := url.Parse(this.config.Endpoint)
+	if err == nil && len(u.Path) > 0 {
+		this.config.Endpoint = u.Scheme + "://" + u.Host
+	}
+
 	if len(this.config.Index) == 0 {
 		return errors.New("'index' should not be nil")
 	}
-	if len(this.config.MappingType) == 0 {
+	if !this.config.IsDataStream && len(this.config.MappingType) == 0 {
 		return errors.New("'mappingType' should not be nil")
 	}
+
 	return nil
 }
 
@@ -55,20 +68,27 @@ func (this *ESStorage) Write(accessLogs []*pb.HTTPAccessLog) error {
 		return nil
 	}
 
-	bulk := &strings.Builder{}
-	indexName := this.FormatVariables(this.config.Index)
-	typeName := this.FormatVariables(this.config.MappingType)
+	var bulk = &strings.Builder{}
+	var indexName = this.FormatVariables(this.config.Index)
+	var typeName = this.FormatVariables(this.config.MappingType)
 	for _, accessLog := range accessLogs {
+		if this.firewallOnly && accessLog.FirewallPolicyId == 0 {
+			continue
+		}
+
 		if len(accessLog.RequestId) == 0 {
 			continue
 		}
 
-		opData, err := json.Marshal(map[string]interface{}{
-			"index": map[string]interface{}{
-				"_index": indexName,
-				"_type":  typeName,
-				"_id":    accessLog.RequestId,
-			},
+		var indexMap = map[string]any{
+			"_index": indexName,
+			"_id":    accessLog.RequestId,
+		}
+		if !this.config.IsDataStream {
+			indexMap["_type"] = typeName
+		}
+		opData, err := json.Marshal(map[string]any{
+			"index": indexMap,
 		})
 		if err != nil {
 			remotelogs.Error("ACCESS_LOG_ES_STORAGE", "write failed: "+err.Error())
@@ -100,7 +120,7 @@ func (this *ESStorage) Write(accessLogs []*pb.HTTPAccessLog) error {
 	if len(this.config.Username) > 0 || len(this.config.Password) > 0 {
 		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(this.config.Username+":"+this.config.Password)))
 	}
-	client := utils.SharedHttpClient(10 * time.Second)
+	var client = utils.SharedHttpClient(10 * time.Second)
 	defer func() {
 		_ = req.Body.Close()
 	}()
@@ -114,8 +134,21 @@ func (this *ESStorage) Write(accessLogs []*pb.HTTPAccessLog) error {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyData, _ := ioutil.ReadAll(resp.Body)
+		bodyData, _ := io.ReadAll(resp.Body)
 		return errors.New("ElasticSearch response status code: " + fmt.Sprintf("%d", resp.StatusCode) + " content: " + string(bodyData))
+	}
+
+	bodyData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return errors.New("read ElasticSearch response failed: " + err.Error())
+	}
+	var m = maps.Map{}
+	err = json.Unmarshal(bodyData, &m)
+	if err == nil {
+		// 暂不处理非JSON的情况
+		if m.Has("errors") && m.GetBool("errors") {
+			return errors.New("ElasticSearch returns '" + string(bodyData) + "'")
+		}
 	}
 
 	return nil

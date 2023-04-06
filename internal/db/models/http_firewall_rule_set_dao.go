@@ -94,15 +94,16 @@ func (this *HTTPFirewallRuleSetDAO) ComposeFirewallRuleSet(tx *dbs.Tx, setId int
 	}
 	config := &firewallconfigs.HTTPFirewallRuleSet{}
 	config.Id = int64(set.Id)
-	config.IsOn = set.IsOn == 1
+	config.IsOn = set.IsOn
 	config.Name = set.Name
 	config.Description = set.Description
 	config.Code = set.Code
 	config.Connector = set.Connector
+	config.IgnoreLocal = set.IgnoreLocal == 1
 
 	if IsNotNull(set.Rules) {
 		ruleRefs := []*firewallconfigs.HTTPFirewallRuleRef{}
-		err = json.Unmarshal([]byte(set.Rules), &ruleRefs)
+		err = json.Unmarshal(set.Rules, &ruleRefs)
 		if err != nil {
 			return nil, err
 		}
@@ -120,7 +121,7 @@ func (this *HTTPFirewallRuleSetDAO) ComposeFirewallRuleSet(tx *dbs.Tx, setId int
 
 	var actionConfigs = []*firewallconfigs.HTTPFirewallActionConfig{}
 	if len(set.Actions) > 0 {
-		err = json.Unmarshal([]byte(set.Actions), &actionConfigs)
+		err = json.Unmarshal(set.Actions, &actionConfigs)
 		if err != nil {
 			return nil, err
 		}
@@ -132,13 +133,14 @@ func (this *HTTPFirewallRuleSetDAO) ComposeFirewallRuleSet(tx *dbs.Tx, setId int
 
 // CreateOrUpdateSetFromConfig 从配置中创建规则集
 func (this *HTTPFirewallRuleSetDAO) CreateOrUpdateSetFromConfig(tx *dbs.Tx, setConfig *firewallconfigs.HTTPFirewallRuleSet) (int64, error) {
-	op := NewHTTPFirewallRuleSetOperator()
+	var op = NewHTTPFirewallRuleSetOperator()
 	op.State = HTTPFirewallRuleSetStateEnabled
 	op.Id = setConfig.Id
 	op.IsOn = setConfig.IsOn
 	op.Name = setConfig.Name
 	op.Description = setConfig.Description
 	op.Connector = setConfig.Connector
+	op.IgnoreLocal = setConfig.IgnoreLocal
 
 	if len(setConfig.Actions) == 0 {
 		op.Actions = "[]"
@@ -232,4 +234,19 @@ func (this *HTTPFirewallRuleSetDAO) NotifyUpdate(tx *dbs.Tx, setId int64) error 
 		return SharedHTTPFirewallRuleGroupDAO.NotifyUpdate(tx, groupId)
 	}
 	return nil
+}
+
+// UpdateRuleSetAction 设置防御动作
+func (this *HTTPFirewallRuleSetDAO) UpdateRuleSetAction(tx *dbs.Tx, ruleSetId int64, actionJSON []byte) error {
+	if ruleSetId <= 0 {
+		return errors.New("invalid ruleSetId")
+	}
+	_, err := this.Query(tx).
+		Pk(ruleSetId).
+		Set("actions", actionJSON).
+		Update()
+	if err != nil {
+		return err
+	}
+	return this.NotifyUpdate(tx, ruleSetId)
 }

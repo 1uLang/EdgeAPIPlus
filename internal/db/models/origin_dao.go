@@ -87,8 +87,23 @@ func (this *OriginDAO) FindOriginName(tx *dbs.Tx, id int64) (string, error) {
 }
 
 // CreateOrigin 创建源站
-func (this *OriginDAO) CreateOrigin(tx *dbs.Tx, adminId int64, userId int64, name string, addrJSON string, description string, weight int32, isOn bool, connTimeout *shared.TimeDuration, readTimeout *shared.TimeDuration, idleTimeout *shared.TimeDuration, maxConns int32, maxIdleConns int32, domains []string) (originId int64, err error) {
-	op := NewOriginOperator()
+func (this *OriginDAO) CreateOrigin(tx *dbs.Tx,
+	adminId int64,
+	userId int64,
+	name string,
+	addrJSON string,
+	description string,
+	weight int32, isOn bool,
+	connTimeout *shared.TimeDuration,
+	readTimeout *shared.TimeDuration,
+	idleTimeout *shared.TimeDuration,
+	maxConns int32,
+	maxIdleConns int32,
+	certRef *sslconfigs.SSLCertRef,
+	domains []string,
+	host string,
+	followPort bool) (originId int64, err error) {
+	var op = NewOriginOperator()
 	op.AdminId = adminId
 	op.UserId = userId
 	op.IsOn = isOn
@@ -133,6 +148,15 @@ func (this *OriginDAO) CreateOrigin(tx *dbs.Tx, adminId int64, userId int64, nam
 	}
 	op.Weight = weight
 
+	// cert
+	if certRef != nil {
+		certRefJSON, err := json.Marshal(certRef)
+		if err != nil {
+			return 0, err
+		}
+		op.Cert = certRefJSON
+	}
+
 	if len(domains) > 0 {
 		domainsJSON, err := json.Marshal(domains)
 		if err != nil {
@@ -143,6 +167,9 @@ func (this *OriginDAO) CreateOrigin(tx *dbs.Tx, adminId int64, userId int64, nam
 		op.Domains = "[]"
 	}
 
+	op.Host = host
+	op.FollowPort = followPort
+
 	op.State = OriginStateEnabled
 	err = this.Save(tx, op)
 	if err != nil {
@@ -152,11 +179,26 @@ func (this *OriginDAO) CreateOrigin(tx *dbs.Tx, adminId int64, userId int64, nam
 }
 
 // UpdateOrigin 修改源站
-func (this *OriginDAO) UpdateOrigin(tx *dbs.Tx, originId int64, name string, addrJSON string, description string, weight int32, isOn bool, connTimeout *shared.TimeDuration, readTimeout *shared.TimeDuration, idleTimeout *shared.TimeDuration, maxConns int32, maxIdleConns int32, domains []string) error {
+func (this *OriginDAO) UpdateOrigin(tx *dbs.Tx,
+	originId int64,
+	name string,
+	addrJSON string,
+	description string,
+	weight int32,
+	isOn bool,
+	connTimeout *shared.TimeDuration,
+	readTimeout *shared.TimeDuration,
+	idleTimeout *shared.TimeDuration,
+	maxConns int32,
+	maxIdleConns int32,
+	certRef *sslconfigs.SSLCertRef,
+	domains []string,
+	host string,
+	followPort bool) error {
 	if originId <= 0 {
 		return errors.New("invalid originId")
 	}
-	op := NewOriginOperator()
+	var op = NewOriginOperator()
 	op.Id = originId
 	op.Name = name
 	op.Addr = addrJSON
@@ -201,6 +243,17 @@ func (this *OriginDAO) UpdateOrigin(tx *dbs.Tx, originId int64, name string, add
 	op.IsOn = isOn
 	op.Version = dbs.SQL("version+1")
 
+	// cert
+	if certRef != nil {
+		certRefJSON, err := json.Marshal(certRef)
+		if err != nil {
+			return err
+		}
+		op.Cert = certRefJSON
+	} else {
+		op.Cert = dbs.SQL("NULL")
+	}
+
 	if len(domains) > 0 {
 		domainsJSON, err := json.Marshal(domains)
 		if err != nil {
@@ -210,6 +263,9 @@ func (this *OriginDAO) UpdateOrigin(tx *dbs.Tx, originId int64, name string, add
 	} else {
 		op.Domains = "[]"
 	}
+
+	op.Host = host
+	op.FollowPort = followPort
 
 	err := this.Save(tx, op)
 	if err != nil {
@@ -238,9 +294,9 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 		return nil, nil
 	}
 
-	config := &serverconfigs.OriginConfig{
+	var config = &serverconfigs.OriginConfig{
 		Id:           int64(origin.Id),
-		IsOn:         origin.IsOn == 1,
+		IsOn:         origin.IsOn,
 		Version:      int(origin.Version),
 		Name:         origin.Name,
 		Description:  origin.Description,
@@ -252,11 +308,12 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 		RequestURI:   origin.HttpRequestURI,
 		RequestHost:  origin.Host,
 		Domains:      origin.DecodeDomains(),
+		FollowPort:   origin.FollowPort,
 	}
 
 	if IsNotNull(origin.Addr) {
-		addr := &serverconfigs.NetworkAddressConfig{}
-		err = json.Unmarshal([]byte(origin.Addr), addr)
+		var addr = &serverconfigs.NetworkAddressConfig{}
+		err = json.Unmarshal(origin.Addr, addr)
 		if err != nil {
 			return nil, err
 		}
@@ -264,8 +321,8 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 	}
 
 	if IsNotNull(origin.ConnTimeout) {
-		connTimeout := &shared.TimeDuration{}
-		err = json.Unmarshal([]byte(origin.ConnTimeout), &connTimeout)
+		var connTimeout = &shared.TimeDuration{}
+		err = json.Unmarshal(origin.ConnTimeout, &connTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -273,8 +330,8 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 	}
 
 	if IsNotNull(origin.ReadTimeout) {
-		readTimeout := &shared.TimeDuration{}
-		err = json.Unmarshal([]byte(origin.ReadTimeout), &readTimeout)
+		var readTimeout = &shared.TimeDuration{}
+		err = json.Unmarshal(origin.ReadTimeout, &readTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -282,8 +339,8 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 	}
 
 	if IsNotNull(origin.IdleTimeout) {
-		idleTimeout := &shared.TimeDuration{}
-		err = json.Unmarshal([]byte(origin.IdleTimeout), &idleTimeout)
+		var idleTimeout = &shared.TimeDuration{}
+		err = json.Unmarshal(origin.IdleTimeout, &idleTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -293,7 +350,7 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 	// headers
 	if IsNotNull(origin.HttpRequestHeader) {
 		ref := &shared.HTTPHeaderPolicyRef{}
-		err = json.Unmarshal([]byte(origin.HttpRequestHeader), ref)
+		err = json.Unmarshal(origin.HttpRequestHeader, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -311,8 +368,8 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 	}
 
 	if IsNotNull(origin.HttpResponseHeader) {
-		ref := &shared.HTTPHeaderPolicyRef{}
-		err = json.Unmarshal([]byte(origin.HttpResponseHeader), ref)
+		var ref = &shared.HTTPHeaderPolicyRef{}
+		err = json.Unmarshal(origin.HttpResponseHeader, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -330,8 +387,8 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 	}
 
 	if IsNotNull(origin.HealthCheck) {
-		healthCheck := &serverconfigs.HealthCheckConfig{}
-		err = json.Unmarshal([]byte(origin.HealthCheck), healthCheck)
+		var healthCheck = &serverconfigs.HealthCheckConfig{}
+		err = json.Unmarshal(origin.HealthCheck, healthCheck)
 		if err != nil {
 			return nil, err
 		}
@@ -339,8 +396,8 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 	}
 
 	if IsNotNull(origin.Cert) {
-		ref := &sslconfigs.SSLCertRef{}
-		err = json.Unmarshal([]byte(origin.Cert), ref)
+		var ref = &sslconfigs.SSLCertRef{}
+		err = json.Unmarshal(origin.Cert, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -363,6 +420,19 @@ func (this *OriginDAO) ComposeOriginConfig(tx *dbs.Tx, originId int64, cacheMap 
 	}
 
 	return config, nil
+}
+
+// CheckUserOrigin 检查源站权限
+func (this *OriginDAO) CheckUserOrigin(tx *dbs.Tx, userId int64, originId int64) error {
+	reverseProxyId, err := SharedReverseProxyDAO.FindReverseProxyContainsOriginId(tx, originId)
+	if err != nil {
+		return err
+	}
+	if reverseProxyId == 0 {
+		// 这里我们不允许源站没有被使用
+		return ErrNotFound
+	}
+	return SharedReverseProxyDAO.CheckUserReverseProxy(tx, userId, reverseProxyId)
 }
 
 // NotifyUpdate 通知更新

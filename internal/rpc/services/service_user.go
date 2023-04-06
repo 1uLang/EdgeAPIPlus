@@ -6,10 +6,14 @@ import (
 	"github.com/1uLang/EdgeCommon/pkg/configutils"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
+	"github.com/1uLang/EdgeCommon/pkg/userconfigs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
 	timeutil "github.com/iwind/TeaGo/utils/time"
 	"time"
@@ -22,28 +26,97 @@ type UserService struct {
 
 // CreateUser 创建用户
 func (this *UserService) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb.CreateUserResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	userId, err := models.SharedUserDAO.CreateUser(tx, req.Username, req.Password, req.Fullname, req.Mobile, req.Tel, req.Email, req.Remark, req.Source, req.NodeClusterId)
+	userId, err := models.SharedUserDAO.CreateUser(tx, req.Username, req.Password, req.Fullname, req.Mobile, req.Tel, req.Email, req.Remark, req.Source, req.NodeClusterId, nil, "", true)
 	if err != nil {
 		return nil, err
 	}
 	return &pb.CreateUserResponse{UserId: userId}, nil
 }
 
-// UpdateUser 修改用户
-func (this *UserService) UpdateUser(ctx context.Context, req *pb.UpdateUserRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+// RegisterUser 注册用户
+func (this *UserService) RegisterUser(ctx context.Context, req *pb.RegisterUserRequest) (*pb.RPCSuccess, error) {
+	userId, err := this.ValidateUserNode(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	if userId > 0 {
+		return nil, this.PermissionError()
+	}
+
+	// 注册配置
+	configJSON, err := models.SharedSysSettingDAO.ReadSetting(nil, systemconfigs.SettingCodeUserRegisterConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(configJSON) == 0 {
+		return nil, errors.New("the registration has been disabled")
+	}
+	var config = userconfigs.DefaultUserRegisterConfig()
+	err = json.Unmarshal(configJSON, config)
+	if err != nil {
+		return nil, err
+	}
+	if !config.IsOn {
+		return nil, errors.New("the registration has been disabled")
+	}
+
+	err = this.RunTx(func(tx *dbs.Tx) error {
+		// 检查用户名
+		exists, err := models.SharedUserDAO.ExistUser(tx, 0, req.Username)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return errors.New("the username exists already")
+		}
+
+		// 创建用户
+		_, err = models.SharedUserDAO.CreateUser(tx, req.Username, req.Password, req.Fullname, req.Mobile, "", req.Email, "", req.Source, config.ClusterId, config.Features, req.Ip, !config.RequireVerification)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return this.Success()
+}
+
+// VerifyUser 审核用户
+func (this *UserService) VerifyUser(ctx context.Context, req *pb.VerifyUserRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	err = models.SharedUserDAO.UpdateUserIsVerified(tx, req.UserId, req.IsRejected, req.RejectReason)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
+}
+
+// UpdateUser 修改用户
+func (this *UserService) UpdateUser(ctx context.Context, req *pb.UpdateUserRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
 
 	oldClusterId, err := models.SharedUserDAO.FindUserClusterId(tx, req.UserId)
 	if err != nil {
@@ -67,12 +140,12 @@ func (this *UserService) UpdateUser(ctx context.Context, req *pb.UpdateUserReque
 
 // DeleteUser 删除用户
 func (this *UserService) DeleteUser(ctx context.Context, req *pb.DeleteUserRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 删除其下的Server
 	serverIds, err := models.SharedServerDAO.FindAllEnabledServerIdsWithUserId(tx, req.UserId)
@@ -86,7 +159,7 @@ func (this *UserService) DeleteUser(ctx context.Context, req *pb.DeleteUserReque
 		}
 	}
 
-	_, err = models.SharedUserDAO.DisableUser(tx, req.UserId)
+	err = models.SharedUserDAO.DisableUser(tx, req.UserId)
 	if err != nil {
 		return nil, err
 	}
@@ -95,14 +168,14 @@ func (this *UserService) DeleteUser(ctx context.Context, req *pb.DeleteUserReque
 
 // CountAllEnabledUsers 计算用户数量
 func (this *UserService) CountAllEnabledUsers(ctx context.Context, req *pb.CountAllEnabledUsersRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	count, err := models.SharedUserDAO.CountAllEnabledUsers(tx, 0, req.Keyword)
+	count, err := models.SharedUserDAO.CountAllEnabledUsers(tx, 0, req.Keyword, req.IsVerifying)
 	if err != nil {
 		return nil, err
 	}
@@ -111,14 +184,14 @@ func (this *UserService) CountAllEnabledUsers(ctx context.Context, req *pb.Count
 
 // ListEnabledUsers 列出单页用户
 func (this *UserService) ListEnabledUsers(ctx context.Context, req *pb.ListEnabledUsersRequest) (*pb.ListEnabledUsersResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	users, err := models.SharedUserDAO.ListEnabledUsers(tx, 0, req.Keyword, req.Offset, req.Size)
+	users, err := models.SharedUserDAO.ListEnabledUsers(tx, 0, req.Keyword, req.IsVerifying, req.Offset, req.Size)
 	if err != nil {
 		return nil, err
 	}
@@ -139,16 +212,19 @@ func (this *UserService) ListEnabledUsers(ctx context.Context, req *pb.ListEnabl
 		}
 
 		result = append(result, &pb.User{
-			Id:          int64(user.Id),
-			Username:    user.Username,
-			Fullname:    user.Fullname,
-			Mobile:      user.Mobile,
-			Tel:         user.Tel,
-			Email:       user.Email,
-			Remark:      user.Remark,
-			IsOn:        user.IsOn == 1,
-			CreatedAt:   int64(user.CreatedAt),
-			NodeCluster: pbCluster,
+			Id:           int64(user.Id),
+			Username:     user.Username,
+			Fullname:     user.Fullname,
+			Mobile:       user.Mobile,
+			Tel:          user.Tel,
+			Email:        user.Email,
+			Remark:       user.Remark,
+			IsOn:         user.IsOn,
+			RegisteredIP: user.RegisteredIP,
+			IsVerified:   user.IsVerified,
+			IsRejected:   user.IsRejected,
+			CreatedAt:    int64(user.CreatedAt),
+			NodeCluster:  pbCluster,
 		})
 	}
 
@@ -157,12 +233,16 @@ func (this *UserService) ListEnabledUsers(ctx context.Context, req *pb.ListEnabl
 
 // FindEnabledUser 查询单个用户信息
 func (this *UserService) FindEnabledUser(ctx context.Context, req *pb.FindEnabledUserRequest) (*pb.FindEnabledUserResponse, error) {
-	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
+
+	if userId > 0 {
+		req.UserId = userId
+	}
 
 	user, err := models.SharedUserDAO.FindEnabledUser(tx, req.UserId, nil)
 	if err != nil {
@@ -185,17 +265,52 @@ func (this *UserService) FindEnabledUser(ctx context.Context, req *pb.FindEnable
 		}
 	}
 
+	// 认证信息
+	isIndividualIdentified, err := models.SharedUserIdentityDAO.CheckUserIdentityIsVerified(tx, req.UserId, userconfigs.UserIdentityOrgTypeIndividual)
+	if err != nil {
+		return nil, err
+	}
+
+	isEnterpriseIdentified, err := models.SharedUserIdentityDAO.CheckUserIdentityIsVerified(tx, req.UserId, userconfigs.UserIdentityOrgTypeEnterprise)
+	if err != nil {
+		return nil, err
+	}
+
+	// OTP认证
+	var pbOtpAuth *pb.Login = nil
+	{
+		userAuth, err := models.SharedLoginDAO.FindEnabledLoginWithType(tx, 0, req.UserId, models.LoginTypeOTP)
+		if err != nil {
+			return nil, err
+		}
+		if userAuth != nil {
+			pbOtpAuth = &pb.Login{
+				Id:         int64(userAuth.Id),
+				Type:       userAuth.Type,
+				ParamsJSON: userAuth.Params,
+				IsOn:       userAuth.IsOn,
+			}
+		}
+	}
+
 	return &pb.FindEnabledUserResponse{User: &pb.User{
-		Id:          int64(user.Id),
-		Username:    user.Username,
-		Fullname:    user.Fullname,
-		Mobile:      user.Mobile,
-		Tel:         user.Tel,
-		Email:       user.Email,
-		Remark:      user.Remark,
-		IsOn:        user.IsOn == 1,
-		CreatedAt:   int64(user.CreatedAt),
-		NodeCluster: pbCluster,
+		Id:                     int64(user.Id),
+		Username:               user.Username,
+		Fullname:               user.Fullname,
+		Mobile:                 user.Mobile,
+		Tel:                    user.Tel,
+		Email:                  user.Email,
+		Remark:                 user.Remark,
+		IsOn:                   user.IsOn,
+		CreatedAt:              int64(user.CreatedAt),
+		RegisteredIP:           user.RegisteredIP,
+		IsVerified:             user.IsVerified,
+		IsRejected:             user.IsRejected,
+		RejectReason:           user.RejectReason,
+		NodeCluster:            pbCluster,
+		IsIndividualIdentified: isIndividualIdentified,
+		IsEnterpriseIdentified: isEnterpriseIdentified,
+		OtpLogin:               pbOtpAuth,
 	}}, nil
 }
 
@@ -211,7 +326,7 @@ func (this *UserService) CheckUserUsername(ctx context.Context, req *pb.CheckUse
 		return nil, this.PermissionError()
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	b, err := models.SharedUserDAO.ExistUser(tx, req.UserId, req.Username)
 	if err != nil {
@@ -222,7 +337,7 @@ func (this *UserService) CheckUserUsername(ctx context.Context, req *pb.CheckUse
 
 // LoginUser 登录
 func (this *UserService) LoginUser(ctx context.Context, req *pb.LoginUserRequest) (*pb.LoginUserResponse, error) {
-	_, err := this.ValidateUserNode(ctx)
+	_, err := this.ValidateUserNode(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +358,7 @@ func (this *UserService) LoginUser(ctx context.Context, req *pb.LoginUserRequest
 		}, nil
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	userId, err := models.SharedUserDAO.CheckUserPassword(tx, req.Username, req.Password)
 	if err != nil {
@@ -267,7 +382,7 @@ func (this *UserService) LoginUser(ctx context.Context, req *pb.LoginUserRequest
 
 // UpdateUserInfo 修改用户基本信息
 func (this *UserService) UpdateUserInfo(ctx context.Context, req *pb.UpdateUserInfoRequest) (*pb.RPCSuccess, error) {
-	userId, err := this.ValidateUserNode(ctx)
+	userId, err := this.ValidateUserNode(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -276,9 +391,9 @@ func (this *UserService) UpdateUserInfo(ctx context.Context, req *pb.UpdateUserI
 		return nil, this.PermissionError()
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
-	err = models.SharedUserDAO.UpdateUserInfo(tx, req.UserId, req.Fullname)
+	err = models.SharedUserDAO.UpdateUserInfo(tx, req.UserId, req.Fullname, req.Mobile, req.Email)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +402,7 @@ func (this *UserService) UpdateUserInfo(ctx context.Context, req *pb.UpdateUserI
 
 // UpdateUserLogin 修改用户登录信息
 func (this *UserService) UpdateUserLogin(ctx context.Context, req *pb.UpdateUserLoginRequest) (*pb.RPCSuccess, error) {
-	userId, err := this.ValidateUserNode(ctx)
+	userId, err := this.ValidateUserNode(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +411,7 @@ func (this *UserService) UpdateUserLogin(ctx context.Context, req *pb.UpdateUser
 		return nil, this.PermissionError()
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedUserDAO.UpdateUserLogin(tx, req.UserId, req.Username, req.Password)
 	if err != nil {
@@ -307,16 +422,16 @@ func (this *UserService) UpdateUserLogin(ctx context.Context, req *pb.UpdateUser
 
 // ComposeUserDashboard 取得用户Dashboard数据
 func (this *UserService) ComposeUserDashboard(ctx context.Context, req *pb.ComposeUserDashboardRequest) (*pb.ComposeUserDashboardResponse, error) {
-	userId, err := this.ValidateUserNode(ctx)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
-	if userId != req.UserId {
-		return nil, this.PermissionError()
+	if userId > 0 {
+		req.UserId = userId
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 网站数量
 	countServers, err := models.SharedServerDAO.CountAllEnabledServersMatch(tx, 0, "", req.UserId, 0, configutils.BoolStateAll, []string{})
@@ -324,72 +439,95 @@ func (this *UserService) ComposeUserDashboard(ctx context.Context, req *pb.Compo
 		return nil, err
 	}
 
+	// 时间相关
+	var currentMonth = timeutil.Format("Ym")
+	var currentDay = timeutil.Format("Ymd")
+
 	// 本月总流量
-	month := timeutil.Format("Ym")
-	monthlyTrafficBytes, err := models.SharedServerDailyStatDAO.SumUserMonthly(tx, req.UserId, 0, month)
+	monthlyTrafficBytes, err := models.SharedServerDailyStatDAO.SumUserMonthly(tx, req.UserId, currentMonth)
 	if err != nil {
 		return nil, err
 	}
 
 	// 本月带宽峰值
-	monthlyPeekTrafficBytes, err := models.SharedServerDailyStatDAO.SumUserMonthlyPeek(tx, req.UserId, 0, month)
-	if err != nil {
-		return nil, err
+	var monthlyPeekBandwidthBytes int64 = 0
+	{
+		stat, err := models.SharedUserBandwidthStatDAO.FindUserPeekBandwidthInMonth(tx, req.UserId, currentMonth)
+		if err != nil {
+			return nil, err
+		}
+		if stat != nil {
+			monthlyPeekBandwidthBytes = int64(stat.Bytes)
+		}
+	}
+
+	// 本日带宽峰值
+	var dailyPeekBandwidthBytes int64 = 0
+	{
+		stat, err := models.SharedUserBandwidthStatDAO.FindUserPeekBandwidthInDay(tx, req.UserId, currentDay)
+		if err != nil {
+			return nil, err
+		}
+		if stat != nil {
+			dailyPeekBandwidthBytes = int64(stat.Bytes)
+		}
 	}
 
 	// 今日总流量
-	day := timeutil.Format("Ymd")
-	dailyTrafficBytes, err := models.SharedServerDailyStatDAO.SumUserDaily(tx, req.UserId, 0, day)
-	if err != nil {
-		return nil, err
-	}
-
-	// 今日带宽峰值
-	dailyPeekTrafficBytes, err := models.SharedServerDailyStatDAO.SumUserDailyPeek(tx, req.UserId, 0, day)
+	dailyTrafficBytes, err := models.SharedServerDailyStatDAO.SumUserDaily(tx, req.UserId, 0, currentDay)
 	if err != nil {
 		return nil, err
 	}
 
 	// 近 15 日流量带宽趋势
-	dailyTrafficStats := []*pb.ComposeUserDashboardResponse_DailyStat{}
-	dailyPeekTrafficStats := []*pb.ComposeUserDashboardResponse_DailyStat{}
+	var dailyTrafficStats = []*pb.ComposeUserDashboardResponse_DailyTrafficStat{}
+	var dailyPeekBandwidthStats = []*pb.ComposeUserDashboardResponse_DailyPeekBandwidthStat{}
 
 	for i := 14; i >= 0; i-- {
-		day := timeutil.Format("Ymd", time.Now().AddDate(0, 0, -i))
+		var day = timeutil.Format("Ymd", time.Now().AddDate(0, 0, -i))
 
-		dailyTrafficBytes, err := models.SharedServerDailyStatDAO.SumUserDaily(tx, req.UserId, 0, day)
+		// 流量
+		trafficBytes, err := models.SharedServerDailyStatDAO.SumUserDaily(tx, req.UserId, 0, day)
 		if err != nil {
 			return nil, err
 		}
 
-		dailyPeekTrafficBytes, err := models.SharedServerDailyStatDAO.SumUserDailyPeek(tx, req.UserId, 0, day)
+		// 峰值带宽
+		peekBandwidthBytesStat, err := models.SharedUserBandwidthStatDAO.FindUserPeekBandwidthInDay(tx, req.UserId, day)
 		if err != nil {
 			return nil, err
 		}
+		var peekBandwidthBytes int64 = 0
+		if peekBandwidthBytesStat != nil {
+			peekBandwidthBytes = int64(peekBandwidthBytesStat.Bytes)
+		}
 
-		dailyTrafficStats = append(dailyTrafficStats, &pb.ComposeUserDashboardResponse_DailyStat{Day: day, Count: dailyTrafficBytes})
-		dailyPeekTrafficStats = append(dailyPeekTrafficStats, &pb.ComposeUserDashboardResponse_DailyStat{Day: day, Count: dailyPeekTrafficBytes})
+		dailyTrafficStats = append(dailyTrafficStats, &pb.ComposeUserDashboardResponse_DailyTrafficStat{Day: day, Bytes: trafficBytes})
+		dailyPeekBandwidthStats = append(dailyPeekBandwidthStats, &pb.ComposeUserDashboardResponse_DailyPeekBandwidthStat{Day: day, Bytes: peekBandwidthBytes})
 	}
 
 	return &pb.ComposeUserDashboardResponse{
-		CountServers:            countServers,
-		MonthlyTrafficBytes:     monthlyTrafficBytes,
-		MonthlyPeekTrafficBytes: monthlyPeekTrafficBytes,
-		DailyTrafficBytes:       dailyTrafficBytes,
-		DailyPeekTrafficBytes:   dailyPeekTrafficBytes,
-		DailyTrafficStats:       dailyTrafficStats,
-		DailyPeekTrafficStats:   dailyPeekTrafficStats,
+		CountServers:              countServers,
+		MonthlyTrafficBytes:       monthlyTrafficBytes,
+		MonthlyPeekBandwidthBytes: monthlyPeekBandwidthBytes,
+		DailyTrafficBytes:         dailyTrafficBytes,
+		DailyPeekBandwidthBytes:   dailyPeekBandwidthBytes,
+		DailyTrafficStats:         dailyTrafficStats,
+		DailyPeekBandwidthStats:   dailyPeekBandwidthStats,
 	}, nil
 }
 
 // FindUserNodeClusterId 获取用户所在的集群ID
 func (this *UserService) FindUserNodeClusterId(ctx context.Context, req *pb.FindUserNodeClusterIdRequest) (*pb.FindUserNodeClusterIdResponse, error) {
-	_, _, err := this.ValidateAdminAndUser(ctx, 0, req.UserId)
+	_, userId, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
+	if userId > 0 {
+		req.UserId = userId
+	}
 
 	clusterId, err := models.SharedUserDAO.FindUserClusterId(tx, req.UserId)
 	if err != nil {
@@ -400,7 +538,7 @@ func (this *UserService) FindUserNodeClusterId(ctx context.Context, req *pb.Find
 
 // UpdateUserFeatures 设置用户能使用的功能
 func (this *UserService) UpdateUserFeatures(ctx context.Context, req *pb.UpdateUserFeaturesRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +548,7 @@ func (this *UserService) UpdateUserFeatures(ctx context.Context, req *pb.UpdateU
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedUserDAO.UpdateUserFeatures(tx, req.UserId, featuresJSON)
 	if err != nil {
@@ -419,19 +557,33 @@ func (this *UserService) UpdateUserFeatures(ctx context.Context, req *pb.UpdateU
 	return this.Success()
 }
 
+// UpdateAllUsersFeatures 设置所有用户能使用的功能
+func (this *UserService) UpdateAllUsersFeatures(ctx context.Context, req *pb.UpdateAllUsersFeaturesRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	err = models.SharedUserDAO.UpdateUsersFeatures(tx, req.FeatureCodes, req.Overwrite)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
+}
+
 // FindUserFeatures 获取用户所有的功能列表
 func (this *UserService) FindUserFeatures(ctx context.Context, req *pb.FindUserFeaturesRequest) (*pb.FindUserFeaturesResponse, error) {
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, req.UserId)
+	_, userId, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 	if userId > 0 {
-		if userId != req.UserId {
-			return nil, this.PermissionError()
-		}
+		req.UserId = userId
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	features, err := models.SharedUserDAO.FindUserFeatures(tx, req.UserId)
 	if err != nil {
@@ -448,12 +600,12 @@ func (this *UserService) FindUserFeatures(ctx context.Context, req *pb.FindUserF
 
 // FindAllUserFeatureDefinitions 获取所有的功能定义
 func (this *UserService) FindAllUserFeatureDefinitions(ctx context.Context, req *pb.FindAllUserFeatureDefinitionsRequest) (*pb.FindAllUserFeatureDefinitionsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	features := models.FindAllUserFeatures()
+	features := userconfigs.FindAllUserFeatures()
 	result := []*pb.UserFeature{}
 	for _, feature := range features {
 		result = append(result, feature.ToPB())
@@ -463,18 +615,25 @@ func (this *UserService) FindAllUserFeatureDefinitions(ctx context.Context, req 
 
 // ComposeUserGlobalBoard 组合全局的看板数据
 func (this *UserService) ComposeUserGlobalBoard(ctx context.Context, req *pb.ComposeUserGlobalBoardRequest) (*pb.ComposeUserGlobalBoardResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var result = &pb.ComposeUserGlobalBoardResponse{}
 	var tx = this.NullTx()
-	totalUsers, err := models.SharedUserDAO.CountAllEnabledUsers(tx, 0, "")
+	totalUsers, err := models.SharedUserDAO.CountAllEnabledUsers(tx, 0, "", false)
 	if err != nil {
 		return nil, err
 	}
 	result.TotalUsers = totalUsers
+
+	// 等待审核的用户
+	countVerifyingUsers, err := models.SharedUserDAO.CountAllVerifyingUsers(tx)
+	if err != nil {
+		return nil, err
+	}
+	result.CountVerifyingUsers = countVerifyingUsers
 
 	countTodayUsers, err := models.SharedUserDAO.SumDailyUsers(tx, timeutil.Format("Ymd"), timeutil.Format("Ymd"))
 	if err != nil {
@@ -525,12 +684,8 @@ func (this *UserService) ComposeUserGlobalBoard(ctx context.Context, req *pb.Com
 		return nil, err
 	}
 	for _, v := range cpuValues {
-		valueJSON, err := json.Marshal(types.Float32(v.Value))
-		if err != nil {
-			return nil, err
-		}
 		result.CpuNodeValues = append(result.CpuNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
@@ -540,27 +695,19 @@ func (this *UserService) ComposeUserGlobalBoard(ctx context.Context, req *pb.Com
 		return nil, err
 	}
 	for _, v := range memoryValues {
-		valueJSON, err := json.Marshal(types.Float32(v.Value))
-		if err != nil {
-			return nil, err
-		}
 		result.MemoryNodeValues = append(result.MemoryNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
 
-	loadValues, err := models.SharedNodeValueDAO.ListValuesForUserNodes(tx, nodeconfigs.NodeValueItemLoad, "load5m", nodeconfigs.NodeValueRangeMinute)
+	loadValues, err := models.SharedNodeValueDAO.ListValuesForUserNodes(tx, nodeconfigs.NodeValueItemLoad, "load1m", nodeconfigs.NodeValueRangeMinute)
 	if err != nil {
 		return nil, err
 	}
 	for _, v := range loadValues {
-		valueJSON, err := json.Marshal(types.Float32(v.Value))
-		if err != nil {
-			return nil, err
-		}
 		result.LoadNodeValues = append(result.LoadNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
@@ -586,4 +733,32 @@ func (this *UserService) ComposeUserGlobalBoard(ctx context.Context, req *pb.Com
 	}
 
 	return result, nil
+}
+
+// CheckUserOTPWithUsername 检查是否需要输入OTP
+func (this *UserService) CheckUserOTPWithUsername(ctx context.Context, req *pb.CheckUserOTPWithUsernameRequest) (*pb.CheckUserOTPWithUsernameResponse, error) {
+	_, err := this.ValidateUserNode(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(req.Username) == 0 {
+		return &pb.CheckUserOTPWithUsernameResponse{RequireOTP: false}, nil
+	}
+
+	var tx = this.NullTx()
+
+	userId, err := models.SharedUserDAO.FindEnabledUserIdWithUsername(tx, req.Username)
+	if err != nil {
+		return nil, err
+	}
+	if userId <= 0 {
+		return &pb.CheckUserOTPWithUsernameResponse{RequireOTP: false}, nil
+	}
+
+	otpIsOn, err := models.SharedLoginDAO.CheckLoginIsOn(tx, 0, userId, "otp")
+	if err != nil {
+		return nil, err
+	}
+	return &pb.CheckUserOTPWithUsernameResponse{RequireOTP: otpIsOn}, nil
 }

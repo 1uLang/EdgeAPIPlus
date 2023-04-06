@@ -1,16 +1,16 @@
 // Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
+//go:build plus
 
 package nameservers
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/1uLang/EdgeCommon/pkg/dnsconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/nameservers"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
-	"github.com/iwind/TeaGo/types"
 	timeutil "github.com/iwind/TeaGo/utils/time"
 	"time"
 )
@@ -22,7 +22,7 @@ type NSService struct {
 
 // ComposeNSBoard 组合看板数据
 func (this *NSService) ComposeNSBoard(ctx context.Context, req *pb.ComposeNSBoardRequest) (*pb.ComposeNSBoardResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func (this *NSService) ComposeNSBoard(ctx context.Context, req *pb.ComposeNSBoar
 	var result = &pb.ComposeNSBoardResponse{}
 
 	// 域名
-	countDomains, err := nameservers.SharedNSDomainDAO.CountAllEnabledDomains(tx, 0, 0, "")
+	countDomains, err := nameservers.SharedNSDomainDAO.CountAllEnabledDomains(tx, 0, 0, 0, dnsconfigs.NSDomainStatusVerified, "")
 	if err != nil {
 		return nil, err
 	}
@@ -66,8 +66,8 @@ func (this *NSService) ComposeNSBoard(ctx context.Context, req *pb.ComposeNSBoar
 	result.CountOfflineNSNodes = countOfflineNodes
 
 	// 按小时统计
-	hourFrom := timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
-	hourTo := timeutil.Format("YmdH")
+	var hourFrom = timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
+	var hourTo = timeutil.Format("YmdH")
 	hourlyStats, err := nameservers.SharedNSRecordHourlyStatDAO.FindHourlyStats(tx, hourFrom, hourTo)
 	if err != nil {
 		return nil, err
@@ -81,8 +81,8 @@ func (this *NSService) ComposeNSBoard(ctx context.Context, req *pb.ComposeNSBoar
 	}
 
 	// 按天统计
-	dayFrom := timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
-	dayTo := timeutil.Format("Ymd")
+	var dayFrom = timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
+	var dayTo = timeutil.Format("Ymd")
 	dailyStats, err := nameservers.SharedNSRecordHourlyStatDAO.FindDailyStats(tx, dayFrom, dayTo)
 	if err != nil {
 		return nil, err
@@ -96,7 +96,7 @@ func (this *NSService) ComposeNSBoard(ctx context.Context, req *pb.ComposeNSBoar
 	}
 
 	// 域名排行
-	topDomainStats, err := nameservers.SharedNSRecordHourlyStatDAO.ListTopDomains(tx, hourFrom, hourTo, 10)
+	topDomainStats, err := nameservers.SharedNSRecordHourlyStatDAO.ListTopDomains(tx, 0, hourFrom, hourTo, 10)
 	if err != nil {
 		return nil, err
 	}
@@ -144,12 +144,8 @@ func (this *NSService) ComposeNSBoard(ctx context.Context, req *pb.ComposeNSBoar
 		return nil, err
 	}
 	for _, v := range cpuValues {
-		valueJSON, err := json.Marshal(types.Float32(v.Value))
-		if err != nil {
-			return nil, err
-		}
 		result.CpuNodeValues = append(result.CpuNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
@@ -159,28 +155,107 @@ func (this *NSService) ComposeNSBoard(ctx context.Context, req *pb.ComposeNSBoar
 		return nil, err
 	}
 	for _, v := range memoryValues {
-		valueJSON, err := json.Marshal(types.Float32(v.Value))
-		if err != nil {
-			return nil, err
-		}
 		result.MemoryNodeValues = append(result.MemoryNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
+			ValueJSON: v.Value,
 			CreatedAt: int64(v.CreatedAt),
 		})
 	}
 
-	loadValues, err := models.SharedNodeValueDAO.ListValuesForNSNodes(tx, nodeconfigs.NodeValueItemLoad, "load5m", nodeconfigs.NodeValueRangeMinute)
+	loadValues, err := models.SharedNodeValueDAO.ListValuesForNSNodes(tx, nodeconfigs.NodeValueItemLoad, "load1m", nodeconfigs.NodeValueRangeMinute)
 	if err != nil {
 		return nil, err
 	}
 	for _, v := range loadValues {
-		valueJSON, err := json.Marshal(types.Float32(v.Value))
+		result.LoadNodeValues = append(result.LoadNodeValues, &pb.NodeValue{
+			ValueJSON: v.Value,
+			CreatedAt: int64(v.CreatedAt),
+		})
+	}
+
+	return result, nil
+}
+
+// ComposeNSUserBoard 组合用户看板数据
+func (this *NSService) ComposeNSUserBoard(ctx context.Context, req *pb.ComposeNSUserBoardRequest) (*pb.ComposeNSUserBoardResponse, error) {
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if userId > 0 {
+		req.UserId = userId
+	}
+
+	var result = &pb.ComposeNSUserBoardResponse{}
+
+	var tx = this.NullTx()
+	countDomains, err := nameservers.SharedNSDomainDAO.CountAllEnabledDomains(tx, 0, req.UserId, 0, "", "")
+	if err != nil {
+		return nil, err
+	}
+	result.CountNSDomains = countDomains
+
+	countRecords, err := nameservers.SharedNSRecordDAO.CountAllUserRecords(tx, req.UserId)
+	if err != nil {
+		return nil, err
+	}
+	result.CountNSRecords = countRecords
+
+	countRoutes, err := nameservers.SharedNSRouteDAO.CountAllEnabledRoutes(tx, 0, 0, req.UserId)
+	if err != nil {
+		return nil, err
+	}
+	result.CountNSRoutes = countRoutes
+
+	// 用户套餐
+	userPlan, err := nameservers.SharedNSUserPlanDAO.FindUserPlan(tx, req.UserId)
+	if err != nil {
+		return nil, err
+	}
+	if userPlan != nil {
+		if userPlan.PlanId > 0 && userPlan.DayTo >= timeutil.Format("Ymd") {
+			plan, err := nameservers.SharedNSPlanDAO.FindEnabledNSPlan(tx, int64(userPlan.PlanId))
+			if err != nil {
+				return nil, err
+			}
+			if plan != nil && plan.IsOn {
+				result.NsUserPlan = &pb.NSUserPlan{
+					Id:         int64(userPlan.Id),
+					NsPlanId:   int64(userPlan.PlanId),
+					DayFrom:    userPlan.DayFrom,
+					DayTo:      userPlan.DayTo,
+					PeriodUnit: userPlan.PeriodUnit,
+					NsPlan: &pb.NSPlan{
+						Id:   int64(plan.Id),
+						Name: plan.Name,
+						IsOn: plan.IsOn,
+					},
+					User: nil,
+				}
+			}
+		}
+	}
+
+	// 域名排行
+	var hourFrom = timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
+	var hourTo = timeutil.Format("YmdH")
+	topDomainStats, err := nameservers.SharedNSRecordHourlyStatDAO.ListTopDomains(tx, userId, hourFrom, hourTo, 10)
+	if err != nil {
+		return nil, err
+	}
+	for _, stat := range topDomainStats {
+		domainName, err := nameservers.SharedNSDomainDAO.FindNSDomainName(tx, int64(stat.DomainId))
 		if err != nil {
 			return nil, err
 		}
-		result.LoadNodeValues = append(result.LoadNodeValues, &pb.NodeValue{
-			ValueJSON: valueJSON,
-			CreatedAt: int64(v.CreatedAt),
+		if len(domainName) == 0 {
+			continue
+		}
+		result.TopNSDomainStats = append(result.TopNSDomainStats, &pb.ComposeNSUserBoardResponse_DomainStat{
+			NsDomainId:    int64(stat.DomainId),
+			NsDomainName:  domainName,
+			CountRequests: int64(stat.CountRequests),
+			Bytes:         int64(stat.Bytes),
 		})
 	}
 

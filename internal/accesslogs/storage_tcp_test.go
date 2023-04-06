@@ -1,3 +1,5 @@
+//go:build plus
+
 package accesslogs
 
 import (

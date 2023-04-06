@@ -1,1 +1,38 @@
 package models
+
+import (
+	"encoding/json"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
+)
+
+// DecodeTrafficPrice 流量价格配置
+func (this *Plan) DecodeTrafficPrice() *serverconfigs.PlanTrafficPriceConfig {
+	var config = &serverconfigs.PlanTrafficPriceConfig{}
+
+	if len(this.TrafficPrice) == 0 {
+		return config
+	}
+
+	err := json.Unmarshal(this.TrafficPrice, config)
+	if err != nil {
+		// 忽略错误
+	}
+
+	return config
+}
+
+// DecodeBandwidthPrice 带宽价格配置
+func (this *Plan) DecodeBandwidthPrice() *serverconfigs.PlanBandwidthPriceConfig {
+	var config = &serverconfigs.PlanBandwidthPriceConfig{}
+
+	if len(this.BandwidthPrice) == 0 {
+		return config
+	}
+
+	err := json.Unmarshal(this.BandwidthPrice, config)
+	if err != nil {
+		// 忽略错误
+	}
+
+	return config
+}

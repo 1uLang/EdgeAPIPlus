@@ -2,9 +2,8 @@ package configs
 
 import (
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
-	"github.com/go-yaml/yaml"
 	"github.com/iwind/TeaGo/Tea"
-	"io/ioutil"
+	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
 )
@@ -45,7 +44,7 @@ func SharedAPIConfig() (*APIConfig, error) {
 	var data []byte
 	var err error
 	for _, path := range paths {
-		data, err = ioutil.ReadFile(path)
+		data, err = os.ReadFile(path)
 		if err == nil {
 			if path == localFile {
 				isFromLocal = true
@@ -66,7 +65,7 @@ func SharedAPIConfig() (*APIConfig, error) {
 
 	if !isFromLocal {
 		// 恢复文件
-		_ = ioutil.WriteFile(localFile, data, 0666)
+		_ = os.WriteFile(localFile, data, 0666)
 	}
 
 	// 恢复数据库文件
@@ -83,9 +82,9 @@ func SharedAPIConfig() (*APIConfig, error) {
 			for _, path := range paths {
 				_, err := os.Stat(path)
 				if err == nil {
-					data, err := ioutil.ReadFile(path)
+					data, err := os.ReadFile(path)
 					if err == nil {
-						_ = ioutil.WriteFile(dbConfigFile, data, 0666)
+						_ = os.WriteFile(dbConfigFile, data, 0666)
 						break
 					}
 				}
@@ -125,14 +124,14 @@ func (this *APIConfig) WriteFile(path string) error {
 	for _, backupDir := range backupDirs {
 		stat, err := os.Stat(backupDir)
 		if err == nil && stat.IsDir() {
-			_ = ioutil.WriteFile(backupDir+"/"+filename, data, 0666)
+			_ = os.WriteFile(backupDir+"/"+filename, data, 0666)
 		} else if err != nil && os.IsNotExist(err) {
 			err = os.Mkdir(backupDir, 0777)
 			if err == nil {
-				_ = ioutil.WriteFile(backupDir+"/"+filename, data, 0666)
+				_ = os.WriteFile(backupDir+"/"+filename, data, 0666)
 			}
 		}
 	}
 
-	return ioutil.WriteFile(path, data, 0666)
+	return os.WriteFile(path, data, 0666)
 }

@@ -9,14 +9,14 @@ import (
 	"strings"
 )
 
-// 数据库相关服务
+// DBService 数据库相关服务
 type DBService struct {
 	BaseService
 }
 
-// 获取所有表信息
+// FindAllDBTables 获取所有表信息
 func (this *DBService) FindAllDBTables(ctx context.Context, req *pb.FindAllDBTablesRequest) (*pb.FindAllDBTablesResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -25,7 +25,7 @@ func (this *DBService) FindAllDBTables(ctx context.Context, req *pb.FindAllDBTab
 	if err != nil {
 		return nil, err
 	}
-	ones, _, err := db.FindOnes("SELECT * FROM information_schema.`TABLES` WHERE TABLE_SCHEMA=?", db.Name())
+	ones, _, err := db.FindPreparedOnes("SELECT * FROM information_schema.`TABLES` WHERE TABLE_SCHEMA=?", db.Name())
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (this *DBService) FindAllDBTables(ctx context.Context, req *pb.FindAllDBTab
 		if strings.HasPrefix(lowerTableName, "edgehttpaccesslogs_") {
 			canDelete = true
 			canClean = true
-		} else if lists.ContainsString([]string{"edgemessages", "edgelogs", "edgenodelogs"}, lowerTableName) {
+		} else if lists.ContainsString([]string{"edgemessages", "edgelogs", "edgenodelogs", "edgemetricstats", "edgemetricsumstats", "edgeserverdomainhourlystats", "edgeserverregionprovincemonthlystats", "edgeserverregionprovidermonthlystats", "edgeserverregioncountrymonthlystats", "edgeserverregioncountrydailystats", "edgeserverregioncitymonthlystats", "edgeserverhttpfirewallhourlystats", "edgeserverhttpfirewalldailystats", "edgenodeclustertrafficdailystats", "edgenodetrafficdailystats", "edgenodetraffichourlystats", "edgensrecordhourlystats", "edgeserverclientbrowsermonthlystats", "edgeserverclientsystemmonthlystats"}, lowerTableName) || strings.HasPrefix(lowerTableName, "edgeserverdomainhourlystats_") || strings.HasPrefix(lowerTableName, "edgemetricstats_") || strings.HasPrefix(lowerTableName, "edgemetricsumstats_") {
 			canClean = true
 		}
 
@@ -60,9 +60,9 @@ func (this *DBService) FindAllDBTables(ctx context.Context, req *pb.FindAllDBTab
 	return &pb.FindAllDBTablesResponse{DbTables: pbTables}, nil
 }
 
-// 删除表
+// DeleteDBTable 删除表
 func (this *DBService) DeleteDBTable(ctx context.Context, req *pb.DeleteDBTableRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -84,9 +84,9 @@ func (this *DBService) DeleteDBTable(ctx context.Context, req *pb.DeleteDBTableR
 	return this.Success()
 }
 
-// 清空表
+// TruncateDBTable 清空表
 func (this *DBService) TruncateDBTable(ctx context.Context, req *pb.TruncateDBTableRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

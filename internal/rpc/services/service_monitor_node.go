@@ -15,12 +15,12 @@ type MonitorNodeService struct {
 
 // CreateMonitorNode 创建监控节点
 func (this *MonitorNodeService) CreateMonitorNode(ctx context.Context, req *pb.CreateMonitorNodeRequest) (*pb.CreateMonitorNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodeId, err := models.SharedMonitorNodeDAO.CreateMonitorNode(tx, req.Name, req.Description, req.IsOn)
 	if err != nil {
@@ -32,12 +32,12 @@ func (this *MonitorNodeService) CreateMonitorNode(ctx context.Context, req *pb.C
 
 // UpdateMonitorNode 修改监控节点
 func (this *MonitorNodeService) UpdateMonitorNode(ctx context.Context, req *pb.UpdateMonitorNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedMonitorNodeDAO.UpdateMonitorNode(tx, req.MonitorNodeId, req.Name, req.Description, req.IsOn)
 	if err != nil {
@@ -49,12 +49,12 @@ func (this *MonitorNodeService) UpdateMonitorNode(ctx context.Context, req *pb.U
 
 // DeleteMonitorNode 删除监控节点
 func (this *MonitorNodeService) DeleteMonitorNode(ctx context.Context, req *pb.DeleteMonitorNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedMonitorNodeDAO.DisableMonitorNode(tx, req.MonitorNodeId)
 	if err != nil {
@@ -66,12 +66,12 @@ func (this *MonitorNodeService) DeleteMonitorNode(ctx context.Context, req *pb.D
 
 // FindAllEnabledMonitorNodes 列出所有可用监控节点
 func (this *MonitorNodeService) FindAllEnabledMonitorNodes(ctx context.Context, req *pb.FindAllEnabledMonitorNodesRequest) (*pb.FindAllEnabledMonitorNodesResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodes, err := models.SharedMonitorNodeDAO.FindAllEnabledMonitorNodes(tx)
 	if err != nil {
@@ -82,7 +82,7 @@ func (this *MonitorNodeService) FindAllEnabledMonitorNodes(ctx context.Context, 
 	for _, node := range nodes {
 		result = append(result, &pb.MonitorNode{
 			Id:          int64(node.Id),
-			IsOn:        node.IsOn == 1,
+			IsOn:        node.IsOn,
 			UniqueId:    node.UniqueId,
 			Secret:      node.Secret,
 			Name:        node.Name,
@@ -95,12 +95,12 @@ func (this *MonitorNodeService) FindAllEnabledMonitorNodes(ctx context.Context, 
 
 // CountAllEnabledMonitorNodes 计算监控节点数量
 func (this *MonitorNodeService) CountAllEnabledMonitorNodes(ctx context.Context, req *pb.CountAllEnabledMonitorNodesRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	count, err := models.SharedMonitorNodeDAO.CountAllEnabledMonitorNodes(tx)
 	if err != nil {
@@ -112,12 +112,12 @@ func (this *MonitorNodeService) CountAllEnabledMonitorNodes(ctx context.Context,
 
 // ListEnabledMonitorNodes 列出单页的监控节点
 func (this *MonitorNodeService) ListEnabledMonitorNodes(ctx context.Context, req *pb.ListEnabledMonitorNodesRequest) (*pb.ListEnabledMonitorNodesResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	nodes, err := models.SharedMonitorNodeDAO.ListEnabledMonitorNodes(tx, req.Offset, req.Size)
 	if err != nil {
@@ -128,12 +128,12 @@ func (this *MonitorNodeService) ListEnabledMonitorNodes(ctx context.Context, req
 	for _, node := range nodes {
 		result = append(result, &pb.MonitorNode{
 			Id:          int64(node.Id),
-			IsOn:        node.IsOn == 1,
+			IsOn:        node.IsOn,
 			UniqueId:    node.UniqueId,
 			Secret:      node.Secret,
 			Name:        node.Name,
 			Description: node.Description,
-			StatusJSON:  []byte(node.Status),
+			StatusJSON:  node.Status,
 		})
 	}
 
@@ -142,12 +142,12 @@ func (this *MonitorNodeService) ListEnabledMonitorNodes(ctx context.Context, req
 
 // FindEnabledMonitorNode 根据ID查找节点
 func (this *MonitorNodeService) FindEnabledMonitorNode(ctx context.Context, req *pb.FindEnabledMonitorNodeRequest) (*pb.FindEnabledMonitorNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	node, err := models.SharedMonitorNodeDAO.FindEnabledMonitorNode(tx, req.MonitorNodeId)
 	if err != nil {
@@ -160,7 +160,7 @@ func (this *MonitorNodeService) FindEnabledMonitorNode(ctx context.Context, req 
 
 	result := &pb.MonitorNode{
 		Id:          int64(node.Id),
-		IsOn:        node.IsOn == 1,
+		IsOn:        node.IsOn,
 		UniqueId:    node.UniqueId,
 		Secret:      node.Secret,
 		Name:        node.Name,
@@ -176,7 +176,7 @@ func (this *MonitorNodeService) FindCurrentMonitorNode(ctx context.Context, req 
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -198,7 +198,7 @@ func (this *MonitorNodeService) FindCurrentMonitorNode(ctx context.Context, req 
 
 	result := &pb.MonitorNode{
 		Id:          int64(node.Id),
-		IsOn:        node.IsOn == 1,
+		IsOn:        node.IsOn,
 		UniqueId:    node.UniqueId,
 		Secret:      node.Secret,
 		Name:        node.Name,
@@ -223,7 +223,7 @@ func (this *MonitorNodeService) UpdateMonitorNodeStatus(ctx context.Context, req
 		return nil, errors.New("'nodeId' should be greater than 0")
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedMonitorNodeDAO.UpdateNodeStatus(tx, nodeId, req.StatusJSON)
 	if err != nil {

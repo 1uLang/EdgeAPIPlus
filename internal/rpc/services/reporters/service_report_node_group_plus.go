@@ -16,7 +16,7 @@ type ReportNodeGroupService struct {
 
 // CreateReportNodeGroup 创建分组
 func (this *ReportNodeGroupService) CreateReportNodeGroup(ctx context.Context, req *pb.CreateReportNodeGroupRequest) (*pb.CreateReportNodeGroupResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func (this *ReportNodeGroupService) CreateReportNodeGroup(ctx context.Context, r
 
 // UpdateReportNodeGroup 修改分组
 func (this *ReportNodeGroupService) UpdateReportNodeGroup(ctx context.Context, req *pb.UpdateReportNodeGroupRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (this *ReportNodeGroupService) UpdateReportNodeGroup(ctx context.Context, r
 
 // DeleteReportNodeGroup 删除分组
 func (this *ReportNodeGroupService) DeleteReportNodeGroup(ctx context.Context, req *pb.DeleteReportNodeGroupRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (this *ReportNodeGroupService) DeleteReportNodeGroup(ctx context.Context, r
 
 // FindAllEnabledReportNodeGroups 查找所有分组
 func (this *ReportNodeGroupService) FindAllEnabledReportNodeGroups(ctx context.Context, req *pb.FindAllEnabledReportNodeGroupsRequest) (*pb.FindAllEnabledReportNodeGroupsResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (this *ReportNodeGroupService) FindAllEnabledReportNodeGroups(ctx context.C
 		pbGroups = append(pbGroups, &pb.ReportNodeGroup{
 			Id:   int64(group.Id),
 			Name: group.Name,
-			IsOn: group.IsOn == 1,
+			IsOn: group.IsOn,
 		})
 	}
 	return &pb.FindAllEnabledReportNodeGroupsResponse{ReportNodeGroups: pbGroups}, nil
@@ -84,7 +84,7 @@ func (this *ReportNodeGroupService) FindAllEnabledReportNodeGroups(ctx context.C
 
 // FindEnabledReportNodeGroup 查找单个分组
 func (this *ReportNodeGroupService) FindEnabledReportNodeGroup(ctx context.Context, req *pb.FindEnabledReportNodeGroupRequest) (*pb.FindEnabledReportNodeGroupResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -102,14 +102,14 @@ func (this *ReportNodeGroupService) FindEnabledReportNodeGroup(ctx context.Conte
 		ReportNodeGroup: &pb.ReportNodeGroup{
 			Id:   int64(group.Id),
 			Name: group.Name,
-			IsOn: group.IsOn == 1,
+			IsOn: group.IsOn,
 		},
 	}, nil
 }
 
 // CountAllEnabledReportNodeGroups 计算所有分组数量
 func (this *ReportNodeGroupService) CountAllEnabledReportNodeGroups(ctx context.Context, req *pb.CountAllEnabledReportNodeGroupsRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package iplibrary
 
 import (
+	"fmt"
 	"github.com/iwind/TeaGo/Tea"
 	_ "github.com/iwind/TeaGo/bootstrap"
 	"github.com/iwind/TeaGo/logs"
@@ -31,10 +32,11 @@ func TestIP2RegionLibrary_Lookup_Valid_IP(t *testing.T) {
 		t.Fatal(err)
 	}
 	{
-		result, err := library.Lookup("114.240.223")
+		result, err := library.Lookup("172.16.1.213")
 		if err != nil {
 			t.Fatal(err)
 		}
+		fmt.Println(result)
 		logs.PrintAsJSON(result, t)
 	}
 	{
@@ -45,7 +47,6 @@ func TestIP2RegionLibrary_Lookup_Valid_IP(t *testing.T) {
 		logs.PrintAsJSON(result, t)
 	}
 }
-
 
 func TestIP2RegionLibrary_Memory(t *testing.T) {
 	library := &IP2RegionLibrary{}

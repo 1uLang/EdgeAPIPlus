@@ -12,10 +12,11 @@ import (
 type DNSTaskType = string
 
 const (
-	DNSTaskTypeClusterChange DNSTaskType = "clusterChange"
-	DNSTaskTypeNodeChange    DNSTaskType = "nodeChange"
-	DNSTaskTypeServerChange  DNSTaskType = "serverChange"
-	DNSTaskTypeDomainChange  DNSTaskType = "domainChange"
+	DNSTaskTypeClusterChange       DNSTaskType = "clusterChange"
+	DNSTaskTypeClusterRemoveDomain DNSTaskType = "clusterRemoveDomain" // 从集群中移除域名
+	DNSTaskTypeNodeChange          DNSTaskType = "nodeChange"
+	DNSTaskTypeServerChange        DNSTaskType = "serverChange"
+	DNSTaskTypeDomainChange        DNSTaskType = "domainChange"
 )
 
 type DNSTaskDAO dbs.DAO
@@ -40,53 +41,62 @@ func init() {
 }
 
 // CreateDNSTask 生成任务
-func (this *DNSTaskDAO) CreateDNSTask(tx *dbs.Tx, clusterId int64, serverId int64, nodeId int64, domainId int64, taskType string) error {
+func (this *DNSTaskDAO) CreateDNSTask(tx *dbs.Tx, clusterId int64, serverId int64, nodeId int64, domainId int64, recordName string, taskType string) error {
 	if clusterId <= 0 && serverId <= 0 && nodeId <= 0 && domainId <= 0 {
 		return nil
 	}
 	err := this.Query(tx).InsertOrUpdateQuickly(maps.Map{
-		"clusterId": clusterId,
-		"serverId":  serverId,
-		"nodeId":    nodeId,
-		"domainId":  domainId,
-		"updatedAt": time.Now().Unix(),
-		"type":      taskType,
-		"isDone":    false,
-		"isOk":      false,
-		"error":     "",
+		"clusterId":  clusterId,
+		"serverId":   serverId,
+		"nodeId":     nodeId,
+		"domainId":   domainId,
+		"recordName": recordName,
+		"updatedAt":  time.Now().Unix(),
+		"type":       taskType,
+		"isDone":     false,
+		"isOk":       false,
+		"error":      "",
+		"version":    time.Now().UnixNano(),
 	}, maps.Map{
 		"updatedAt": time.Now().Unix(),
 		"isDone":    false,
 		"isOk":      false,
 		"error":     "",
+		"version":   time.Now().UnixNano(),
 	})
 	return err
 }
 
-// CreateClusterTask 生成集群任务
+// CreateClusterTask 生成集群变更任务
 func (this *DNSTaskDAO) CreateClusterTask(tx *dbs.Tx, clusterId int64, taskType DNSTaskType) error {
-	return this.CreateDNSTask(tx, clusterId, 0, 0, 0, taskType)
+	return this.CreateDNSTask(tx, clusterId, 0, 0, 0, "", taskType)
+}
+
+// CreateClusterRemoveTask 生成集群删除域名任务
+func (this *DNSTaskDAO) CreateClusterRemoveTask(tx *dbs.Tx, clusterId int64, domainId int64, recordName string) error {
+	return this.CreateDNSTask(tx, clusterId, 0, 0, domainId, recordName, DNSTaskTypeClusterRemoveDomain)
 }
 
 // CreateNodeTask 生成节点任务
 func (this *DNSTaskDAO) CreateNodeTask(tx *dbs.Tx, nodeId int64, taskType DNSTaskType) error {
-	return this.CreateDNSTask(tx, 0, 0, nodeId, 0, taskType)
+	return this.CreateDNSTask(tx, 0, 0, nodeId, 0, "", taskType)
 }
 
 // CreateServerTask 生成服务任务
-func (this *DNSTaskDAO) CreateServerTask(tx *dbs.Tx, serverId int64, taskType DNSTaskType) error {
-	return this.CreateDNSTask(tx, 0, serverId, 0, 0, taskType)
+func (this *DNSTaskDAO) CreateServerTask(tx *dbs.Tx, clusterId int64, serverId int64, taskType DNSTaskType) error {
+	return this.CreateDNSTask(tx, clusterId, serverId, 0, 0, "", taskType)
 }
 
 // CreateDomainTask 生成域名更新任务
 func (this *DNSTaskDAO) CreateDomainTask(tx *dbs.Tx, domainId int64, taskType DNSTaskType) error {
-	return this.CreateDNSTask(tx, 0, 0, 0, domainId, taskType)
+	return this.CreateDNSTask(tx, 0, 0, 0, domainId, "", taskType)
 }
 
 // FindAllDoingTasks 查找所有正在执行的任务
 func (this *DNSTaskDAO) FindAllDoingTasks(tx *dbs.Tx) (result []*DNSTask, err error) {
 	_, err = this.Query(tx).
 		Attr("isDone", 0).
+		Asc("version").
 		AscPk().
 		Slice(&result).
 		FindAll()
@@ -101,6 +111,8 @@ func (this *DNSTaskDAO) FindAllDoingOrErrorTasks(tx *dbs.Tx, nodeClusterId int64
 	}
 	_, err = query.
 		Where("(isDone=0 OR (isDone=1 AND isOk=0))").
+		Asc("updatedAt").
+		Asc("version").
 		AscPk().
 		Slice(&result).
 		FindAll()
@@ -135,7 +147,7 @@ func (this *DNSTaskDAO) UpdateDNSTaskError(tx *dbs.Tx, taskId int64, err string)
 	if taskId <= 0 {
 		return errors.New("invalid taskId")
 	}
-	op := NewDNSTaskOperator()
+	var op = NewDNSTaskOperator()
 	op.Id = taskId
 	op.IsDone = true
 	op.Error = err
@@ -148,10 +160,20 @@ func (this *DNSTaskDAO) UpdateDNSTaskDone(tx *dbs.Tx, taskId int64) error {
 	if taskId <= 0 {
 		return errors.New("invalid taskId")
 	}
-	op := NewDNSTaskOperator()
+	var op = NewDNSTaskOperator()
 	op.Id = taskId
 	op.IsDone = true
 	op.IsOk = true
 	op.Error = ""
 	return this.Save(tx, op)
+}
+
+// DeleteDNSTasksWithClusterId 删除集群相关任务
+func (this *DNSTaskDAO) DeleteDNSTasksWithClusterId(tx *dbs.Tx, clusterId int64) error {
+	if clusterId <= 0 {
+		return nil
+	}
+	return this.Query(tx).
+		Attr("clusterId", clusterId).
+		DeleteQuickly()
 }

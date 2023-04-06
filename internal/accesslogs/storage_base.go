@@ -1,4 +1,5 @@
 // Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
+//go:build plus
 
 package accesslogs
 
@@ -12,8 +13,9 @@ import (
 )
 
 type BaseStorage struct {
-	isOk    bool
-	version int
+	isOk         bool
+	version      int
+	firewallOnly bool
 }
 
 func (this *BaseStorage) SetVersion(version int) {
@@ -32,6 +34,10 @@ func (this *BaseStorage) SetOk(isOk bool) {
 	this.isOk = isOk
 }
 
+func (this *BaseStorage) SetFirewallOnly(firewallOnly bool) {
+	this.firewallOnly = firewallOnly
+}
+
 // Marshal 对日志进行编码
 func (this *BaseStorage) Marshal(accessLog *pb.HTTPAccessLog) ([]byte, error) {
 	return json.Marshal(accessLog)
@@ -39,7 +45,7 @@ func (this *BaseStorage) Marshal(accessLog *pb.HTTPAccessLog) ([]byte, error) {
 
 // FormatVariables 格式化字符串中的变量
 func (this *BaseStorage) FormatVariables(s string) string {
-	now := time.Now()
+	var now = time.Now()
 	return configutils.ParseVariables(s, func(varName string) (value string) {
 		switch varName {
 		case "year":

@@ -1,4 +1,6 @@
 // Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
+//go:build plus
+// +build plus
 
 package accesslogs
 
@@ -58,7 +60,7 @@ func (this *StorageManager) Loop() error {
 	}
 	var policyIds = []int64{}
 	for _, policy := range policies {
-		if policy.IsOn == 1 {
+		if policy.IsOn {
 			policyIds = append(policyIds, int64(policy.Id))
 		}
 	}
@@ -92,7 +94,7 @@ func (this *StorageManager) Loop() error {
 				}
 
 				if len(policy.Options) > 0 {
-					err = json.Unmarshal([]byte(policy.Options), storage.Config())
+					err = json.Unmarshal(policy.Options, storage.Config())
 					if err != nil {
 						remotelogs.Error("ACCESS_LOG_STORAGE_MANAGER", "unmarshal policy '"+types.String(policyId)+"' config failed: "+err.Error())
 						storage.SetOk(false)
@@ -101,6 +103,7 @@ func (this *StorageManager) Loop() error {
 				}
 
 				storage.SetVersion(types.Int(policy.Version))
+				storage.SetFirewallOnly(policy.FirewallOnly == 1)
 				err := storage.Start()
 				if err != nil {
 					remotelogs.Error("ACCESS_LOG_STORAGE_MANAGER", "start policy '"+types.String(policyId)+"' failed: "+err.Error())
@@ -110,12 +113,13 @@ func (this *StorageManager) Loop() error {
 				remotelogs.Println("ACCESS_LOG_STORAGE_MANAGER", "restart policy '"+types.String(policyId)+"'")
 			}
 		} else {
-			storage, err := this.createStorage(policy.Type, []byte(policy.Options))
+			storage, err := this.createStorage(policy.Type, policy.Options)
 			if err != nil {
 				remotelogs.Error("ACCESS_LOG_STORAGE_MANAGER", "create policy '"+types.String(policyId)+"' failed: "+err.Error())
 				continue
 			}
 			storage.SetVersion(types.Int(policy.Version))
+			storage.SetFirewallOnly(policy.FirewallOnly == 1)
 			this.storageMap[policyId] = storage
 			err = storage.Start()
 			if err != nil {

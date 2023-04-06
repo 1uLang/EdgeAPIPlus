@@ -7,13 +7,13 @@ package reporters
 import (
 	"context"
 	"encoding/json"
+	"github.com/1uLang/EdgeCommon/pkg/iplibrary"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/reporterconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
-	"github.com/TeaOSLab/EdgeAPI/internal/iplibrary"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/iwind/TeaGo/dbs"
@@ -30,7 +30,7 @@ type ReportNodeService struct {
 
 // CreateReportNode 添加终端
 func (this *ReportNodeService) CreateReportNode(ctx context.Context, req *pb.CreateReportNodeRequest) (*pb.CreateReportNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (this *ReportNodeService) CreateReportNode(ctx context.Context, req *pb.Cre
 
 // DeleteReportNode 删除终端
 func (this *ReportNodeService) DeleteReportNode(ctx context.Context, req *pb.DeleteReportNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (this *ReportNodeService) DeleteReportNode(ctx context.Context, req *pb.Del
 
 // UpdateReportNode 修改终端
 func (this *ReportNodeService) UpdateReportNode(ctx context.Context, req *pb.UpdateReportNodeRequest) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (this *ReportNodeService) UpdateReportNode(ctx context.Context, req *pb.Upd
 
 // CountAllEnabledReportNodes 计算终端数量
 func (this *ReportNodeService) CountAllEnabledReportNodes(ctx context.Context, req *pb.CountAllEnabledReportNodesRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func (this *ReportNodeService) CountAllEnabledReportNodes(ctx context.Context, r
 
 // ListEnabledReportNodes 列出单页终端
 func (this *ReportNodeService) ListEnabledReportNodes(ctx context.Context, req *pb.ListEnabledReportNodesRequest) (*pb.ListEnabledReportNodesResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func (this *ReportNodeService) ListEnabledReportNodes(ctx context.Context, req *
 			pbGroups = append(pbGroups, &pb.ReportNodeGroup{
 				Id:   int64(group.Id),
 				Name: group.Name,
-				IsOn: group.IsOn == 1,
+				IsOn: group.IsOn,
 			})
 		}
 
@@ -127,12 +127,12 @@ func (this *ReportNodeService) ListEnabledReportNodes(ctx context.Context, req *
 			Id:               int64(one.Id),
 			UniqueId:         one.UniqueId,
 			Secret:           one.Secret,
-			IsOn:             one.IsOn == 1,
+			IsOn:             one.IsOn,
 			Name:             one.Name,
 			Location:         one.Location,
 			Isp:              one.Isp,
-			IsActive:         one.IsActive == 1,
-			StatusJSON:       []byte(one.Status),
+			IsActive:         one.IsActive,
+			StatusJSON:       one.Status,
 			AllowIPs:         one.DecodeAllowIPs(),
 			ReportNodeGroups: pbGroups,
 		})
@@ -145,7 +145,7 @@ func (this *ReportNodeService) ListEnabledReportNodes(ctx context.Context, req *
 
 // FindEnabledReportNode 查找单个终端
 func (this *ReportNodeService) FindEnabledReportNode(ctx context.Context, req *pb.FindEnabledReportNodeRequest) (*pb.FindEnabledReportNodeResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func (this *ReportNodeService) FindEnabledReportNode(ctx context.Context, req *p
 		pbGroups = append(pbGroups, &pb.ReportNodeGroup{
 			Id:   int64(group.Id),
 			Name: group.Name,
-			IsOn: group.IsOn == 1,
+			IsOn: group.IsOn,
 		})
 	}
 
@@ -180,12 +180,12 @@ func (this *ReportNodeService) FindEnabledReportNode(ctx context.Context, req *p
 		Id:               int64(node.Id),
 		UniqueId:         node.UniqueId,
 		Secret:           node.Secret,
-		IsOn:             node.IsOn == 1,
+		IsOn:             node.IsOn,
 		Name:             node.Name,
 		Location:         node.Location,
 		Isp:              node.Isp,
-		IsActive:         node.IsActive == 1,
-		StatusJSON:       []byte(node.Status),
+		IsActive:         node.IsActive,
+		StatusJSON:       node.Status,
 		AllowIPs:         node.DecodeAllowIPs(),
 		ReportNodeGroups: pbGroups,
 	}}, nil
@@ -217,20 +217,15 @@ func (this *ReportNodeService) UpdateReportNodeStatus(ctx context.Context, req *
 		if len(host) > 0 {
 			status.IP = host
 
-			result, _ := iplibrary.SharedLibrary.Lookup(host)
-			if result != nil {
+			var result = iplibrary.LookupIP(host)
+			if result != nil && result.IsOk() {
 				status.Location = result.Summary()
-				status.ISP = result.ISP
+				status.ISP = result.ProviderName()
 			}
 		}
 	}
 
-	statusJSON, err := json.Marshal(status)
-	if err != nil {
-		return nil, err
-	}
-
-	err = models.SharedReportNodeDAO.UpdateNodeStatus(tx, nodeId, statusJSON)
+	err = models.SharedReportNodeDAO.UpdateNodeStatus(tx, nodeId, status)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +281,7 @@ func (this *ReportNodeService) FindReportNodeTasks(ctx context.Context, req *pb.
 	}
 
 	for _, cluster := range clusters {
-		if cluster.IsOn == 0 {
+		if !cluster.IsOn {
 			continue
 		}
 		var clusterId = int64(cluster.Id)
@@ -300,12 +295,12 @@ func (this *ReportNodeService) FindReportNodeTasks(ctx context.Context, req *pb.
 		}
 
 		// 读取所有IP地址
-		addrList, err := models.SharedNodeIPAddressDAO.FindAllAccessibleIPAddressesWithClusterId(tx, nodeconfigs.NodeRoleNode, clusterId)
+		addrList, err := models.SharedNodeIPAddressDAO.FindAllAccessibleIPAddressesWithClusterId(tx, nodeconfigs.NodeRoleNode, clusterId, nil)
 		if err != nil {
 			return nil, err
 		}
 		for _, addr := range addrList {
-			if addr.IsOn != 1 {
+			if !addr.IsOn {
 				continue
 			}
 
@@ -334,7 +329,7 @@ func (this *ReportNodeService) FindReportNodeTasks(ctx context.Context, req *pb.
 
 // FindLatestReportNodeVersion 取得最新的版本号
 func (this *ReportNodeService) FindLatestReportNodeVersion(ctx context.Context, req *pb.FindLatestReportNodeVersionRequest) (*pb.FindLatestReportNodeVersionResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +341,7 @@ func (this *ReportNodeService) FindLatestReportNodeVersion(ctx context.Context, 
 
 // CountAllReportNodeTasks 计算任务数量
 func (this *ReportNodeService) CountAllReportNodeTasks(ctx context.Context, req *pb.CountAllReportNodeTasksRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +363,7 @@ func (this *ReportNodeService) CountAllReportNodeTasks(ctx context.Context, req 
 
 // ListReportNodeTasks 列出单页任务
 func (this *ReportNodeService) ListReportNodeTasks(ctx context.Context, req *pb.ListReportNodeTasksRequest) (*pb.ListReportNodeTasksResponse, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -401,9 +396,9 @@ func (this *ReportNodeService) ListReportNodeTasks(ctx context.Context, req *pb.
 				Name:        addr.Name,
 				Ip:          addrIP,
 				Description: addr.Description,
-				CanAccess:   addr.CanAccess == 1,
-				IsOn:        addr.IsOn == 1,
-				IsUp:        addr.IsUp == 1,
+				CanAccess:   addr.CanAccess,
+				IsOn:        addr.IsOn,
+				IsUp:        addr.IsUp,
 				Role:        addr.Role,
 			}
 			var connectivity = addr.DecodeConnectivity()
@@ -427,7 +422,7 @@ func (this *ReportNodeService) ListReportNodeTasks(ctx context.Context, req *pb.
 
 // UpdateReportNodeGlobalSetting 修改全局设置
 func (this *ReportNodeService) UpdateReportNodeGlobalSetting(ctx context.Context, req *pb.UpdateReportNodeGlobalSetting) (*pb.RPCSuccess, error) {
-	_, err := this.ValidateAdmin(ctx, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

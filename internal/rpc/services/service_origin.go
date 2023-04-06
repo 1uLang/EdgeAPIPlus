@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/iwind/TeaGo/maps"
 )
@@ -17,7 +18,7 @@ type OriginService struct {
 
 // CreateOrigin 创建源站
 func (this *OriginService) CreateOrigin(ctx context.Context, req *pb.CreateOriginRequest) (*pb.CreateOriginResponse, error) {
-	adminId, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	adminId, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +32,7 @@ func (this *OriginService) CreateOrigin(ctx context.Context, req *pb.CreateOrigi
 		"host":      req.Addr.Host,
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 校验参数
 	var connTimeout = &shared.TimeDuration{}
@@ -58,7 +59,20 @@ func (this *OriginService) CreateOrigin(ctx context.Context, req *pb.CreateOrigi
 		}
 	}
 
-	originId, err := models.SharedOriginDAO.CreateOrigin(tx, adminId, userId, req.Name, string(addrMap.AsJSON()), req.Description, req.Weight, req.IsOn, connTimeout, readTimeout, idleTimeout, req.MaxConns, req.MaxIdleConns, req.Domains)
+	// cert
+	var certRef *sslconfigs.SSLCertRef
+	if len(req.CertRefJSON) > 0 {
+		certRef = &sslconfigs.SSLCertRef{}
+		err = json.Unmarshal(req.CertRefJSON, certRef)
+		if err != nil {
+			return nil, err
+		}
+		if certRef.CertId <= 0 {
+			certRef = nil
+		}
+	}
+
+	originId, err := models.SharedOriginDAO.CreateOrigin(tx, adminId, userId, req.Name, string(addrMap.AsJSON()), req.Description, req.Weight, req.IsOn, connTimeout, readTimeout, idleTimeout, req.MaxConns, req.MaxIdleConns, certRef, req.Domains, req.Host, req.FollowPort)
 	if err != nil {
 		return nil, err
 	}
@@ -68,24 +82,27 @@ func (this *OriginService) CreateOrigin(ctx context.Context, req *pb.CreateOrigi
 
 // UpdateOrigin 修改源站
 func (this *OriginService) UpdateOrigin(ctx context.Context, req *pb.UpdateOriginRequest) (*pb.RPCSuccess, error) {
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
+	var tx = this.NullTx()
+
 	if userId > 0 {
-		// TODO 校验权限
+		err = models.SharedOriginDAO.CheckUserOrigin(tx, userId, req.OriginId)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if req.Addr == nil {
 		return nil, errors.New("'addr' can not be nil")
 	}
-	addrMap := maps.Map{
+	var addrMap = maps.Map{
 		"protocol":  req.Addr.Protocol,
 		"portRange": req.Addr.PortRange,
 		"host":      req.Addr.Host,
 	}
-
-	tx := this.NullTx()
 
 	// 校验参数
 	var connTimeout = &shared.TimeDuration{}
@@ -112,7 +129,20 @@ func (this *OriginService) UpdateOrigin(ctx context.Context, req *pb.UpdateOrigi
 		}
 	}
 
-	err = models.SharedOriginDAO.UpdateOrigin(tx, req.OriginId, req.Name, string(addrMap.AsJSON()), req.Description, req.Weight, req.IsOn, connTimeout, readTimeout, idleTimeout, req.MaxConns, req.MaxIdleConns, req.Domains)
+	// cert
+	var certRef *sslconfigs.SSLCertRef
+	if len(req.CertRefJSON) > 0 {
+		certRef = &sslconfigs.SSLCertRef{}
+		err = json.Unmarshal(req.CertRefJSON, certRef)
+		if err != nil {
+			return nil, err
+		}
+		if certRef.CertId <= 0 {
+			certRef = nil
+		}
+	}
+
+	err = models.SharedOriginDAO.UpdateOrigin(tx, req.OriginId, req.Name, string(addrMap.AsJSON()), req.Description, req.Weight, req.IsOn, connTimeout, readTimeout, idleTimeout, req.MaxConns, req.MaxIdleConns, certRef, req.Domains, req.Host, req.FollowPort)
 	if err != nil {
 		return nil, err
 	}
@@ -122,16 +152,19 @@ func (this *OriginService) UpdateOrigin(ctx context.Context, req *pb.UpdateOrigi
 
 // FindEnabledOrigin 查找单个源站信息
 func (this *OriginService) FindEnabledOrigin(ctx context.Context, req *pb.FindEnabledOriginRequest) (*pb.FindEnabledOriginResponse, error) {
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
-	if userId > 0 {
-		// TODO 校验权限
-	}
+	var tx = this.NullTx()
 
-	tx := this.NullTx()
+	if userId > 0 {
+		err = models.SharedOriginDAO.CheckUserOrigin(tx, userId, req.OriginId)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	origin, err := models.SharedOriginDAO.FindEnabledOrigin(tx, req.OriginId)
 	if err != nil {
@@ -149,7 +182,7 @@ func (this *OriginService) FindEnabledOrigin(ctx context.Context, req *pb.FindEn
 
 	result := &pb.Origin{
 		Id:   int64(origin.Id),
-		IsOn: origin.IsOn == 1,
+		IsOn: origin.IsOn,
 		Name: origin.Name,
 		Addr: &pb.NetworkAddress{
 			Protocol:  addr.Protocol.String(),
@@ -164,16 +197,19 @@ func (this *OriginService) FindEnabledOrigin(ctx context.Context, req *pb.FindEn
 
 // FindEnabledOriginConfig 查找源站配置
 func (this *OriginService) FindEnabledOriginConfig(ctx context.Context, req *pb.FindEnabledOriginConfigRequest) (*pb.FindEnabledOriginConfigResponse, error) {
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
-	if userId > 0 {
-		// TODO 校验权限
-	}
+	var tx = this.NullTx()
 
-	tx := this.NullTx()
+	if userId > 0 {
+		err = models.SharedOriginDAO.CheckUserOrigin(tx, userId, req.OriginId)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	config, err := models.SharedOriginDAO.ComposeOriginConfig(tx, req.OriginId, nil)
 	if err != nil {

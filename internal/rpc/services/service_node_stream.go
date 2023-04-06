@@ -2,15 +2,13 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/1uLang/EdgeCommon/pkg/messageconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/TeaOSLab/EdgeAPI/internal/configs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/iwind/TeaGo/logs"
@@ -54,8 +52,8 @@ func NextCommandRequestId() int64 {
 
 func init() {
 	// 清理WaitingChannelMap
-	ticker := time.NewTicker(30 * time.Second)
-	go func() {
+	var ticker = time.NewTicker(30 * time.Second)
+	goman.New(func() {
 		for range ticker.C {
 			nodeLocker.Lock()
 			for requestId, request := range nodeResponseChanMap {
@@ -66,7 +64,7 @@ func init() {
 			}
 			nodeLocker.Unlock()
 		}
-	}()
+	})
 }
 
 // NodeStream 节点stream
@@ -85,6 +83,7 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 
 	defer func() {
 		// 修改当前API节点的主边缘节点
+		/// TODO 每个集群应该有一个primaryNodeId
 		if primaryNodeId == nodeId {
 			primaryNodeId = 0
 
@@ -111,29 +110,7 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 		return err
 	}
 
-	// 返回连接成功
-	{
-		apiConfig, err := configs.SharedAPIConfig()
-		if err != nil {
-			return err
-		}
-		connectedMessage := &messageconfigs.ConnectedAPINodeMessage{APINodeId: apiConfig.NumberId()}
-		connectedMessageJSON, err := json.Marshal(connectedMessage)
-		if err != nil {
-			return errors.Wrap(err)
-		}
-		err = server.Send(&pb.NodeStreamMessage{
-			Code:     messageconfigs.MessageCodeConnectedAPINode,
-			DataJSON: connectedMessageJSON,
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	//logs.Println("[RPC]accepted node '" + numberutils.FormatInt64(nodeId) + "' connection")
-
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 标记为活跃状态
 	oldIsActive, err := models.SharedNodeDAO.FindNodeActive(tx, nodeId)
@@ -142,25 +119,38 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 	}
 
 	if !oldIsActive {
-		err = models.SharedNodeDAO.UpdateNodeActive(tx, nodeId, true)
+		inactiveNotifiedAt, err := models.SharedNodeDAO.FindNodeInactiveNotifiedAt(tx, nodeId)
 		if err != nil {
 			return err
 		}
+		if inactiveNotifiedAt > 0 {
+			// 设置为活跃
+			err = models.SharedNodeDAO.UpdateNodeActive(tx, nodeId, true)
+			if err != nil {
+				return err
+			}
 
-		// 发送恢复消息
-		clusterId, err := models.SharedNodeDAO.FindNodeClusterId(tx, nodeId)
-		if err != nil {
-			return err
-		}
-		nodeName, err := models.SharedNodeDAO.FindNodeName(tx, nodeId)
-		if err != nil {
-			return err
-		}
-		subject := "节点\"" + nodeName + "\"已经恢复在线"
-		msg := "节点\"" + nodeName + "\"已经恢复在线"
-		err = models.SharedMessageDAO.CreateNodeMessage(tx, nodeconfigs.NodeRoleNode, clusterId, nodeId, models.MessageTypeNodeActive, models.MessageLevelSuccess, subject, msg, nil, false)
-		if err != nil {
-			return err
+			// 发送恢复消息
+			clusterId, err := models.SharedNodeDAO.FindNodeClusterId(tx, nodeId)
+			if err != nil {
+				return err
+			}
+			nodeName, err := models.SharedNodeDAO.FindNodeName(tx, nodeId)
+			if err != nil {
+				return err
+			}
+			var subject = "节点\"" + nodeName + "\"已经恢复在线"
+			var msg = "节点\"" + nodeName + "\"已经恢复在线"
+			err = models.SharedMessageDAO.CreateNodeMessage(tx, nodeconfigs.NodeRoleNode, clusterId, nodeId, models.MessageTypeNodeActive, models.MessageLevelSuccess, subject, msg, nil, false)
+			if err != nil {
+				return err
+			}
+		} else {
+			// 设置为活跃
+			err = models.SharedNodeDAO.UpdateNodeActive(tx, nodeId, true)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -179,7 +169,7 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 	}()
 
 	// 发送请求
-	go func() {
+	goman.New(func() {
 		for {
 			select {
 			case <-server.Context().Done():
@@ -205,7 +195,7 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 				}
 			}
 		}
-	}()
+	})
 
 	// 接受请求
 	for {
@@ -243,7 +233,7 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 // SendCommandToNode 向节点发送命令
 func (this *NodeService) SendCommandToNode(ctx context.Context, req *pb.NodeStreamMessage) (*pb.NodeStreamMessage, error) {
 	// 校验请求
-	_, _, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}

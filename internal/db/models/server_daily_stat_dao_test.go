@@ -46,7 +46,7 @@ func TestServerDailyStatDAO_SaveStats2(t *testing.T) {
 func TestServerDailyStatDAO_SumUserMonthly(t *testing.T) {
 	dbs.NotifyReady()
 	var tx *dbs.Tx
-	bytes, err := NewServerDailyStatDAO().SumUserMonthly(tx, 1, 1, timeutil.Format("Ym"))
+	bytes, err := NewServerDailyStatDAO().SumUserMonthly(tx, 1, timeutil.Format("Ym"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,4 +73,13 @@ func TestServerDailyStatDAO_SumMinutelyRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs.PrintAsJSON(stat, t)
+}
+
+func TestServerDailyStatDAO_FindDistinctPlanServerIdsBetweenDay(t *testing.T) {
+	var tx *dbs.Tx
+	serverIds, err := NewServerDailyStatDAO().FindDistinctServerIds(tx, timeutil.Format("Ym01"), timeutil.Format("Ymd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log(serverIds)
 }

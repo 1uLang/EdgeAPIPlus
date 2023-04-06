@@ -88,10 +88,10 @@ func (this *HTTPGzipDAO) ComposeGzipConfig(tx *dbs.Tx, gzipId int64) (*servercon
 
 	config := &serverconfigs.HTTPGzipCompressionConfig{}
 	config.Id = int64(gzip.Id)
-	config.IsOn = gzip.IsOn == 1
+	config.IsOn = gzip.IsOn
 	if IsNotNull(gzip.MinLength) {
 		minLengthConfig := &shared.SizeCapacity{}
-		err = json.Unmarshal([]byte(gzip.MinLength), minLengthConfig)
+		err = json.Unmarshal(gzip.MinLength, minLengthConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +99,7 @@ func (this *HTTPGzipDAO) ComposeGzipConfig(tx *dbs.Tx, gzipId int64) (*servercon
 	}
 	if IsNotNull(gzip.MaxLength) {
 		maxLengthConfig := &shared.SizeCapacity{}
-		err = json.Unmarshal([]byte(gzip.MaxLength), maxLengthConfig)
+		err = json.Unmarshal(gzip.MaxLength, maxLengthConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +109,7 @@ func (this *HTTPGzipDAO) ComposeGzipConfig(tx *dbs.Tx, gzipId int64) (*servercon
 
 	if IsNotNull(gzip.Conds) {
 		condsConfig := &shared.HTTPRequestCondsConfig{}
-		err = json.Unmarshal([]byte(gzip.Conds), condsConfig)
+		err = json.Unmarshal(gzip.Conds, condsConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -121,7 +121,7 @@ func (this *HTTPGzipDAO) ComposeGzipConfig(tx *dbs.Tx, gzipId int64) (*servercon
 
 // CreateGzip 创建Gzip
 func (this *HTTPGzipDAO) CreateGzip(tx *dbs.Tx, level int, minLengthJSON []byte, maxLengthJSON []byte, condsJSON []byte) (int64, error) {
-	op := NewHTTPGzipOperator()
+	var op = NewHTTPGzipOperator()
 	op.State = HTTPGzipStateEnabled
 	op.IsOn = true
 	op.Level = level
@@ -146,7 +146,7 @@ func (this *HTTPGzipDAO) UpdateGzip(tx *dbs.Tx, gzipId int64, level int, minLeng
 	if gzipId <= 0 {
 		return errors.New("invalid gzipId")
 	}
-	op := NewHTTPGzipOperator()
+	var op = NewHTTPGzipOperator()
 	op.Id = gzipId
 	op.Level = level
 	if len(minLengthJSON) > 0 {

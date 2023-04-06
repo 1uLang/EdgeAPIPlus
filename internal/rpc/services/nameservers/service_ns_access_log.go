@@ -1,3 +1,6 @@
+//go:build plus
+// +build plus
+
 package nameservers
 
 import (
@@ -27,7 +30,7 @@ func (this *NSAccessLogService) CreateNSAccessLogs(ctx context.Context, req *pb.
 		return &pb.CreateNSAccessLogsResponse{}, nil
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	err = models.SharedNSAccessLogDAO.CreateNSAccessLogs(tx, req.NsAccessLogs)
 	if err != nil {
@@ -40,24 +43,24 @@ func (this *NSAccessLogService) CreateNSAccessLogs(ctx context.Context, req *pb.
 // ListNSAccessLogs 列出单页访问日志
 func (this *NSAccessLogService) ListNSAccessLogs(ctx context.Context, req *pb.ListNSAccessLogsRequest) (*pb.ListNSAccessLogsResponse, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	// 检查服务ID
 	if userId > 0 {
-		// TODO
+		// TODO 检查权限
 	}
 
-	accessLogs, requestId, hasMore, err := models.SharedNSAccessLogDAO.ListAccessLogs(tx, req.RequestId, req.Size, req.Day, req.NsNodeId, req.NsDomainId, req.NsRecordId, req.Keyword, req.Reverse)
+	accessLogs, requestId, hasMore, err := models.SharedNSAccessLogDAO.ListAccessLogs(tx, req.RequestId, req.Size, req.Day, req.NsClusterId, req.NsNodeId, req.NsDomainId, req.NsRecordId, req.RecordType, req.Keyword, req.Reverse)
 	if err != nil {
 		return nil, err
 	}
 
-	result := []*pb.NSAccessLog{}
+	var result = []*pb.NSAccessLog{}
 	for _, accessLog := range accessLogs {
 		a, err := accessLog.ToPB()
 		if err != nil {
@@ -74,7 +77,7 @@ func (this *NSAccessLogService) ListNSAccessLogs(ctx context.Context, req *pb.Li
 				if route != nil {
 					a.NsRoutes = append(a.NsRoutes, &pb.NSRoute{
 						Id:        types.Int64(route.Id),
-						IsOn:      route.IsOn == 1,
+						IsOn:      route.IsOn,
 						Name:      route.Name,
 						Code:      routeCode,
 						NsCluster: nil,
@@ -97,12 +100,12 @@ func (this *NSAccessLogService) ListNSAccessLogs(ctx context.Context, req *pb.Li
 // FindNSAccessLog 查找单个日志
 func (this *NSAccessLogService) FindNSAccessLog(ctx context.Context, req *pb.FindNSAccessLogRequest) (*pb.FindNSAccessLogResponse, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, 0, 0)
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
-	tx := this.NullTx()
+	var tx = this.NullTx()
 
 	accessLog, err := models.SharedNSAccessLogDAO.FindAccessLogWithRequestId(tx, req.RequestId)
 	if err != nil {

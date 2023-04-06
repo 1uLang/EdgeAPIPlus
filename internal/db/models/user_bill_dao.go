@@ -1,10 +1,10 @@
 package models
 
 import (
-	"encoding/json"
 	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
-	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -20,9 +20,9 @@ func init() {
 	dbs.OnReadyDone(func() {
 		var generatedMonths = []string{}
 
-		go func() {
+		goman.New(func() {
 			// 自动生成账单任务
-			var ticker = time.NewTicker(1 * time.Minute)
+			var ticker = time.NewTicker(1 * time.Hour)
 			for range ticker.C {
 				// 是否已经生成了，如果已经生成了就跳过
 				var lastMonth = timeutil.Format("Ym", time.Now().AddDate(0, -1, 0))
@@ -37,7 +37,7 @@ func init() {
 					generatedMonths = append(generatedMonths, lastMonth)
 				}
 			}
-		}()
+		})
 	})
 }
 
@@ -66,6 +66,17 @@ func init() {
 	dbs.OnReady(func() {
 		SharedUserBillDAO = NewUserBillDAO()
 	})
+}
+
+// FindUserBill 查找单个账单
+func (this *UserBillDAO) FindUserBill(tx *dbs.Tx, billId int64) (*UserBill, error) {
+	one, err := this.Query(tx).
+		Pk(billId).
+		Find()
+	if err != nil || one == nil {
+		return nil, err
+	}
+	return one.(*UserBill), nil
 }
 
 // CountAllUserBills 计算账单数量
@@ -124,7 +135,7 @@ func (this *UserBillDAO) FindUnpaidBills(tx *dbs.Tx, size int64) (result []*User
 }
 
 // CreateBill 创建账单
-func (this *UserBillDAO) CreateBill(tx *dbs.Tx, userId int64, billType BillType, description string, amount float32, month string) error {
+func (this *UserBillDAO) CreateBill(tx *dbs.Tx, userId int64, billType BillType, description string, amount float64, month string, canPay bool) error {
 	code, err := this.GenerateBillCode(tx)
 	if err != nil {
 		return err
@@ -137,9 +148,11 @@ func (this *UserBillDAO) CreateBill(tx *dbs.Tx, userId int64, billType BillType,
 			"amount":      amount,
 			"month":       month,
 			"code":        code,
-			"isPaid":      false,
+			"isPaid":      amount == 0,
+			"canPay":      canPay,
 		}, maps.Map{
 			"amount": amount,
+			"canPay": canPay,
 		})
 }
 
@@ -160,19 +173,22 @@ func (this *UserBillDAO) GenerateBills(tx *dbs.Tx, month string) error {
 	if err != nil {
 		return err
 	}
-	if len(regions) == 0 {
-		return nil
+
+	var priceItems []*NodePriceItem
+	if len(regions) > 0 {
+		priceItems, err = SharedNodePriceItemDAO.FindAllEnabledRegionPrices(tx, NodePriceTypeTraffic)
+		if err != nil {
+			return err
+		}
 	}
 
-	priceItems, err := SharedNodePriceItemDAO.FindAllEnabledRegionPrices(tx, NodePriceTypeTraffic)
+	// 默认计费方式
+	userFinanceConfig, err := SharedSysSettingDAO.ReadUserFinanceConfig(tx)
 	if err != nil {
 		return err
 	}
-	if len(priceItems) == 0 {
-		return nil
-	}
 
-	// 计算套餐费用
+	// 计算服务套餐费用
 	plans, err := SharedPlanDAO.FindAllEnabledPlans(tx)
 	if err != nil {
 		return err
@@ -182,54 +198,220 @@ func (this *UserBillDAO) GenerateBills(tx *dbs.Tx, month string) error {
 		planMap[int64(plan.Id)] = plan
 	}
 
-	stats, err := SharedServerDailyStatDAO.FindMonthlyStatsWithPlan(tx, month)
+	var dayFrom = month + "01"
+	var dayTo = month + "32"
+	serverIds, err := SharedServerDailyStatDAO.FindDistinctServerIds(tx, dayFrom, dayTo)
 	if err != nil {
 		return err
 	}
-	for _, stat := range stats {
-		plan, ok := planMap[int64(stat.PlanId)]
-		if !ok {
-			continue
-		}
-		if plan.PriceType != serverconfigs.PlanPriceTypeTraffic {
-			continue
-		}
-		if len(plan.TrafficPrice) == 0 {
-			continue
-		}
-		var priceConfig = &serverconfigs.PlanTrafficPrice{}
-		err = json.Unmarshal([]byte(plan.TrafficPrice), priceConfig)
+	var cacheMap = utils.NewCacheMap()
+	var userIds = []int64{}
+	for _, serverId := range serverIds {
+		// 套餐类型
+		userPlanId, userId, err := SharedServerDAO.FindServerLastUserPlanIdAndUserId(tx, serverId)
 		if err != nil {
 			return err
 		}
-		if priceConfig.Base > 0 {
-			var fee = priceConfig.Base * (float32(stat.Bytes) / 1024 / 1024 / 1024)
-			err = SharedServerDailyStatDAO.UpdateStatFee(tx, int64(stat.Id), fee)
+		if userId == 0 {
+			continue
+		}
+
+		userIds = append(userIds, userId)
+		if userPlanId == 0 {
+			// 总流量
+			totalTrafficBytes, err := SharedServerDailyStatDAO.SumMonthlyBytes(tx, serverId, month)
 			if err != nil {
 				return err
+			}
+
+			// 默认计费方式
+			if userFinanceConfig != nil && userFinanceConfig.IsOn { // 默认计费方式
+				switch userFinanceConfig.PriceType {
+				case serverconfigs.PlanPriceTypeTraffic:
+					var config = userFinanceConfig.TrafficPriceConfig
+					var fee float64 = 0
+					if config != nil && config.Base > 0 {
+						fee = float64(totalTrafficBytes) / 1024 / 1024 / 1024 * float64(config.Base)
+					}
+
+					// 百分位
+					var percentile = 95
+					percentileBytes, err := SharedServerBandwidthStatDAO.FindMonthlyPercentile(tx, serverId, month, percentile)
+					if err != nil {
+						return err
+					}
+
+					err = SharedServerBillDAO.CreateOrUpdateServerBill(tx, userId, serverId, month, userPlanId, 0, totalTrafficBytes, percentileBytes, percentile, userFinanceConfig.PriceType, fee)
+					if err != nil {
+						return err
+					}
+				case serverconfigs.PlanPriceTypeBandwidth:
+					// 百分位
+					var percentile = 95
+					var config = userFinanceConfig.BandwidthPriceConfig
+					if config != nil {
+						percentile = config.Percentile
+						if percentile <= 0 {
+							percentile = 95
+						} else if percentile > 100 {
+							percentile = 100
+						}
+					}
+					percentileBytes, err := SharedServerBandwidthStatDAO.FindMonthlyPercentile(tx, serverId, month, percentile)
+					if err != nil {
+						return err
+					}
+					var mb = float32(percentileBytes) / 1024 / 1024
+					var price float32
+					if config != nil {
+						price = config.LookupPrice(mb)
+					}
+					var fee = float64(price)
+					err = SharedServerBillDAO.CreateOrUpdateServerBill(tx, userId, serverId, month, userPlanId, 0, totalTrafficBytes, percentileBytes, percentile, userFinanceConfig.PriceType, fee)
+					if err != nil {
+						return err
+					}
+				}
+			} else { // 区域流量计费
+				var fee float64
+
+				for _, region := range regions {
+					var regionId = int64(region.Id)
+					var pricesMap = region.DecodePriceMap()
+					if len(pricesMap) == 0 {
+						continue
+					}
+
+					trafficBytes, err := SharedServerDailyStatDAO.SumServerMonthlyWithRegion(tx, serverId, regionId, month)
+					if err != nil {
+						return err
+					}
+					if trafficBytes == 0 {
+						continue
+					}
+					var itemId = SharedNodePriceItemDAO.SearchItemsWithBytes(priceItems, trafficBytes)
+					if itemId == 0 {
+						continue
+					}
+					price, ok := pricesMap[itemId]
+					if !ok {
+						continue
+					}
+					if price <= 0 {
+						continue
+					}
+					var regionFee = float64(trafficBytes) / 1000 / 1000 / 1000 * 8 * price
+					fee += regionFee
+				}
+
+				// 百分位
+				var percentile = 95
+				percentileBytes, err := SharedServerBandwidthStatDAO.FindMonthlyPercentile(tx, serverId, month, percentile)
+				if err != nil {
+					return err
+				}
+
+				err = SharedServerBillDAO.CreateOrUpdateServerBill(tx, userId, serverId, month, userPlanId, 0, totalTrafficBytes, percentileBytes, percentile, "", fee)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			userPlan, err := SharedUserPlanDAO.FindUserPlanWithoutState(tx, userPlanId, cacheMap)
+			if err != nil {
+				return err
+			}
+			if userPlan == nil {
+				continue
+			}
+
+			plan, ok := planMap[int64(userPlan.PlanId)]
+			if !ok {
+				continue
+			}
+
+			// 总流量
+			totalTrafficBytes, err := SharedServerDailyStatDAO.SumMonthlyBytes(tx, serverId, month)
+			if err != nil {
+				return err
+			}
+
+			switch plan.PriceType {
+			case serverconfigs.PlanPriceTypePeriod:
+				// 已经在购买套餐的时候付过费，这里不再重复计费
+				var fee float64 = 0
+
+				// 百分位
+				var percentile = 95
+				percentileBytes, err := SharedServerBandwidthStatDAO.FindMonthlyPercentile(tx, serverId, month, percentile)
+				if err != nil {
+					return err
+				}
+
+				err = SharedServerBillDAO.CreateOrUpdateServerBill(tx, int64(userPlan.UserId), serverId, month, userPlanId, int64(userPlan.PlanId), totalTrafficBytes, percentileBytes, percentile, plan.PriceType, fee)
+				if err != nil {
+					return err
+				}
+			case serverconfigs.PlanPriceTypeTraffic:
+				var config = plan.DecodeTrafficPrice()
+				var fee float64 = 0
+				if config != nil && config.Base > 0 {
+					fee = float64(totalTrafficBytes) / 1024 / 1024 / 1024 * float64(config.Base)
+				}
+
+				// 百分位
+				var percentile = 95
+				percentileBytes, err := SharedServerBandwidthStatDAO.FindMonthlyPercentile(tx, serverId, month, percentile)
+				if err != nil {
+					return err
+				}
+
+				err = SharedServerBillDAO.CreateOrUpdateServerBill(tx, int64(userPlan.UserId), serverId, month, userPlanId, int64(userPlan.PlanId), totalTrafficBytes, percentileBytes, percentile, plan.PriceType, fee)
+				if err != nil {
+					return err
+				}
+			case serverconfigs.PlanPriceTypeBandwidth:
+				// 百分位
+				var percentile = 95
+				var config = plan.DecodeBandwidthPrice()
+				if config != nil {
+					percentile = config.Percentile
+					if percentile <= 0 {
+						percentile = 95
+					} else if percentile > 100 {
+						percentile = 100
+					}
+				}
+				percentileBytes, err := SharedServerBandwidthStatDAO.FindMonthlyPercentile(tx, serverId, month, percentile)
+				if err != nil {
+					return err
+				}
+				var mb = float32(percentileBytes) / 1024 / 1024
+				var price float32
+				if config != nil {
+					price = config.LookupPrice(mb)
+				}
+				var fee = float64(price)
+				err = SharedServerBillDAO.CreateOrUpdateServerBill(tx, int64(userPlan.UserId), serverId, month, userPlanId, int64(userPlan.PlanId), totalTrafficBytes, percentileBytes, percentile, plan.PriceType, fee)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
 
-	// 用户
-	offset := int64(0)
-	size := int64(100) // 每次只查询N次，防止由于执行时间过长而锁表
-	for {
-		userIds, err := SharedUserDAO.ListEnabledUserIds(tx, offset, size)
+	// 计算用户费用
+	for _, userId := range userIds {
+		if userId == 0 {
+			continue
+		}
+		amount, err := SharedServerBillDAO.SumUserMonthlyAmount(tx, userId, month)
 		if err != nil {
 			return err
 		}
-		offset += size
-		if len(userIds) == 0 {
-			break
-		}
-
-		for _, userId := range userIds {
-			// CDN流量账单
-			err := this.generateTrafficBill(tx, userId, month, regions, priceItems)
-			if err != nil {
-				return err
-			}
+		err = SharedUserBillDAO.CreateBill(tx, userId, BillTypeTraffic, "流量带宽费用", amount, month, month < timeutil.Format("Ym"))
+		if err != nil {
+			return err
 		}
 	}
 
@@ -244,74 +426,11 @@ func (this *UserBillDAO) UpdateUserBillIsPaid(tx *dbs.Tx, billId int64, isPaid b
 		UpdateQuickly()
 }
 
-// 生成CDN流量账单
-// month 格式YYYYMM
-func (this *UserBillDAO) generateTrafficBill(tx *dbs.Tx, userId int64, month string, regions []*NodeRegion, priceItems []*NodePriceItem) error {
-	// 检查是否已经有账单了
-	if month < timeutil.Format("Ym") {
-		b, err := this.ExistBill(tx, userId, BillTypeTraffic, month)
-		if err != nil {
-			return err
-		}
-		if b {
-			return nil
-		}
-	}
-
-	var cost = float32(0)
-	for _, region := range regions {
-		if len(region.Prices) == 0 || region.Prices == "null" {
-			continue
-		}
-		priceMap := map[string]float32{}
-		err := json.Unmarshal([]byte(region.Prices), &priceMap)
-		if err != nil {
-			return err
-		}
-
-		trafficBytes, err := SharedServerDailyStatDAO.SumUserMonthlyWithoutPlan(tx, userId, int64(region.Id), month)
-		if err != nil {
-			return err
-		}
-		if trafficBytes == 0 {
-			continue
-		}
-
-		itemId := SharedNodePriceItemDAO.SearchItemsWithBytes(priceItems, trafficBytes)
-		if itemId == 0 {
-			continue
-		}
-
-		price, ok := priceMap[numberutils.FormatInt64(itemId)]
-		if !ok {
-			continue
-		}
-
-		// 计算钱
-		// 这里采用1000进制
-		cost += (float32(trafficBytes*8) / 1_000_000_000) * price
-	}
-
-	// 套餐费用
-	planFee, err := SharedServerDailyStatDAO.SumUserMonthlyFee(tx, userId, month)
-	if err != nil {
-		return err
-	}
-	cost += float32(planFee)
-
-	if cost == 0 {
-		return nil
-	}
-
-	// 创建账单
-	return this.CreateBill(tx, userId, BillTypeTraffic, "按流量计费", cost, month)
-}
-
 // BillTypeName 获取账单类型名称
 func (this *UserBillDAO) BillTypeName(billType BillType) string {
 	switch billType {
 	case BillTypeTraffic:
-		return "流量"
+		return "流量带宽"
 	}
 	return ""
 }
@@ -329,4 +448,34 @@ func (this *UserBillDAO) GenerateBillCode(tx *dbs.Tx) (string, error) {
 		return code, nil
 	}
 	return this.GenerateBillCode(tx)
+}
+
+// CheckUserBill 检查用户账单
+func (this *UserBillDAO) CheckUserBill(tx *dbs.Tx, userId int64, billId int64) error {
+	if userId <= 0 || billId <= 0 {
+		return ErrNotFound
+	}
+	exists, err := this.Query(tx).
+		Pk(billId).
+		Attr("userId", userId).
+		Exist()
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SumUnpaidUserBill 计算某个用户未支付总额
+func (this *UserBillDAO) SumUnpaidUserBill(tx *dbs.Tx, userId int64) (float32, error) {
+	sum, err := this.Query(tx).
+		Attr("userId", userId).
+		Attr("isPaid", 0).
+		Sum("amount", 0)
+	if err != nil {
+		return 0, err
+	}
+	return float32(sum), nil
 }

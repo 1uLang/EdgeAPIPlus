@@ -3,17 +3,19 @@ package models
 import (
 	"encoding/json"
 	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
+	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
 	"sort"
 	"time"
 )
 
 // DecodeInstallStatus 安装状态
 func (this *Node) DecodeInstallStatus() (*NodeInstallStatus, error) {
-	if len(this.InstallStatus) == 0 || this.InstallStatus == "null" {
+	if len(this.InstallStatus) == 0 {
 		return NewNodeInstallStatus(), nil
 	}
 	status := &NodeInstallStatus{}
-	err := json.Unmarshal([]byte(this.InstallStatus), status)
+	err := json.Unmarshal(this.InstallStatus, status)
 	if err != nil {
 		return NewNodeInstallStatus(), err
 	}
@@ -30,11 +32,11 @@ func (this *Node) DecodeInstallStatus() (*NodeInstallStatus, error) {
 
 // DecodeStatus 节点状态
 func (this *Node) DecodeStatus() (*nodeconfigs.NodeStatus, error) {
-	if len(this.Status) == 0 || this.Status == "null" {
+	if len(this.Status) == 0 {
 		return nil, nil
 	}
 	status := &nodeconfigs.NodeStatus{}
-	err := json.Unmarshal([]byte(this.Status), status)
+	err := json.Unmarshal(this.Status, status)
 	if err != nil {
 		return nil, err
 	}
@@ -44,10 +46,10 @@ func (this *Node) DecodeStatus() (*nodeconfigs.NodeStatus, error) {
 // DNSRouteCodes 所有的DNS线路
 func (this *Node) DNSRouteCodes() map[int64][]string {
 	routes := map[int64][]string{} // domainId => routes
-	if len(this.DnsRoutes) == 0 || this.DnsRoutes == "null" {
+	if len(this.DnsRoutes) == 0 {
 		return routes
 	}
-	err := json.Unmarshal([]byte(this.DnsRoutes), &routes)
+	err := json.Unmarshal(this.DnsRoutes, &routes)
 	if err != nil {
 		// 忽略错误
 		return routes
@@ -58,10 +60,10 @@ func (this *Node) DNSRouteCodes() map[int64][]string {
 // DNSRouteCodesForDomainId DNS线路
 func (this *Node) DNSRouteCodesForDomainId(dnsDomainId int64) ([]string, error) {
 	routes := map[int64][]string{} // domainId => routes
-	if len(this.DnsRoutes) == 0 || this.DnsRoutes == "null" {
+	if len(this.DnsRoutes) == 0 {
 		return nil, nil
 	}
-	err := json.Unmarshal([]byte(this.DnsRoutes), &routes)
+	err := json.Unmarshal(this.DnsRoutes, &routes)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +80,7 @@ func (this *Node) DNSRouteCodesForDomainId(dnsDomainId int64) ([]string, error) 
 func (this *Node) DecodeConnectedAPINodeIds() ([]int64, error) {
 	apiNodeIds := []int64{}
 	if IsNotNull(this.ConnectedAPINodes) {
-		err := json.Unmarshal([]byte(this.ConnectedAPINodes), &apiNodeIds)
+		err := json.Unmarshal(this.ConnectedAPINodes, &apiNodeIds)
 		if err != nil {
 			return nil, err
 		}
@@ -93,6 +95,89 @@ func (this *Node) DecodeSecondaryClusterIds() []int64 {
 	}
 	var result = []int64{}
 	// 不需要处理错误
-	_ = json.Unmarshal([]byte(this.SecondaryClusterIds), &result)
+	_ = json.Unmarshal(this.SecondaryClusterIds, &result)
+	return result
+}
+
+// AllClusterIds 获取所属集群IDs
+func (this *Node) AllClusterIds() []int64 {
+	var result = []int64{}
+
+	if this.ClusterId > 0 {
+		result = append(result, int64(this.ClusterId))
+	}
+
+	result = append(result, this.DecodeSecondaryClusterIds()...)
+
+	return result
+}
+
+// DecodeDDoSProtection 解析DDoS Protection设置
+func (this *Node) DecodeDDoSProtection() *ddosconfigs.ProtectionConfig {
+	if IsNull(this.DdosProtection) {
+		return nil
+	}
+
+	var result = &ddosconfigs.ProtectionConfig{}
+	err := json.Unmarshal(this.DdosProtection, &result)
+	if err != nil {
+		// ignore err
+	}
+	return result
+}
+
+// HasDDoSProtection 检查是否有DDOS设置
+func (this *Node) HasDDoSProtection() bool {
+	var config = this.DecodeDDoSProtection()
+	if config != nil {
+		return !config.IsPriorEmpty()
+	}
+	return false
+}
+
+func (this *Node) DecodeMaxCacheDiskCapacity() *shared.SizeCapacity {
+	if this.MaxCacheDiskCapacity.IsNull() {
+		return nil
+	}
+
+	// ignore error
+	capacity, _ := shared.DecodeSizeCapacityJSON(this.MaxCacheDiskCapacity)
+	return capacity
+}
+
+func (this *Node) DecodeMaxCacheMemoryCapacity() *shared.SizeCapacity {
+	if this.MaxCacheMemoryCapacity.IsNull() {
+		return nil
+	}
+
+	// ignore error
+	capacity, _ := shared.DecodeSizeCapacityJSON(this.MaxCacheMemoryCapacity)
+	return capacity
+}
+
+// DecodeDNSResolver 解析DNS解析主机配置
+func (this *Node) DecodeDNSResolver() *nodeconfigs.DNSResolverConfig {
+	if this.DnsResolver.IsNull() {
+		return nil
+	}
+
+	var resolverConfig = nodeconfigs.DefaultDNSResolverConfig()
+	err := json.Unmarshal(this.DnsResolver, resolverConfig)
+	if err != nil {
+		// ignore error
+	}
+	return resolverConfig
+}
+
+func (this *Node) DecodeLnAddrs() []string {
+	if IsNull(this.LnAddrs) {
+		return nil
+	}
+
+	var result = []string{}
+	err := json.Unmarshal(this.LnAddrs, &result)
+	if err != nil {
+		// ignore error
+	}
 	return result
 }

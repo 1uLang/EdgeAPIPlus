@@ -80,10 +80,10 @@ func (this *HTTPDeflatePolicyDAO) ComposeDeflateConfig(tx *dbs.Tx, policyId int6
 
 	config := &serverconfigs.HTTPDeflateCompressionConfig{}
 	config.Id = int64(policy.Id)
-	config.IsOn = policy.IsOn == 1
+	config.IsOn = policy.IsOn
 	if IsNotNull(policy.MinLength) {
 		minLengthConfig := &shared.SizeCapacity{}
-		err = json.Unmarshal([]byte(policy.MinLength), minLengthConfig)
+		err = json.Unmarshal(policy.MinLength, minLengthConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +91,7 @@ func (this *HTTPDeflatePolicyDAO) ComposeDeflateConfig(tx *dbs.Tx, policyId int6
 	}
 	if IsNotNull(policy.MaxLength) {
 		maxLengthConfig := &shared.SizeCapacity{}
-		err = json.Unmarshal([]byte(policy.MaxLength), maxLengthConfig)
+		err = json.Unmarshal(policy.MaxLength, maxLengthConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -101,7 +101,7 @@ func (this *HTTPDeflatePolicyDAO) ComposeDeflateConfig(tx *dbs.Tx, policyId int6
 
 	if IsNotNull(policy.Conds) {
 		condsConfig := &shared.HTTPRequestCondsConfig{}
-		err = json.Unmarshal([]byte(policy.Conds), condsConfig)
+		err = json.Unmarshal(policy.Conds, condsConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +113,7 @@ func (this *HTTPDeflatePolicyDAO) ComposeDeflateConfig(tx *dbs.Tx, policyId int6
 
 // CreatePolicy 创建策略
 func (this *HTTPDeflatePolicyDAO) CreatePolicy(tx *dbs.Tx, level int, minLengthJSON []byte, maxLengthJSON []byte, condsJSON []byte) (int64, error) {
-	op := NewHTTPDeflatePolicyOperator()
+	var op = NewHTTPDeflatePolicyOperator()
 	op.State = HTTPDeflatePolicyStateEnabled
 	op.IsOn = true
 	op.Level = level
@@ -138,7 +138,7 @@ func (this *HTTPDeflatePolicyDAO) UpdatePolicy(tx *dbs.Tx, policyId int64, level
 	if policyId <= 0 {
 		return errors.New("invalid policyId")
 	}
-	op := NewHTTPDeflatePolicyOperator()
+	var op = NewHTTPDeflatePolicyOperator()
 	op.Id = policyId
 	op.Level = level
 	if len(minLengthJSON) > 0 {

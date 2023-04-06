@@ -77,7 +77,7 @@ func (this *HTTPHeaderPolicyDAO) FindEnabledHTTPHeaderPolicy(tx *dbs.Tx, id int6
 
 // CreateHeaderPolicy 创建策略
 func (this *HTTPHeaderPolicyDAO) CreateHeaderPolicy(tx *dbs.Tx) (int64, error) {
-	op := NewHTTPHeaderPolicyOperator()
+	var op = NewHTTPHeaderPolicyOperator()
 	op.IsOn = true
 	op.State = HTTPHeaderPolicyStateEnabled
 	err := this.Save(tx, op)
@@ -93,7 +93,7 @@ func (this *HTTPHeaderPolicyDAO) UpdateAddingHeaders(tx *dbs.Tx, policyId int64,
 		return errors.New("invalid policyId")
 	}
 
-	op := NewHTTPHeaderPolicyOperator()
+	var op = NewHTTPHeaderPolicyOperator()
 	op.Id = policyId
 	op.AddHeaders = headersJSON
 	err := this.Save(tx, op)
@@ -109,7 +109,7 @@ func (this *HTTPHeaderPolicyDAO) UpdateSettingHeaders(tx *dbs.Tx, policyId int64
 		return errors.New("invalid policyId")
 	}
 
-	op := NewHTTPHeaderPolicyOperator()
+	var op = NewHTTPHeaderPolicyOperator()
 	op.Id = policyId
 	op.SetHeaders = headersJSON
 	err := this.Save(tx, op)
@@ -125,7 +125,7 @@ func (this *HTTPHeaderPolicyDAO) UpdateReplacingHeaders(tx *dbs.Tx, policyId int
 		return errors.New("invalid policyId")
 	}
 
-	op := NewHTTPHeaderPolicyOperator()
+	var op = NewHTTPHeaderPolicyOperator()
 	op.Id = policyId
 	op.ReplaceHeaders = headersJSON
 	err := this.Save(tx, op)
@@ -141,7 +141,7 @@ func (this *HTTPHeaderPolicyDAO) UpdateAddingTrailers(tx *dbs.Tx, policyId int64
 		return errors.New("invalid policyId")
 	}
 
-	op := NewHTTPHeaderPolicyOperator()
+	var op = NewHTTPHeaderPolicyOperator()
 	op.Id = policyId
 	op.AddTrailers = headersJSON
 	err := this.Save(tx, op)
@@ -162,7 +162,7 @@ func (this *HTTPHeaderPolicyDAO) UpdateDeletingHeaders(tx *dbs.Tx, policyId int6
 		return err
 	}
 
-	op := NewHTTPHeaderPolicyOperator()
+	var op = NewHTTPHeaderPolicyOperator()
 	op.Id = policyId
 	op.DeleteHeaders = string(namesJSON)
 	err = this.Save(tx, op)
@@ -184,54 +184,12 @@ func (this *HTTPHeaderPolicyDAO) ComposeHeaderPolicyConfig(tx *dbs.Tx, headerPol
 
 	config := &shared.HTTPHeaderPolicy{}
 	config.Id = int64(policy.Id)
-	config.IsOn = policy.IsOn == 1
-
-	// AddHeaders
-	if len(policy.AddHeaders) > 0 {
-		refs := []*shared.HTTPHeaderRef{}
-		err = json.Unmarshal([]byte(policy.AddHeaders), &refs)
-		if err != nil {
-			return nil, err
-		}
-		if len(refs) > 0 {
-			for _, ref := range refs {
-				headerConfig, err := SharedHTTPHeaderDAO.ComposeHeaderConfig(tx, ref.HeaderId)
-				if err != nil {
-					return nil, err
-				}
-				config.AddHeaders = append(config.AddHeaders, headerConfig)
-			}
-		}
-	}
-
-	// AddTrailers
-	if len(policy.AddTrailers) > 0 {
-		refs := []*shared.HTTPHeaderRef{}
-		err = json.Unmarshal([]byte(policy.AddTrailers), &refs)
-		if err != nil {
-			return nil, err
-		}
-		if len(refs) > 0 {
-			resultRefs := []*shared.HTTPHeaderRef{}
-			for _, ref := range refs {
-				headerConfig, err := SharedHTTPHeaderDAO.ComposeHeaderConfig(tx, ref.HeaderId)
-				if err != nil {
-					return nil, err
-				}
-				if headerConfig == nil {
-					continue
-				}
-				resultRefs = append(resultRefs, ref)
-				config.AddTrailers = append(config.AddTrailers, headerConfig)
-			}
-			config.AddHeaderRefs = resultRefs
-		}
-	}
+	config.IsOn = policy.IsOn
 
 	// SetHeaders
-	if len(policy.SetHeaders) > 0 {
+	if IsNotNull(policy.SetHeaders) {
 		refs := []*shared.HTTPHeaderRef{}
-		err = json.Unmarshal([]byte(policy.SetHeaders), &refs)
+		err = json.Unmarshal(policy.SetHeaders, &refs)
 		if err != nil {
 			return nil, err
 		}
@@ -252,34 +210,10 @@ func (this *HTTPHeaderPolicyDAO) ComposeHeaderPolicyConfig(tx *dbs.Tx, headerPol
 		}
 	}
 
-	// ReplaceHeaders
-	if len(policy.ReplaceHeaders) > 0 {
-		refs := []*shared.HTTPHeaderRef{}
-		err = json.Unmarshal([]byte(policy.ReplaceHeaders), &refs)
-		if err != nil {
-			return nil, err
-		}
-		if len(refs) > 0 {
-			resultRefs := []*shared.HTTPHeaderRef{}
-			for _, ref := range refs {
-				headerConfig, err := SharedHTTPHeaderDAO.ComposeHeaderConfig(tx, ref.HeaderId)
-				if err != nil {
-					return nil, err
-				}
-				if headerConfig == nil {
-					continue
-				}
-				resultRefs = append(resultRefs, ref)
-				config.ReplaceHeaders = append(config.ReplaceHeaders, headerConfig)
-			}
-			config.ReplaceHeaderRefs = resultRefs
-		}
-	}
-
 	// Delete Headers
-	if len(policy.DeleteHeaders) > 0 {
+	if IsNotNull(policy.DeleteHeaders) {
 		headers := []string{}
-		err = json.Unmarshal([]byte(policy.DeleteHeaders), &headers)
+		err = json.Unmarshal(policy.DeleteHeaders, &headers)
 		if err != nil {
 			return nil, err
 		}

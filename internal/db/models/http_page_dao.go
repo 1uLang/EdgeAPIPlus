@@ -77,8 +77,9 @@ func (this *HTTPPageDAO) FindEnabledHTTPPage(tx *dbs.Tx, id int64) (*HTTPPage, e
 }
 
 // CreatePage 创建Page
-func (this *HTTPPageDAO) CreatePage(tx *dbs.Tx, statusList []string, bodyType shared.BodyType, url string, body string, newStatus int) (pageId int64, err error) {
-	op := NewHTTPPageOperator()
+func (this *HTTPPageDAO) CreatePage(tx *dbs.Tx, userId int64, statusList []string, bodyType shared.BodyType, url string, body string, newStatus int) (pageId int64, err error) {
+	var op = NewHTTPPageOperator()
+	op.UserId = userId
 	op.IsOn = true
 	op.State = HTTPPageStateEnabled
 
@@ -107,7 +108,7 @@ func (this *HTTPPageDAO) UpdatePage(tx *dbs.Tx, pageId int64, statusList []strin
 		return errors.New("invalid pageId")
 	}
 
-	op := NewHTTPPageOperator()
+	var op = NewHTTPPageOperator()
 	op.Id = pageId
 	op.IsOn = true
 	op.State = HTTPPageStateEnabled
@@ -154,7 +155,7 @@ func (this *HTTPPageDAO) ComposePageConfig(tx *dbs.Tx, pageId int64, cacheMap *u
 
 	config := &serverconfigs.HTTPPageConfig{}
 	config.Id = int64(page.Id)
-	config.IsOn = page.IsOn == 1
+	config.IsOn = page.IsOn
 	config.NewStatus = int(page.NewStatus)
 	config.URL = page.Url
 	config.Body = page.Body
@@ -166,7 +167,7 @@ func (this *HTTPPageDAO) ComposePageConfig(tx *dbs.Tx, pageId int64, cacheMap *u
 
 	if len(page.StatusList) > 0 {
 		statusList := []string{}
-		err = json.Unmarshal([]byte(page.StatusList), &statusList)
+		err = json.Unmarshal(page.StatusList, &statusList)
 		if err != nil {
 			return nil, err
 		}
@@ -180,6 +181,26 @@ func (this *HTTPPageDAO) ComposePageConfig(tx *dbs.Tx, pageId int64, cacheMap *u
 	}
 
 	return config, nil
+}
+
+// CheckUserPage 检查用户页面
+func (this *HTTPPageDAO) CheckUserPage(tx *dbs.Tx, userId int64, pageId int64) error {
+	if userId <= 0 || pageId <= 0 {
+		return ErrNotFound
+	}
+
+	b, err := this.Query(tx).
+		Pk(pageId).
+		Attr("userId", userId).
+		State(HTTPPageStateEnabled).
+		Exist()
+	if err != nil {
+		return err
+	}
+	if !b {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // NotifyUpdate 通知更新
