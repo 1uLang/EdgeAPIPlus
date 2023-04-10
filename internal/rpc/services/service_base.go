@@ -191,6 +191,12 @@ func (this *BaseService) ValidateNodeId(ctx context.Context, roles ...rpcutils.U
 		}
 	case rpcutils.UserTypeUser:
 		nodeIntId, err = models.SharedUserNodeDAO.FindEnabledUserNodeIdWithUniqueId(nil, nodeId)
+	case rpcutils.UserTypeAPI:
+		node, err := models.SharedAPINodeDAO.FindEnabledAPINodeWithUniqueIdAndSecret(nil, nodeId, apiToken.Secret)
+		if err != nil {
+			return rpcutils.UserTypeAPI, 0, errors.New("context: " + err.Error())
+		}
+		nodeIntId = int64(node.Id)
 	case rpcutils.UserTypeAdmin:
 		nodeIntId = 0
 	case rpcutils.UserTypeMonitor:

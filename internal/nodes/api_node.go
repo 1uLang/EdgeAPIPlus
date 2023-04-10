@@ -125,7 +125,6 @@ func (this *APINode) Start() {
 	err = this.setupDB()
 	if err != nil {
 		logs.Println("[API_NODE]setup database '" + err.Error() + "'")
-
 		// 不阻断执行
 	}
 
