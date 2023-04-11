@@ -285,13 +285,11 @@ func (this *DNSDomainService) ListBasicDNSDomainsWithDNSProviderId(ctx context.C
 
 	var result = []*pb.DNSDomain{}
 	for _, domain := range domains {
-		result = append(result, &pb.DNSDomain{
-			Id:        int64(domain.Id),
-			Name:      domain.Name,
-			IsOn:      domain.IsOn,
-			IsUp:      domain.IsUp,
-			IsDeleted: domain.IsDeleted,
-		})
+		pbDomain, err := this.convertDomainToPB(tx, domain)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, pbDomain)
 	}
 
 	return &pb.ListDNSDomainsWithDNSProviderIdResponse{DnsDomains: result}, nil

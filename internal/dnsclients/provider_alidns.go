@@ -14,7 +14,7 @@ import (
 // AliDNSProvider 阿里云服务商
 type AliDNSProvider struct {
 	BaseProvider
-
+	ProviderId      int64
 	accessKeyId     string
 	accessKeySecret string
 	regionId        string
@@ -106,6 +106,10 @@ func (this *AliDNSProvider) GetRecords(domain string) (records []*dnstypes.Recor
 		}
 	}
 
+	// 写入缓存
+	if this.ProviderId > 0 {
+		sharedDomainRecordsCache.WriteDomainRecords(this.ProviderId, domain, records)
+	}
 	return
 }
 
@@ -130,6 +134,14 @@ func (this *AliDNSProvider) GetRoutes(domain string) (routes []*dnstypes.Route, 
 
 // QueryRecord 查询单个记录
 func (this *AliDNSProvider) QueryRecord(domain string, name string, recordType dnstypes.RecordType) (*dnstypes.Record, error) {
+	// 从缓存中读取
+	if this.ProviderId > 0 {
+		record, hasRecords, _ := sharedDomainRecordsCache.QueryDomainRecord(this.ProviderId, domain, name, recordType)
+		if hasRecords { // 有效的搜索
+			return record, nil
+		}
+	}
+
 	records, err := this.GetRecords(domain)
 	if err != nil {
 		return nil, err
@@ -161,6 +173,13 @@ func (this *AliDNSProvider) AddRecord(domain string, newRecord *dnstypes.Record)
 		return this.WrapError(err, domain, newRecord)
 	}
 	if resp.IsSuccess() {
+		newRecord.Id = resp.RecordId
+
+		// 加入缓存
+		if this.ProviderId > 0 {
+			sharedDomainRecordsCache.AddDomainRecord(this.ProviderId, domain, newRecord)
+		}
+
 		return nil
 	}
 
@@ -182,7 +201,18 @@ func (this *AliDNSProvider) UpdateRecord(domain string, record *dnstypes.Record,
 
 	resp := alidns.CreateUpdateDomainRecordResponse()
 	err := this.doAPI(req, resp)
-	return this.WrapError(err, domain, newRecord)
+	if err != nil {
+		return this.WrapError(err, domain, newRecord)
+	}
+
+	newRecord.Id = record.Id
+
+	// 修改缓存
+	if this.ProviderId > 0 {
+		sharedDomainRecordsCache.UpdateDomainRecord(this.ProviderId, domain, newRecord)
+	}
+
+	return nil
 }
 
 // DeleteRecord 删除记录
@@ -192,7 +222,15 @@ func (this *AliDNSProvider) DeleteRecord(domain string, record *dnstypes.Record)
 
 	resp := alidns.CreateDeleteDomainRecordResponse()
 	err := this.doAPI(req, resp)
-	return this.WrapError(err, domain, record)
+	if err != nil {
+		return this.WrapError(err, domain, record)
+	}
+	// 删除缓存
+	if this.ProviderId > 0 {
+		sharedDomainRecordsCache.DeleteDomainRecord(this.ProviderId, domain, record.Id)
+	}
+
+	return nil
 }
 
 // DefaultRoute 默认线路
@@ -204,6 +242,9 @@ func (this *AliDNSProvider) DefaultRoute() string {
 func (this *AliDNSProvider) doAPI(req requests.AcsRequest, resp responses.AcsResponse) error {
 	req.SetScheme("https")
 
+	if len(this.regionId) == 0 {
+		this.regionId = "cn-hangzhou"
+	}
 	client, err := alidns.NewClientWithAccessKey(this.regionId, this.accessKeyId, this.accessKeySecret)
 	if err != nil {
 		return err

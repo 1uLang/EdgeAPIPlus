@@ -9,7 +9,7 @@ replace github.com/1uLang/EdgeCommon => ../EdgeCommon
 require (
 	github.com/1uLang/EdgeCommon v0.0.0-00010101000000-000000000000
 	github.com/TeaOSLab/EdgePlus v0.0.0-00010101000000-000000000000
-	github.com/aliyun/alibaba-cloud-sdk-go v1.61.1183
+	github.com/aliyun/alibaba-cloud-sdk-go v1.61.1755
 	github.com/andybalholm/brotli v1.0.4
 	github.com/cespare/xxhash/v2 v2.1.1
 	github.com/go-acme/lego/v4 v4.5.2
@@ -17,7 +17,6 @@ require (
 	github.com/golang/protobuf v1.5.3
 	github.com/iwind/TeaGo v0.0.0-20220811034530-657e3f15b79e
 	github.com/iwind/gosock v0.0.0-20210722083328-12b2d66abec3
-	github.com/lionsoul2014/ip2region v2.2.0-release+incompatible
 	github.com/miekg/dns v1.1.43
 	github.com/mozillazg/go-pinyin v0.18.0
 	github.com/pkg/sftp v1.12.0
@@ -47,6 +46,6 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
 	golang.org/x/text v0.4.0 // indirect
 	google.golang.org/genproto v0.0.0-20220317150908-0efb43f6373e // indirect
-	gopkg.in/ini.v1 v1.62.0 // indirect
+	gopkg.in/ini.v1 v1.66.2 // indirect
 	gopkg.in/square/go-jose.v2 v2.6.0 // indirect
 )
