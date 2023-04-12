@@ -548,7 +548,7 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 	var serverRecords = []*dnstypes.Record{}             // 之所以用数组再存一遍，是因为dnsName可能会重复
 	var serverRecordsMap = map[string]*dnstypes.Record{} // dnsName => *Record
 	for _, record := range records {
-		if record.Type == dnstypes.RecordTypeCNAME && record.Value == clusterDomain+"." {
+		if record.Type == dnstypes.RecordTypeCNAME && record.Value == strings.ToLower(clusterDomain)+"." {
 			serverRecords = append(serverRecords, record)
 			serverRecordsMap[record.Name] = record
 		}
@@ -557,7 +557,7 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 	// 新增的域名
 	var serverDNSNames = []string{}
 	for _, server := range servers {
-		dnsName := server.DnsName
+		dnsName := strings.ToLower(server.DnsName)
 		if len(dnsName) == 0 {
 			return nil, nil, nil, 0, 0, false, false, errors.New("server '" + numberutils.FormatInt64(int64(server.Id)) + "' 'dnsName' should not empty")
 		}
