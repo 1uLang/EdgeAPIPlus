@@ -18,6 +18,7 @@ import (
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/maps"
 	"net"
+	"strings"
 )
 
 // DNSDomainService DNS域名相关服务
@@ -462,7 +463,7 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 	var nodeRecords = []*dnstypes.Record{}                // 之所以用数组再存一遍，是因为dnsName可能会重复
 	var nodeRecordMapping = map[string]*dnstypes.Record{} // value_route => *Record
 	for _, record := range records {
-		if (record.Type == dnstypes.RecordTypeA || record.Type == dnstypes.RecordTypeAAAA) && record.Name == clusterDnsName {
+		if (record.Type == dnstypes.RecordTypeA || record.Type == dnstypes.RecordTypeAAAA) && record.Name == strings.ToLower(clusterDnsName) {
 			nodeRecords = append(nodeRecords, record)
 			nodeRecordMapping[record.Value+"_"+record.Route] = record
 		}
@@ -612,7 +613,6 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 			})
 		}
 	}
-
 	return
 }
 

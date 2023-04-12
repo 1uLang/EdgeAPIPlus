@@ -251,7 +251,7 @@ func (this *DNSDomainDAO) ExistDomainRecord(tx *dbs.Tx, domainId int64, recordNa
 	recordType = strings.ToUpper(recordType)
 
 	query := maps.Map{
-		"name": recordName,
+		"name": strings.ToLower(recordName),
 		"type": recordType,
 	}
 	if len(recordRoute) > 0 {

@@ -565,7 +565,6 @@ func (this *NodeClusterService) FindEnabledNodeClusterDNS(ctx context.Context, r
 			defaultRoute = manager.DefaultRoute()
 		}
 	}
-
 	return &pb.FindEnabledNodeClusterDNSResponse{
 		Name:             dnsInfo.DnsName,
 		Domain:           pbDomain,
