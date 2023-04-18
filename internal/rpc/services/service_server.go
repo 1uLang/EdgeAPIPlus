@@ -750,13 +750,9 @@ func (this *ServerService) FindServerIdWithDNSName(ctx context.Context, req *pb.
 // CountAllEnabledServersMatch 计算服务数量
 func (this *ServerService) CountAllEnabledServersMatch(ctx context.Context, req *pb.CountAllEnabledServersMatchRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	_, _, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
-	}
-
-	if userId > 0 {
-		req.UserId = userId
 	}
 
 	var tx = this.NullTx()
@@ -772,16 +768,12 @@ func (this *ServerService) CountAllEnabledServersMatch(ctx context.Context, req 
 // ListEnabledServersMatch 列出单页服务
 func (this *ServerService) ListEnabledServersMatch(ctx context.Context, req *pb.ListEnabledServersMatchRequest) (*pb.ListEnabledServersMatchResponse, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	_, _, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
-
-	if userId > 0 {
-		req.UserId = userId
-	}
 
 	var order = ""
 	if req.TrafficOutAsc {
