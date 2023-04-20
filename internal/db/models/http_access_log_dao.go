@@ -1702,38 +1702,58 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 	}
 	// 准备查询
 	var tableQueries = []*accessLogTableQuery{}
-	var maxTableName = ""
+	//var maxTableName = ""
+	//for _, daoWrapper := range daoList {
+	//	var instance = daoWrapper.DAO.Instance
+	//	def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	if !def.Exists {
+	//		continue
+	//	}
+	//
+	//	if len(maxTableName) == 0 || def.Name > maxTableName {
+	//		maxTableName = def.Name
+	//	}
+	//
+	//	tableQueries = append(tableQueries, &accessLogTableQuery{
+	//		daoWrapper:         daoWrapper,
+	//		name:               def.Name,
+	//		hasRemoteAddrField: def.HasRemoteAddr,
+	//		hasDomainField:     def.HasDomain,
+	//	})
+	//}
+	//
+	//// 检查各个分表是否一致
+	//var newTableQueries = []*accessLogTableQuery{}
+	//for _, tableQuery := range tableQueries {
+	//	if tableQuery.name != maxTableName {
+	//		continue
+	//	}
+	//	newTableQueries = append(newTableQueries, tableQuery)
+	//}
+	//tableQueries = newTableQueries
+
 	for _, daoWrapper := range daoList {
 		var instance = daoWrapper.DAO.Instance
-		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		defs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
 		if err != nil {
 			return nil, err
 		}
-		if !def.Exists {
-			continue
+
+		if len(defs) > 0 {
+			for _, def := range defs {
+				tableQueries = append(tableQueries, &accessLogTableQuery{
+					daoWrapper:         daoWrapper,
+					name:               def.Name,
+					hasRemoteAddrField: def.HasRemoteAddr,
+					hasDomainField:     def.HasDomain,
+				})
+			}
 		}
 
-		if len(maxTableName) == 0 || def.Name > maxTableName {
-			maxTableName = def.Name
-		}
-
-		tableQueries = append(tableQueries, &accessLogTableQuery{
-			daoWrapper:         daoWrapper,
-			name:               def.Name,
-			hasRemoteAddrField: def.HasRemoteAddr,
-			hasDomainField:     def.HasDomain,
-		})
 	}
-
-	// 检查各个分表是否一致
-	var newTableQueries = []*accessLogTableQuery{}
-	for _, tableQuery := range tableQueries {
-		if tableQuery.name != maxTableName {
-			continue
-		}
-		newTableQueries = append(newTableQueries, tableQuery)
-	}
-	tableQueries = newTableQueries
 
 	if len(tableQueries) == 0 {
 		return
@@ -1764,7 +1784,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 						return
 					}
 					// 1. 统计该服务的服务总数
-					accessTotal, err := dao.Query(tx).Attr("serverId", serverId).
+					accessTotal, err := dao.Query(tx).Attr("serverId", serverId).Debug(false).
 						Reuse(false).
 						Table(tableQuery.name).
 						Count()
@@ -1773,7 +1793,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 						return
 					}
 					// 2. 统计防护的总数
-					attackTotal, err := dao.Query(tx).Attr("serverId", serverId).
+					attackTotal, err := dao.Query(tx).Attr("serverId", serverId).Debug(false).
 						Reuse(false).Where("firewallPolicyId>0").UseIndex("firewallPolicyId").
 						Table(tableQuery.name).
 						Count()
@@ -1783,7 +1803,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 					}
 					// 3. 访问IP列表
 					var logs1 []*HTTPAccessLog
-					_, err = dao.Query(tx).SQL(fmt.Sprintf("SELECT  `remoteAddr` FROM `%s`"+
+					_, err = dao.Query(tx).Debug(false).SQL(fmt.Sprintf("SELECT  `remoteAddr` FROM `%s`"+
 						" WHERE `serverId`=%d GROUP BY `remoteAddr`", tableQuery.name, serverId)).Slice(&logs1).
 						FindAll()
 					if err != nil {
@@ -1796,7 +1816,7 @@ func (this *HTTPAccessLogDAO) AccessStatistics(tx *dbs.Tx, day string, userId in
 					}
 					// 4. 拦截IP列表
 					var logs2 []*HTTPAccessLog
-					_, err = dao.Query(tx).SQL(fmt.Sprintf("SELECT  `remoteAddr` FROM `%s` WHERE `serverId`=%d and `firewallPolicyId`>0 GROUP BY `remoteAddr`", tableQuery.name, serverId)).Slice(&logs2).
+					_, err = dao.Query(tx).Debug(false).SQL(fmt.Sprintf("SELECT  `remoteAddr` FROM `%s` WHERE `serverId`=%d and `firewallPolicyId`>0 GROUP BY `remoteAddr`", tableQuery.name, serverId)).Slice(&logs2).
 						FindAll()
 					if err != nil {
 						logs.Println("[DB_NODE]" + err.Error())
