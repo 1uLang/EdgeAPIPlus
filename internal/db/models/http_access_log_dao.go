@@ -398,39 +398,59 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx,
 
 	// 准备查询
 	var tableQueries = []*accessLogTableQuery{}
-	var maxTableName = ""
+	//var maxTableName = ""
+	//for _, daoWrapper := range daoList {
+	//	var instance = daoWrapper.DAO.Instance
+	//	def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, partition)
+	//	if err != nil {
+	//		return nil, "", err
+	//	}
+	//	if !def.Exists {
+	//		continue
+	//	}
+	//
+	//	if len(maxTableName) == 0 || def.Name > maxTableName {
+	//		maxTableName = def.Name
+	//	}
+	//
+	//	tableQueries = append(tableQueries, &accessLogTableQuery{
+	//		daoWrapper:         daoWrapper,
+	//		name:               def.Name,
+	//		hasRemoteAddrField: def.HasRemoteAddr,
+	//		hasDomainField:     def.HasDomain,
+	//	})
+	//}
+	//
+	//// 检查各个分表是否一致
+	//if partition < 0 {
+	//	var newTableQueries = []*accessLogTableQuery{}
+	//	for _, tableQuery := range tableQueries {
+	//		if tableQuery.name != maxTableName {
+	//			continue
+	//		}
+	//		newTableQueries = append(newTableQueries, tableQuery)
+	//	}
+	//	tableQueries = newTableQueries
+	//}
+
 	for _, daoWrapper := range daoList {
 		var instance = daoWrapper.DAO.Instance
-		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, partition)
+		defs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
 		if err != nil {
 			return nil, "", err
 		}
-		if !def.Exists {
-			continue
-		}
 
-		if len(maxTableName) == 0 || def.Name > maxTableName {
-			maxTableName = def.Name
-		}
-
-		tableQueries = append(tableQueries, &accessLogTableQuery{
-			daoWrapper:         daoWrapper,
-			name:               def.Name,
-			hasRemoteAddrField: def.HasRemoteAddr,
-			hasDomainField:     def.HasDomain,
-		})
-	}
-
-	// 检查各个分表是否一致
-	if partition < 0 {
-		var newTableQueries = []*accessLogTableQuery{}
-		for _, tableQuery := range tableQueries {
-			if tableQuery.name != maxTableName {
-				continue
+		if len(defs) > 0 {
+			for _, def := range defs {
+				tableQueries = append(tableQueries, &accessLogTableQuery{
+					daoWrapper:         daoWrapper,
+					name:               def.Name,
+					hasRemoteAddrField: def.HasRemoteAddr,
+					hasDomainField:     def.HasDomain,
+				})
 			}
-			newTableQueries = append(newTableQueries, tableQuery)
 		}
-		tableQueries = newTableQueries
+
 	}
 
 	if len(tableQueries) == 0 {
@@ -892,38 +912,58 @@ func (this *HTTPAccessLogDAO) SearchAccessLogs(tx *dbs.Tx, lastRequestId, day,
 	}
 	// 准备查询
 	var tableQueries = []*accessLogTableQuery{}
-	var maxTableName = ""
+	//var maxTableName = ""
+	//for _, daoWrapper := range daoList {
+	//	var instance = daoWrapper.DAO.Instance
+	//	def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+	//	if err != nil {
+	//		return nil, "", err
+	//	}
+	//	if !def.Exists {
+	//		continue
+	//	}
+	//
+	//	if len(maxTableName) == 0 || def.Name > maxTableName {
+	//		maxTableName = def.Name
+	//	}
+	//
+	//	tableQueries = append(tableQueries, &accessLogTableQuery{
+	//		daoWrapper:         daoWrapper,
+	//		name:               def.Name,
+	//		hasRemoteAddrField: def.HasRemoteAddr,
+	//		hasDomainField:     def.HasDomain,
+	//	})
+	//}
+	//
+	//// 检查各个分表是否一致
+	//var newTableQueries = []*accessLogTableQuery{}
+	//for _, tableQuery := range tableQueries {
+	//	if tableQuery.name != maxTableName {
+	//		continue
+	//	}
+	//	newTableQueries = append(newTableQueries, tableQuery)
+	//}
+	//tableQueries = newTableQueries
+
 	for _, daoWrapper := range daoList {
 		var instance = daoWrapper.DAO.Instance
-		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		defs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
 		if err != nil {
 			return nil, "", err
 		}
-		if !def.Exists {
-			continue
+
+		if len(defs) > 0 {
+			for _, def := range defs {
+				tableQueries = append(tableQueries, &accessLogTableQuery{
+					daoWrapper:         daoWrapper,
+					name:               def.Name,
+					hasRemoteAddrField: def.HasRemoteAddr,
+					hasDomainField:     def.HasDomain,
+				})
+			}
 		}
 
-		if len(maxTableName) == 0 || def.Name > maxTableName {
-			maxTableName = def.Name
-		}
-
-		tableQueries = append(tableQueries, &accessLogTableQuery{
-			daoWrapper:         daoWrapper,
-			name:               def.Name,
-			hasRemoteAddrField: def.HasRemoteAddr,
-			hasDomainField:     def.HasDomain,
-		})
 	}
-
-	// 检查各个分表是否一致
-	var newTableQueries = []*accessLogTableQuery{}
-	for _, tableQuery := range tableQueries {
-		if tableQuery.name != maxTableName {
-			continue
-		}
-		newTableQueries = append(newTableQueries, tableQuery)
-	}
-	tableQueries = newTableQueries
 
 	if len(tableQueries) == 0 {
 		return nil, "", nil
@@ -1202,39 +1242,59 @@ func (this *HTTPAccessLogDAO) StatisticsTop(tx *dbs.Tx,
 	}
 	// 准备查询
 	var tableQueries = []*accessLogTableQuery{}
-	var maxTableName = ""
+	//var maxTableName = ""
+	//for _, daoWrapper := range daoList {
+	//	var instance = daoWrapper.DAO.Instance
+	//	def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	if !def.Exists {
+	//		continue
+	//	}
+	//
+	//	if len(maxTableName) == 0 || def.Name > maxTableName {
+	//		maxTableName = def.Name
+	//	}
+	//
+	//	tableQueries = append(tableQueries, &accessLogTableQuery{
+	//		daoWrapper:         daoWrapper,
+	//		name:               def.Name,
+	//		hasRemoteAddrField: def.HasRemoteAddr,
+	//		hasDomainField:     def.HasDomain,
+	//	})
+	//}
+	//
+	//// 检查各个分表是否一致
+	//
+	//var newTableQueries = []*accessLogTableQuery{}
+	//for _, tableQuery := range tableQueries {
+	//	if tableQuery.name != maxTableName {
+	//		continue
+	//	}
+	//	newTableQueries = append(newTableQueries, tableQuery)
+	//}
+	//tableQueries = newTableQueries
+
 	for _, daoWrapper := range daoList {
 		var instance = daoWrapper.DAO.Instance
-		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		defs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
 		if err != nil {
 			return nil, err
 		}
-		if !def.Exists {
-			continue
+
+		if len(defs) > 0 {
+			for _, def := range defs {
+				tableQueries = append(tableQueries, &accessLogTableQuery{
+					daoWrapper:         daoWrapper,
+					name:               def.Name,
+					hasRemoteAddrField: def.HasRemoteAddr,
+					hasDomainField:     def.HasDomain,
+				})
+			}
 		}
 
-		if len(maxTableName) == 0 || def.Name > maxTableName {
-			maxTableName = def.Name
-		}
-
-		tableQueries = append(tableQueries, &accessLogTableQuery{
-			daoWrapper:         daoWrapper,
-			name:               def.Name,
-			hasRemoteAddrField: def.HasRemoteAddr,
-			hasDomainField:     def.HasDomain,
-		})
 	}
-
-	// 检查各个分表是否一致
-
-	var newTableQueries = []*accessLogTableQuery{}
-	for _, tableQuery := range tableQueries {
-		if tableQuery.name != maxTableName {
-			continue
-		}
-		newTableQueries = append(newTableQueries, tableQuery)
-	}
-	tableQueries = newTableQueries
 
 	if len(tableQueries) == 0 {
 		return
@@ -1444,39 +1504,59 @@ func (this *HTTPAccessLogDAO) Statistics(tx *dbs.Tx, days []string, userId int64
 			defer wg.Done()
 			// 准备查询
 			var tableQueries = []*accessLogTableQuery{}
-			var maxTableName = ""
+			//var maxTableName = ""
+			//for _, daoWrapper := range daoList {
+			//	var instance = daoWrapper.DAO.Instance
+			//	def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+			//	if err != nil {
+			//		return
+			//	}
+			//	if !def.Exists {
+			//		continue
+			//	}
+			//
+			//	if len(maxTableName) == 0 || def.Name > maxTableName {
+			//		maxTableName = def.Name
+			//	}
+			//
+			//	tableQueries = append(tableQueries, &accessLogTableQuery{
+			//		daoWrapper:         daoWrapper,
+			//		name:               def.Name,
+			//		hasRemoteAddrField: def.HasRemoteAddr,
+			//		hasDomainField:     def.HasDomain,
+			//	})
+			//}
+			//
+			//// 检查各个分表是否一致
+			//
+			//var newTableQueries = []*accessLogTableQuery{}
+			//for _, tableQuery := range tableQueries {
+			//	if tableQuery.name != maxTableName {
+			//		continue
+			//	}
+			//	newTableQueries = append(newTableQueries, tableQuery)
+			//}
+			//tableQueries = newTableQueries
+
 			for _, daoWrapper := range daoList {
 				var instance = daoWrapper.DAO.Instance
-				def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+				defs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
 				if err != nil {
 					return
 				}
-				if !def.Exists {
-					continue
+
+				if len(defs) > 0 {
+					for _, def := range defs {
+						tableQueries = append(tableQueries, &accessLogTableQuery{
+							daoWrapper:         daoWrapper,
+							name:               def.Name,
+							hasRemoteAddrField: def.HasRemoteAddr,
+							hasDomainField:     def.HasDomain,
+						})
+					}
 				}
 
-				if len(maxTableName) == 0 || def.Name > maxTableName {
-					maxTableName = def.Name
-				}
-
-				tableQueries = append(tableQueries, &accessLogTableQuery{
-					daoWrapper:         daoWrapper,
-					name:               def.Name,
-					hasRemoteAddrField: def.HasRemoteAddr,
-					hasDomainField:     def.HasDomain,
-				})
 			}
-
-			// 检查各个分表是否一致
-
-			var newTableQueries = []*accessLogTableQuery{}
-			for _, tableQuery := range tableQueries {
-				if tableQuery.name != maxTableName {
-					continue
-				}
-				newTableQueries = append(newTableQueries, tableQuery)
-			}
-			tableQueries = newTableQueries
 
 			if len(tableQueries) == 0 {
 				return
@@ -1548,38 +1628,58 @@ func (this *HTTPAccessLogDAO) StatisticsType(tx *dbs.Tx, day string, userId int6
 	}
 	// 准备查询
 	var tableQueries = []*accessLogTableQuery{}
-	var maxTableName = ""
+	//var maxTableName = ""
+	//for _, daoWrapper := range daoList {
+	//	var instance = daoWrapper.DAO.Instance
+	//	def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	if !def.Exists {
+	//		continue
+	//	}
+	//
+	//	if len(maxTableName) == 0 || def.Name > maxTableName {
+	//		maxTableName = def.Name
+	//	}
+	//
+	//	tableQueries = append(tableQueries, &accessLogTableQuery{
+	//		daoWrapper:         daoWrapper,
+	//		name:               def.Name,
+	//		hasRemoteAddrField: def.HasRemoteAddr,
+	//		hasDomainField:     def.HasDomain,
+	//	})
+	//}
+
+	// 检查各个分表是否一致
+	//var newTableQueries = []*accessLogTableQuery{}
+	//for _, tableQuery := range tableQueries {
+	//	if tableQuery.name != maxTableName {
+	//		continue
+	//	}
+	//	newTableQueries = append(newTableQueries, tableQuery)
+	//}
+	//tableQueries = newTableQueries
+
 	for _, daoWrapper := range daoList {
 		var instance = daoWrapper.DAO.Instance
-		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		defs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
 		if err != nil {
 			return nil, err
 		}
-		if !def.Exists {
-			continue
+
+		if len(defs) > 0 {
+			for _, def := range defs {
+				tableQueries = append(tableQueries, &accessLogTableQuery{
+					daoWrapper:         daoWrapper,
+					name:               def.Name,
+					hasRemoteAddrField: def.HasRemoteAddr,
+					hasDomainField:     def.HasDomain,
+				})
+			}
 		}
 
-		if len(maxTableName) == 0 || def.Name > maxTableName {
-			maxTableName = def.Name
-		}
-
-		tableQueries = append(tableQueries, &accessLogTableQuery{
-			daoWrapper:         daoWrapper,
-			name:               def.Name,
-			hasRemoteAddrField: def.HasRemoteAddr,
-			hasDomainField:     def.HasDomain,
-		})
 	}
-
-	// 检查各个分表是否一致
-	var newTableQueries = []*accessLogTableQuery{}
-	for _, tableQuery := range tableQueries {
-		if tableQuery.name != maxTableName {
-			continue
-		}
-		newTableQueries = append(newTableQueries, tableQuery)
-	}
-	tableQueries = newTableQueries
 
 	if len(tableQueries) == 0 {
 		return
@@ -1891,39 +1991,59 @@ func (this *HTTPAccessLogDAO) AttackURLTop(tx *dbs.Tx, day string, userId int64)
 	uriStats := make([]*HTTPAccessLog, 0)
 	// 准备查询
 	var tableQueries = []*accessLogTableQuery{}
-	var maxTableName = ""
+	//var maxTableName = ""
+	//for _, daoWrapper := range daoList {
+	//	var instance = daoWrapper.DAO.Instance
+	//	def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	if !def.Exists {
+	//		continue
+	//	}
+	//
+	//	if len(maxTableName) == 0 || def.Name > maxTableName {
+	//		maxTableName = def.Name
+	//	}
+	//
+	//	tableQueries = append(tableQueries, &accessLogTableQuery{
+	//		daoWrapper:         daoWrapper,
+	//		name:               def.Name,
+	//		hasRemoteAddrField: def.HasRemoteAddr,
+	//		hasDomainField:     def.HasDomain,
+	//	})
+	//}
+	//
+	//// 检查各个分表是否一致
+	//
+	//var newTableQueries = []*accessLogTableQuery{}
+	//for _, tableQuery := range tableQueries {
+	//	if tableQuery.name != maxTableName {
+	//		continue
+	//	}
+	//	newTableQueries = append(newTableQueries, tableQuery)
+	//}
+	//tableQueries = newTableQueries
+
 	for _, daoWrapper := range daoList {
 		var instance = daoWrapper.DAO.Instance
-		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		defs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
 		if err != nil {
 			return nil, err
 		}
-		if !def.Exists {
-			continue
+
+		if len(defs) > 0 {
+			for _, def := range defs {
+				tableQueries = append(tableQueries, &accessLogTableQuery{
+					daoWrapper:         daoWrapper,
+					name:               def.Name,
+					hasRemoteAddrField: def.HasRemoteAddr,
+					hasDomainField:     def.HasDomain,
+				})
+			}
 		}
 
-		if len(maxTableName) == 0 || def.Name > maxTableName {
-			maxTableName = def.Name
-		}
-
-		tableQueries = append(tableQueries, &accessLogTableQuery{
-			daoWrapper:         daoWrapper,
-			name:               def.Name,
-			hasRemoteAddrField: def.HasRemoteAddr,
-			hasDomainField:     def.HasDomain,
-		})
 	}
-
-	// 检查各个分表是否一致
-
-	var newTableQueries = []*accessLogTableQuery{}
-	for _, tableQuery := range tableQueries {
-		if tableQuery.name != maxTableName {
-			continue
-		}
-		newTableQueries = append(newTableQueries, tableQuery)
-	}
-	tableQueries = newTableQueries
 
 	if len(tableQueries) == 0 {
 		return
@@ -2101,39 +2221,59 @@ func (this *HTTPAccessLogDAO) AccessIPTop(tx *dbs.Tx, day string, userId int64, 
 	}
 	// 准备查询
 	var tableQueries = []*accessLogTableQuery{}
-	var maxTableName = ""
+	//var maxTableName = ""
+	//for _, daoWrapper := range daoList {
+	//	var instance = daoWrapper.DAO.Instance
+	//	def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	if !def.Exists {
+	//		continue
+	//	}
+	//
+	//	if len(maxTableName) == 0 || def.Name > maxTableName {
+	//		maxTableName = def.Name
+	//	}
+	//
+	//	tableQueries = append(tableQueries, &accessLogTableQuery{
+	//		daoWrapper:         daoWrapper,
+	//		name:               def.Name,
+	//		hasRemoteAddrField: def.HasRemoteAddr,
+	//		hasDomainField:     def.HasDomain,
+	//	})
+	//}
+	//
+	//// 检查各个分表是否一致
+	//
+	//var newTableQueries = []*accessLogTableQuery{}
+	//for _, tableQuery := range tableQueries {
+	//	if tableQuery.name != maxTableName {
+	//		continue
+	//	}
+	//	newTableQueries = append(newTableQueries, tableQuery)
+	//}
+	//tableQueries = newTableQueries
+
 	for _, daoWrapper := range daoList {
 		var instance = daoWrapper.DAO.Instance
-		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		defs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
 		if err != nil {
 			return nil, err
 		}
-		if !def.Exists {
-			continue
+
+		if len(defs) > 0 {
+			for _, def := range defs {
+				tableQueries = append(tableQueries, &accessLogTableQuery{
+					daoWrapper:         daoWrapper,
+					name:               def.Name,
+					hasRemoteAddrField: def.HasRemoteAddr,
+					hasDomainField:     def.HasDomain,
+				})
+			}
 		}
 
-		if len(maxTableName) == 0 || def.Name > maxTableName {
-			maxTableName = def.Name
-		}
-
-		tableQueries = append(tableQueries, &accessLogTableQuery{
-			daoWrapper:         daoWrapper,
-			name:               def.Name,
-			hasRemoteAddrField: def.HasRemoteAddr,
-			hasDomainField:     def.HasDomain,
-		})
 	}
-
-	// 检查各个分表是否一致
-
-	var newTableQueries = []*accessLogTableQuery{}
-	for _, tableQuery := range tableQueries {
-		if tableQuery.name != maxTableName {
-			continue
-		}
-		newTableQueries = append(newTableQueries, tableQuery)
-	}
-	tableQueries = newTableQueries
 
 	if len(tableQueries) == 0 {
 		return
@@ -2281,39 +2421,59 @@ func (this *HTTPAccessLogDAO) StatusCodeStatistics(tx *dbs.Tx, day string, userI
 	}
 	// 准备查询
 	var tableQueries = []*accessLogTableQuery{}
-	var maxTableName = ""
+	//var maxTableName = ""
+	//for _, daoWrapper := range daoList {
+	//	var instance = daoWrapper.DAO.Instance
+	//	def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	if !def.Exists {
+	//		continue
+	//	}
+	//
+	//	if len(maxTableName) == 0 || def.Name > maxTableName {
+	//		maxTableName = def.Name
+	//	}
+	//
+	//	tableQueries = append(tableQueries, &accessLogTableQuery{
+	//		daoWrapper:         daoWrapper,
+	//		name:               def.Name,
+	//		hasRemoteAddrField: def.HasRemoteAddr,
+	//		hasDomainField:     def.HasDomain,
+	//	})
+	//}
+	//
+	//// 检查各个分表是否一致
+	//
+	//var newTableQueries = []*accessLogTableQuery{}
+	//for _, tableQuery := range tableQueries {
+	//	if tableQuery.name != maxTableName {
+	//		continue
+	//	}
+	//	newTableQueries = append(newTableQueries, tableQuery)
+	//}
+	//tableQueries = newTableQueries
+
 	for _, daoWrapper := range daoList {
 		var instance = daoWrapper.DAO.Instance
-		def, err := SharedHTTPAccessLogManager.FindPartitionTable(instance, day, 0)
+		defs, err := SharedHTTPAccessLogManager.FindTables(instance, day)
 		if err != nil {
 			return nil, err
 		}
-		if !def.Exists {
-			continue
+
+		if len(defs) > 0 {
+			for _, def := range defs {
+				tableQueries = append(tableQueries, &accessLogTableQuery{
+					daoWrapper:         daoWrapper,
+					name:               def.Name,
+					hasRemoteAddrField: def.HasRemoteAddr,
+					hasDomainField:     def.HasDomain,
+				})
+			}
 		}
 
-		if len(maxTableName) == 0 || def.Name > maxTableName {
-			maxTableName = def.Name
-		}
-
-		tableQueries = append(tableQueries, &accessLogTableQuery{
-			daoWrapper:         daoWrapper,
-			name:               def.Name,
-			hasRemoteAddrField: def.HasRemoteAddr,
-			hasDomainField:     def.HasDomain,
-		})
 	}
-
-	// 检查各个分表是否一致
-
-	var newTableQueries = []*accessLogTableQuery{}
-	for _, tableQuery := range tableQueries {
-		if tableQuery.name != maxTableName {
-			continue
-		}
-		newTableQueries = append(newTableQueries, tableQuery)
-	}
-	tableQueries = newTableQueries
 
 	if len(tableQueries) == 0 {
 		return
