@@ -2,9 +2,10 @@ package setup
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -13,15 +14,15 @@ import (
 	"github.com/iwind/TeaGo/types"
 	stringutil "github.com/iwind/TeaGo/utils/string"
 	"gopkg.in/yaml.v3"
+	"io"
 	"os"
 	"time"
 )
 
-var LatestSQLResult = &SQLDumpResult{}
-
 // SQLExecutor 安装或升级SQL执行器
 type SQLExecutor struct {
-	dbConfig *dbs.DBConfig
+	dbConfig  *dbs.DBConfig
+	logWriter io.Writer
 }
 
 func NewSQLExecutor(dbConfig *dbs.DBConfig) *SQLExecutor {
@@ -32,7 +33,7 @@ func NewSQLExecutor(dbConfig *dbs.DBConfig) *SQLExecutor {
 
 func NewSQLExecutorFromCmd() (*SQLExecutor, error) {
 	// 执行SQL
-	config := &dbs.Config{}
+	var config = &dbs.Config{}
 	configData, err := os.ReadFile(Tea.ConfigFile("db.yaml"))
 	if err != nil {
 		return nil, err
@@ -42,6 +43,10 @@ func NewSQLExecutorFromCmd() (*SQLExecutor, error) {
 		return nil, err
 	}
 	return NewSQLExecutor(config.DBs[Tea.Env]), nil
+}
+
+func (this *SQLExecutor) SetLogWriter(logWriter io.Writer) {
+	this.logWriter = logWriter
 }
 
 func (this *SQLExecutor) Run(showLog bool) error {
@@ -54,8 +59,19 @@ func (this *SQLExecutor) Run(showLog bool) error {
 		_ = db.Close()
 	}()
 
-	sqlDump := NewSQLDump()
-	_, err = sqlDump.Apply(db, LatestSQLResult, showLog)
+	var sqlDump = NewSQLDump()
+	sqlDump.SetLogWriter(this.logWriter)
+	if this.logWriter != nil {
+		showLog = true
+	}
+
+	var sqlResult = &SQLDumpResult{}
+	err = json.Unmarshal(sqlData, sqlResult)
+	if err != nil {
+		return errors.New("decode sql data failed: " + err.Error())
+	}
+
+	_, err = sqlDump.Apply(db, sqlResult, showLog)
 	if err != nil {
 		return err
 	}
@@ -71,8 +87,8 @@ func (this *SQLExecutor) Run(showLog bool) error {
 
 // 检查数据
 func (this *SQLExecutor) checkData(db *dbs.DB) error {
-	// 检查管理员
-	err := this.checkAdmin(db)
+	// 检查初始化用户
+	err := this.checkUser(db)
 	if err != nil {
 		return err
 	}
@@ -113,6 +129,12 @@ func (this *SQLExecutor) checkData(db *dbs.DB) error {
 		return err
 	}
 
+	// 更新Agents
+	err = this.checkClientAgents(db)
+	if err != nil {
+		return err
+	}
+
 	// 更新版本号
 	err = this.updateVersion(db, ComposeSQLVersion())
 	if err != nil {
@@ -122,27 +144,18 @@ func (this *SQLExecutor) checkData(db *dbs.DB) error {
 	return nil
 }
 
-// 检查管理员
-func (this *SQLExecutor) checkAdmin(db *dbs.DB) error {
-	stmt, err := db.Prepare("SELECT COUNT(*) FROM edgeAdmins")
+// 创建初始用户
+func (this *SQLExecutor) checkUser(db *dbs.DB) error {
+	one, err := db.FindOne("SELECT id FROM edgeUsers LIMIT 1")
 	if err != nil {
-		return errors.New("check admin failed: " + err.Error())
+		return err
 	}
-	defer func() {
-		_ = stmt.Close()
-	}()
-	col, err := stmt.FindCol(0)
-	if err != nil {
-		return errors.New("check admin failed: " + err.Error())
+	if len(one) > 0 {
+		return nil
 	}
-	count := types.Int(col)
-	if count == 0 {
-		_, err = db.Exec("INSERT INTO edgeAdmins (username, password, fullname, isSuper, createdAt, state) VALUES (?, ?, ?, ?, ?, ?)", "admin", stringutil.Md5("123456"), "管理员", 1, time.Now().Unix(), 1)
-		if err != nil {
-			return errors.New("create admin failed: " + err.Error())
-		}
-	}
-	return nil
+
+	_, err = db.Exec("INSERT INTO edgeUsers (`username`, `password`, `fullname`, `isOn`, `state`, `createdAt`) VALUES (?, ?, ?, ?, ?, ?)", "USER-"+rands.HexString(10), stringutil.Md5(rands.HexString(32)), "默认用户", 1, 1, time.Now().Unix())
+	return err
 }
 
 // 检查管理员平台节点
@@ -224,7 +237,21 @@ func (this *SQLExecutor) checkCluster(db *dbs.DB) error {
 	// 创建默认集群
 	var uniqueId = rands.HexString(32)
 	var secret = rands.String(32)
-	_, err = db.Exec("INSERT INTO edgeNodeClusters (name, useAllAPINodes, state, uniqueId, secret) VALUES (?, ?, ?, ?, ?)", "默认集群", 1, 1, uniqueId, secret)
+
+	var clusterDNSConfig = &dnsconfigs.ClusterDNSConfig{
+		NodesAutoSync:    true,
+		ServersAutoSync:  true,
+		CNAMERecords:     []string{},
+		CNAMEAsDomain:    true,
+		TTL:              0,
+		IncludingLnNodes: true,
+	}
+	clusterDNSConfigJSON, err := json.Marshal(clusterDNSConfig)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec("INSERT INTO edgeNodeClusters (name, useAllAPINodes, state, uniqueId, secret, dns) VALUES (?, ?, ?, ?, ?, ?)", "默认集群", 1, 1, uniqueId, secret, string(clusterDNSConfigJSON))
 	if err != nil {
 		return err
 	}
@@ -292,12 +319,12 @@ func (this *SQLExecutor) checkIPList(db *dbs.DB) error {
 	}
 
 	// 创建名单
-	_, err = db.Exec("INSERT INTO edgeIPLists(name, type, code, isPublic, createdAt) VALUES (?, ?, ?, ?, ?)", "公共黑名单", "black", "black", 1, time.Now().Unix())
+	_, err = db.Exec("INSERT INTO edgeIPLists(name, type, code, isPublic, isGlobal, createdAt) VALUES (?, ?, ?, ?, ?, ?)", "公共黑名单", "black", "black", 1, 1, time.Now().Unix())
 	if err != nil {
 		return err
 	}
 
-	_, err = db.Exec("INSERT INTO edgeIPLists(name, type, code, isPublic, createdAt) VALUES (?, ?, ?, ?, ?)", "公共白名单", "white", "white", 1, time.Now().Unix())
+	_, err = db.Exec("INSERT INTO edgeIPLists(name, type, code, isPublic, isGlobal, createdAt) VALUES (?, ?, ?, ?, ?, ?)", "公共白名单", "white", "white", 1, 1, time.Now().Unix())
 	if err != nil {
 		return err
 	}
@@ -438,6 +465,29 @@ func (this *SQLExecutor) checkMetricItems(db *dbs.DB) error {
 				"code":     "request_referer_host_bar",
 			},
 		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// 更新Agents表
+func (this *SQLExecutor) checkClientAgents(db *dbs.DB) error {
+	ones, _, err := db.FindOnes("SELECT id FROM edgeClientAgents")
+	if err != nil {
+		return err
+	}
+
+	for _, one := range ones {
+		var agentId = one.GetInt64("id")
+
+		countIPs, err := db.FindCol(0, "SELECT COUNT(*) FROM edgeClientAgentIPs WHERE agentId=?", agentId)
+		if err != nil {
+			return err
+		}
+		_, err = db.Exec("UPDATE edgeClientAgents SET countIPs=? WHERE id=?", countIPs, agentId)
 		if err != nil {
 			return err
 		}

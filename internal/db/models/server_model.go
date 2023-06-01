@@ -48,6 +48,7 @@ type Server struct {
 	UserPlanId          uint32   `field:"userPlanId"`          // 所属套餐ID
 	LastUserPlanId      uint32   `field:"lastUserPlanId"`      // 上一次使用的套餐
 	Uam                 dbs.JSON `field:"uam"`                 // UAM设置
+	Crs                 dbs.JSON `field:"crs"`                 // CRS设置
 	BandwidthTime       string   `field:"bandwidthTime"`       // 带宽更新时间，YYYYMMDDHHII
 	BandwidthBytes      uint64   `field:"bandwidthBytes"`      // 最近带宽峰值
 }
@@ -97,6 +98,7 @@ type ServerOperator struct {
 	UserPlanId          any // 所属套餐ID
 	LastUserPlanId      any // 上一次使用的套餐
 	Uam                 any // UAM设置
+	Crs                 any // CRS设置
 	BandwidthTime       any // 带宽更新时间，YYYYMMDDHHII
 	BandwidthBytes      any // 最近带宽峰值
 }

@@ -29,6 +29,10 @@ var edgeDNSHTTPClient = &http.Client{
 }
 
 type EdgeDNSAPIProvider struct {
+	BaseProvider
+
+	ProviderId int64
+
 	host            string
 	accessKeyId     string
 	accessKeySecret string
@@ -202,6 +206,23 @@ func (this *EdgeDNSAPIProvider) GetRoutes(domain string) (routes []*dnstypes.Rou
 		}
 	}
 
+	// Agent
+	{
+		var routesResp = &edgeapi.FindAllNSRoutesResponse{}
+		err = this.doAPI("/NSRouteService/FindAllAgentNSRoutes", map[string]any{}, routesResp)
+		if err != nil {
+			// 忽略错误，因为老版本的EdgeDNS没有提供这个接口
+			err = nil
+		} else {
+			for _, route := range routesResp.Data.NSRoutes {
+				routes = append(routes, &dnstypes.Route{
+					Name: route.Name,
+					Code: route.Code,
+				})
+			}
+		}
+	}
+
 	// 自定义
 	{
 		var routesResp = &edgeapi.FindAllNSRoutesResponse{}
@@ -263,6 +284,54 @@ func (this *EdgeDNSAPIProvider) QueryRecord(domain string, name string, recordTy
 		Route: routeCode,
 		TTL:   record.TTL,
 	}, nil
+}
+
+// QueryRecords 查询多个记录
+func (this *EdgeDNSAPIProvider) QueryRecords(domain string, name string, recordType dnstypes.RecordType) ([]*dnstypes.Record, error) {
+	var domainResp = &edgeapi.FindDomainWithNameResponse{}
+	err := this.doAPI("/NSDomainService/FindNSDomainWithName", map[string]any{
+		"name": domain,
+	}, domainResp)
+	if err != nil {
+		return nil, err
+	}
+
+	var domainId = domainResp.Data.NSDomain.Id
+	if domainId == 0 {
+		return nil, errors.New("can not find domain '" + domain + "'")
+	}
+
+	var recordResp = &edgeapi.FindNSRecordsWithNameAndTypeResponse{}
+	err = this.doAPI("/NSRecordService/FindNSRecordsWithNameAndType", map[string]any{
+		"nsDomainId": domainId,
+		"name":       name,
+		"type":       recordType,
+	}, recordResp)
+	if err != nil {
+		return nil, err
+	}
+
+	var result = []*dnstypes.Record{}
+	for _, record := range recordResp.Data.NSRecords {
+		if record.Id <= 0 {
+			return nil, nil
+		}
+
+		var routeCode = this.DefaultRoute()
+		if len(record.NSRoutes) > 0 {
+			routeCode = record.NSRoutes[0].Code
+		}
+
+		result = append(result, &dnstypes.Record{
+			Id:    types.String(record.Id),
+			Name:  record.Name,
+			Type:  record.Type,
+			Value: record.Value,
+			Route: routeCode,
+			TTL:   record.TTL,
+		})
+	}
+	return result, nil
 }
 
 // AddRecord 设置记录

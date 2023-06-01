@@ -3,10 +3,10 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 )
 
 // HTTPLocationService 路由规则相关服务
@@ -60,7 +60,7 @@ func (this *HTTPLocationService) FindEnabledHTTPLocationConfig(ctx context.Conte
 
 	var tx = this.NullTx()
 
-	config, err := models.SharedHTTPLocationDAO.ComposeLocationConfig(tx, req.LocationId, nil)
+	config, err := models.SharedHTTPLocationDAO.ComposeLocationConfig(tx, req.LocationId, false, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (this *HTTPLocationService) FindAndInitHTTPLocationReverseProxyConfig(ctx c
 		}
 	}
 
-	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, nil)
+	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +167,7 @@ func (this *HTTPLocationService) FindAndInitHTTPLocationWebConfig(ctx context.Co
 		}
 	}
 
-	config, err := models.SharedHTTPWebDAO.ComposeWebConfig(tx, webId, nil)
+	config, err := models.SharedHTTPWebDAO.ComposeWebConfig(tx, webId, true, false, nil, nil)
 	if err != nil {
 		return nil, rpcutils.Wrap("ComposeWebConfig()", err)
 	}

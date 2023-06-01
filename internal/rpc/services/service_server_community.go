@@ -6,7 +6,7 @@ package services
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // UpdateServerUAM 修改服务UAM设置

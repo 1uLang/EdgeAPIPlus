@@ -57,7 +57,19 @@ func TestHuaweiDNSProvider_QueryRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logs.PrintAsJSON(record)
+	logs.PrintAsJSON(record, t)
+}
+
+func TestHuaweiDNSProvider_QueryRecords(t *testing.T) {
+	provider, err := testHuaweiDNSProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := provider.QueryRecords("yun4s.cn", "abc", dnstypes.RecordTypeA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs.PrintAsJSON(records, t)
 }
 
 func TestHuaweiDNSProvider_AddRecord(t *testing.T) {
@@ -127,16 +139,20 @@ func testHuaweiDNSProvider() (ProviderInterface, error) {
 	if err != nil {
 		return nil, err
 	}
-	one, err := db.FindOne("SELECT * FROM edgeDNSProviders WHERE type='huaweiDNS' ORDER BY id DESC")
+	one, err := db.FindOne("SELECT * FROM edgeDNSProviders WHERE type='huaweiDNS' AND state=1 ORDER BY id DESC")
 	if err != nil {
 		return nil, err
 	}
-	apiParams := maps.Map{}
+	var apiParams = maps.Map{}
+	//apiParams["endpoint"] = ""
+	//apiParams["endpoint"] = "cn-north-1"
+	//apiParams["endpoint"] = "dns.cn-north-4.myhuaweicloud.com"
+	//apiParams["endpoint"] = "https://dns.cn-south-1.myhuaweicloud.com/"
 	err = json.Unmarshal([]byte(one.GetString("apiParams")), &apiParams)
 	if err != nil {
 		return nil, err
 	}
-	provider := &HuaweiDNSProvider{}
+	var provider = &HuaweiDNSProvider{}
 	err = provider.Auth(apiParams)
 	if err != nil {
 		return nil, err

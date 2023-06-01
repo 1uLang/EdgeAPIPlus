@@ -3,8 +3,8 @@
 package installers
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/sizes"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/iwind/TeaGo/types"
 	"sync"
 	"time"

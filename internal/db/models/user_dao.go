@@ -2,15 +2,18 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/userconfigs"
 	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/userconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
+	"github.com/iwind/TeaGo/rands"
 	"github.com/iwind/TeaGo/types"
 	stringutil "github.com/iwind/TeaGo/utils/string"
 	timeutil "github.com/iwind/TeaGo/utils/time"
@@ -52,7 +55,11 @@ func (this *UserDAO) EnableUser(tx *dbs.Tx, userId int64) error {
 		Pk(userId).
 		Set("state", UserStateEnabled).
 		Update()
-	return err
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx, userId)
 }
 
 // DisableUser 禁用条目
@@ -61,11 +68,40 @@ func (this *UserDAO) DisableUser(tx *dbs.Tx, userId int64) error {
 		return errors.New("invalid 'userId'")
 	}
 
-	_, err := this.Query(tx).
+	// 处理以往同用户名用户
+	username, err := this.Query(tx).
+		Pk(userId).
+		Result("username").
+		FindStringCol("")
+	if err != nil {
+		return err
+	}
+	if len(username) > 0 {
+		err = this.Query(tx).
+			Attr("username", username).
+			Attr("state", UserStateDisabled).
+			Set("username", username+"_"+rands.HexString(8)).
+			UpdateQuickly()
+		if err != nil {
+			return err
+		}
+	}
+
+	// 禁止当前
+	_, err = this.Query(tx).
 		Pk(userId).
 		Set("state", UserStateDisabled).
 		Update()
-	return err
+	if err != nil {
+		return err
+	}
+
+	err = SharedAPIAccessTokenDAO.DeleteAccessTokens(tx, 0, userId)
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx, userId)
 }
 
 // FindEnabledUser 查找启用的用户
@@ -99,7 +135,7 @@ func (this *UserDAO) FindEnabledBasicUser(tx *dbs.Tx, id int64) (*User, error) {
 	result, err := this.Query(tx).
 		Pk(id).
 		Attr("state", UserStateEnabled).
-		Result("id", "fullname", "username").
+		Result("id", "fullname", "username", "isOn").
 		Find()
 	if result == nil {
 		return nil, err
@@ -128,11 +164,36 @@ func (this *UserDAO) FindEnabledUserIdWithUsername(tx *dbs.Tx, username string) 
 		FindInt64Col(0)
 }
 
-// FindUserFullname 获取管理员名称
+// FindUserId 根据多个条件查找用户ID
+func (this *UserDAO) FindUserId(tx *dbs.Tx, verifiedEmail string, verifiedMobile string) (int64, error) {
+	var query = this.Query(tx).
+		State(UserStateEnabled).
+		ResultPk()
+
+	if len(verifiedEmail) > 0 {
+		query.Attr("verifiedEmail", verifiedEmail)
+	} else if len(verifiedMobile) > 0 {
+		query.Attr("verifiedMobile", verifiedMobile)
+	} else {
+		return 0, nil
+	}
+
+	return query.FindInt64Col(0)
+}
+
+// FindUserFullname 获取用户名称
 func (this *UserDAO) FindUserFullname(tx *dbs.Tx, userId int64) (string, error) {
 	return this.Query(tx).
 		Pk(userId).
 		Result("fullname").
+		FindStringCol("")
+}
+
+// FindUserVerifiedEmail 查询用户已绑定邮箱
+func (this *UserDAO) FindUserVerifiedEmail(tx *dbs.Tx, userId int64) (string, error) {
+	return this.Query(tx).
+		Pk(userId).
+		Result("verifiedEmail").
 		FindStringCol("")
 }
 
@@ -185,18 +246,9 @@ func (this *UserDAO) CreateUser(tx *dbs.Tx, username string,
 }
 
 // UpdateUser 修改用户
-func (this *UserDAO) UpdateUser(tx *dbs.Tx, userId int64, username string, password string, fullname string, mobile string, tel string, email string, remark string, isOn bool, nodeClusterId int64) error {
+func (this *UserDAO) UpdateUser(tx *dbs.Tx, userId int64, username string, password string, fullname string, mobile string, tel string, email string, remark string, isOn bool, nodeClusterId int64, bandwidthAlgo systemconfigs.BandwidthAlgo) error {
 	if userId <= 0 {
 		return errors.New("invalid userId")
-	}
-
-	// 是否启用变化
-	oldIsOn, err := this.Query(tx).
-		Pk(userId).
-		Result("isOn").
-		FindBoolCol()
-	if err != nil {
-		return err
 	}
 
 	var op = NewUserOperator()
@@ -211,17 +263,22 @@ func (this *UserDAO) UpdateUser(tx *dbs.Tx, userId int64, username string, passw
 	op.Email = email
 	op.Remark = remark
 	op.ClusterId = nodeClusterId
+	op.BandwidthAlgo = bandwidthAlgo
 	op.IsOn = isOn
-	err = this.Save(tx, op)
+	err := this.Save(tx, op)
 	if err != nil {
 		return err
 	}
 
-	if oldIsOn != isOn {
-		return SharedServerDAO.NotifyUserClustersChange(tx, userId)
+	// 删除AccessTokens
+	if !isOn {
+		err = SharedAPIAccessTokenDAO.DeleteAccessTokens(tx, 0, userId)
+		if err != nil {
+			return err
+		}
 	}
 
-	return nil
+	return this.NotifyUpdate(tx, userId)
 }
 
 // UpdateUserInfo 修改用户基本信息
@@ -248,8 +305,20 @@ func (this *UserDAO) UpdateUserLogin(tx *dbs.Tx, userId int64, username string, 
 	if len(password) > 0 {
 		op.Password = stringutil.Md5(password)
 	}
-	err := this.Save(tx, op)
-	return err
+	return this.Save(tx, op)
+}
+
+// UpdateUserPassword 修改用户密码
+func (this *UserDAO) UpdateUserPassword(tx *dbs.Tx, userId int64, password string) error {
+	if userId <= 0 {
+		return errors.New("invalid userId")
+	}
+	var op = NewUserOperator()
+	op.Id = userId
+	if len(password) > 0 {
+		op.Password = stringutil.Md5(password)
+	}
+	return this.Save(tx, op)
 }
 
 // CountAllEnabledUsers 计算用户数量
@@ -331,13 +400,27 @@ func (this *UserDAO) ListEnabledUserIds(tx *dbs.Tx, offset, size int64) ([]int64
 	return result, nil
 }
 
-// CheckUserPassword 检查用户名、密码
+// CheckUserPassword 检查用户名+密码
 func (this *UserDAO) CheckUserPassword(tx *dbs.Tx, username string, encryptedPassword string) (int64, error) {
 	if len(username) == 0 || len(encryptedPassword) == 0 {
 		return 0, nil
 	}
 	return this.Query(tx).
 		Attr("username", username).
+		Attr("password", encryptedPassword).
+		Attr("state", UserStateEnabled).
+		Attr("isOn", true).
+		ResultPk().
+		FindInt64Col(0)
+}
+
+// CheckUserEmailPassword 检查邮箱+密码
+func (this *UserDAO) CheckUserEmailPassword(tx *dbs.Tx, verifiedEmail string, encryptedPassword string) (int64, error) {
+	if len(verifiedEmail) == 0 || len(encryptedPassword) == 0 {
+		return 0, nil
+	}
+	return this.Query(tx).
+		Attr("verifiedEmail", verifiedEmail).
 		Attr("password", encryptedPassword).
 		Attr("state", UserStateEnabled).
 		Attr("isOn", true).
@@ -529,18 +612,117 @@ func (this *UserDAO) UpdateUserIsVerified(tx *dbs.Tx, userId int64, isRejected b
 	op.IsRejected = isRejected
 	op.RejectReason = rejectReason
 	op.IsVerified = true
-	return this.Save(tx, op)
+	err := this.Save(tx, op)
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx, userId)
 }
 
-// FindUserByUserName 获取用户id通过用户名
-func (this *UserDAO) FindUserByUserName(tx *dbs.Tx, username string) (int64, error) {
-	result, err := this.Query(tx).
-		Attr("state", UserStateEnabled).
-		Attr("username", username).
-		Result("id").
-		Find()
-	if result == nil {
-		return 0, err
+// RenewUserServersState 更新用户服务状态
+func (this *UserDAO) RenewUserServersState(tx *dbs.Tx, userId int64) (bool, error) {
+	oldServersEnabled, err := this.Query(tx).
+		Pk(userId).
+		Result("serversEnabled").
+		FindBoolCol()
+	if err != nil {
+		return false, err
 	}
-	return int64(result.(*User).Id), err
+
+	newServersEnabled, err := this.CheckUserServersEnabled(tx, userId)
+	if err != nil {
+		return false, err
+	}
+
+	if oldServersEnabled != newServersEnabled {
+		err = this.Query(tx).
+			Pk(userId).
+			Set("serversEnabled", newServersEnabled).
+			UpdateQuickly()
+		if err != nil {
+			return false, err
+		}
+
+		// 创建变更通知
+		clusterIds, err := SharedServerDAO.FindUserServerClusterIds(tx, userId)
+		if err != nil {
+			return false, err
+		}
+		for _, clusterId := range clusterIds {
+			err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, userId, 0, NodeTaskTypeUserServersStateChanged)
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+
+	return newServersEnabled, nil
+}
+
+// FindUserIdWithVerifiedEmail 使用验证后Email查找用户ID
+func (this *UserDAO) FindUserIdWithVerifiedEmail(tx *dbs.Tx, verifiedEmail string) (int64, error) {
+	if len(verifiedEmail) == 0 {
+
+	}
+	return this.Query(tx).
+		ResultPk().
+		State(UserStateEnabled).
+		Attr("verifiedEmail", verifiedEmail).
+		FindInt64Col(0)
+}
+
+// UpdateUserVerifiedEmail 修改已激活邮箱
+func (this *UserDAO) UpdateUserVerifiedEmail(tx *dbs.Tx, userId int64, verifiedEmail string) error {
+	if userId <= 0 {
+		return nil
+	}
+	return this.Query(tx).
+		Pk(userId).
+		Set("verifiedEmail", verifiedEmail).
+		Set("emailIsVerified", true).
+		UpdateQuickly()
+}
+
+// FindUserBandwidthAlgoForView 获取用户浏览用的带宽算法
+func (this *UserDAO) FindUserBandwidthAlgoForView(tx *dbs.Tx, userId int64, uiConfig *systemconfigs.UserUIConfig) (bandwidthAlgo string, err error) {
+	bandwidthAlgo, err = this.Query(tx).
+		Pk(userId).
+		Result("bandwidthAlgo").
+		FindStringCol("")
+	if len(bandwidthAlgo) > 0 {
+		return
+	}
+
+	if uiConfig == nil {
+		uiConfig, err = SharedSysSettingDAO.ReadUserUIConfig(tx)
+		if err != nil {
+			return "", err
+		}
+		if uiConfig == nil {
+			return systemconfigs.BandwidthAlgoSecondly, nil
+		}
+	}
+
+	if uiConfig != nil &&
+		len(uiConfig.TrafficStats.BandwidthAlgo) > 0 {
+		return uiConfig.TrafficStats.BandwidthAlgo, nil
+	}
+
+	return systemconfigs.BandwidthAlgoSecondly, nil
+}
+
+// NotifyUpdate 用户变更通知
+func (this *UserDAO) NotifyUpdate(tx *dbs.Tx, userId int64) error {
+	if userId <= 0 {
+		return nil
+	}
+
+	// 更新用户服务状态
+	_, err := this.RenewUserServersState(tx, userId)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

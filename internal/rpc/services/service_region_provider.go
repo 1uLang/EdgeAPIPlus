@@ -4,8 +4,8 @@ package services
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/regions"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // RegionProviderService ISP相关服务

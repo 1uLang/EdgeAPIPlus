@@ -4,16 +4,17 @@ package services
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/configutils"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/regions"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/stats"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/tasks"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	timeutil "github.com/iwind/TeaGo/utils/time"
 	"time"
 )
@@ -84,13 +85,30 @@ func (this *ServerStatBoardService) ComposeServerStatNodeClusterBoard(ctx contex
 	}
 	result.CountServers = countServers
 
+	// 当月总流量
+	monthlyTrafficStat, err := stats.SharedNodeClusterTrafficDailyStatDAO.SumDailyStat(tx, req.NodeClusterId, timeutil.Format("Ym01"), timeutil.Format("Ym31"))
+	if err != nil {
+		return nil, err
+	}
+	if monthlyTrafficStat != nil {
+		result.MonthlyTrafficBytes = int64(monthlyTrafficStat.Bytes)
+	}
+
 	// 按日流量统计
 	var dayFrom = timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
 	dailyTrafficStats, err := stats.SharedNodeClusterTrafficDailyStatDAO.FindDailyStats(tx, req.NodeClusterId, dayFrom, timeutil.Format("Ymd"))
 	if err != nil {
 		return nil, err
 	}
+	var dailyTrafficBytes int64
+	var lastDailyTrafficBytes int64
 	for _, stat := range dailyTrafficStats {
+		if stat.Day == timeutil.Format("Ymd") { // 今天
+			dailyTrafficBytes = int64(stat.Bytes)
+		} else if stat.Day == timeutil.Format("Ymd", time.Now().AddDate(0, 0, -1)) {
+			lastDailyTrafficBytes = int64(stat.Bytes)
+		}
+
 		result.DailyTrafficStats = append(result.DailyTrafficStats, &pb.ComposeServerStatNodeClusterBoardResponse_DailyTrafficStat{
 			Day:                 stat.Day,
 			Bytes:               int64(stat.Bytes),
@@ -101,6 +119,8 @@ func (this *ServerStatBoardService) ComposeServerStatNodeClusterBoard(ctx contex
 			AttackBytes:         int64(stat.AttackBytes),
 		})
 	}
+	result.DailyTrafficBytes = dailyTrafficBytes
+	result.LastDailyTrafficBytes = lastDailyTrafficBytes
 
 	// 小时流量统计
 	var hourFrom = timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
@@ -304,13 +324,30 @@ func (this *ServerStatBoardService) ComposeServerStatNodeBoard(ctx context.Conte
 		}
 	}
 
-	// 按日流量统计
-	var dayFrom = timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
-	dailyTrafficStats, err := stats.SharedNodeTrafficDailyStatDAO.FindDailyStats(tx, "node", req.NodeId, dayFrom, timeutil.Format("Ymd"))
+	// 当月总流量
+	monthlyTrafficStat, err := models.SharedNodeTrafficDailyStatDAO.SumDailyStat(tx, nodeconfigs.NodeRoleNode, req.NodeId, timeutil.Format("Ym01"), timeutil.Format("Ym31"))
 	if err != nil {
 		return nil, err
 	}
+	if monthlyTrafficStat != nil {
+		result.MonthlyTrafficBytes = int64(monthlyTrafficStat.Bytes)
+	}
+
+	// 按日流量统计
+	var dayFrom = timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
+	dailyTrafficStats, err := models.SharedNodeTrafficDailyStatDAO.FindDailyStats(tx, "node", req.NodeId, dayFrom, timeutil.Format("Ymd"))
+	if err != nil {
+		return nil, err
+	}
+	var dailyTrafficBytes int64
+	var lastDailyTrafficBytes int64
 	for _, stat := range dailyTrafficStats {
+		if stat.Day == timeutil.Format("Ymd") { // 当天
+			dailyTrafficBytes = int64(stat.Bytes)
+		} else if stat.Day == timeutil.Format("Ymd", time.Now().AddDate(0, 0, -1)) { // 昨天
+			lastDailyTrafficBytes = int64(stat.Bytes)
+		}
+
 		result.DailyTrafficStats = append(result.DailyTrafficStats, &pb.ComposeServerStatNodeBoardResponse_DailyTrafficStat{
 			Day:                 stat.Day,
 			Bytes:               int64(stat.Bytes),
@@ -321,6 +358,8 @@ func (this *ServerStatBoardService) ComposeServerStatNodeBoard(ctx context.Conte
 			AttackBytes:         int64(stat.AttackBytes),
 		})
 	}
+	result.DailyTrafficBytes = dailyTrafficBytes
+	result.LastDailyTrafficBytes = lastDailyTrafficBytes
 
 	// 小时流量统计
 	var hourFrom = timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
@@ -408,6 +447,19 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 	var result = &pb.ComposeServerStatBoardResponse{}
 	var tx = this.NullTx()
 
+	// 用户ID
+	userId, err := models.SharedServerDAO.FindServerUserId(tx, req.ServerId)
+	if err != nil {
+		return nil, err
+	}
+	var bandwidthAglo = ""
+	if userId > 0 {
+		bandwidthAglo, err = models.SharedUserDAO.FindUserBandwidthAlgoForView(tx, userId, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// 带宽统计
 	{
 		var month = timeutil.Format("Ym")
@@ -422,7 +474,7 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 			var minute3 = timeutil.FormatTime("Hi", timestamp-300*2)
 
 			for _, minute := range []string{minute1, minute2, minute3} {
-				bytes, err := models.SharedServerBandwidthStatDAO.FindMinutelyPeekBandwidthBytes(tx, req.ServerId, day, minute)
+				bytes, err := models.SharedServerBandwidthStatDAO.FindMinutelyPeekBandwidthBytes(tx, req.ServerId, day, minute, bandwidthAglo == systemconfigs.BandwidthAlgoAvg)
 				if err != nil {
 					return nil, err
 				}
@@ -436,7 +488,7 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 
 		// 当天
 		{
-			bytes, err := models.SharedServerBandwidthStatDAO.FindDailyPeekBandwidthBytes(tx, req.ServerId, day)
+			bytes, err := models.SharedServerBandwidthStatDAO.FindDailyPeekBandwidthBytes(tx, req.ServerId, day, bandwidthAglo == systemconfigs.BandwidthAlgoAvg)
 			if err != nil {
 				return nil, err
 			}
@@ -445,7 +497,7 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 
 		// 当月
 		{
-			bytes, err := models.SharedServerBandwidthStatDAO.FindMonthlyPeekBandwidthBytes(tx, req.ServerId, month)
+			bytes, err := models.SharedServerBandwidthStatDAO.FindMonthlyPeekBandwidthBytes(tx, req.ServerId, month, bandwidthAglo == systemconfigs.BandwidthAlgoAvg)
 			if err != nil {
 				return nil, err
 			}
@@ -454,7 +506,7 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 
 		// 上月
 		{
-			bytes, err := models.SharedServerBandwidthStatDAO.FindMonthlyPeekBandwidthBytes(tx, req.ServerId, timeutil.Format("Ym", time.Now().AddDate(0, -1, 0)))
+			bytes, err := models.SharedServerBandwidthStatDAO.FindMonthlyPeekBandwidthBytes(tx, req.ServerId, timeutil.Format("Ym", time.Now().AddDate(0, -1, 0)), bandwidthAglo == systemconfigs.BandwidthAlgoAvg)
 			if err != nil {
 				return nil, err
 			}
@@ -465,8 +517,17 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 	{
 		var bandwidthMinutes = utils.RangeMinutes(time.Now(), 12, 5)
 		var bandwidthStatMap = map[string]*pb.ServerBandwidthStat{}
+		var timeFrom = ""
+		var timeTo = ""
 		for _, r := range utils.GroupMinuteRanges(bandwidthMinutes) {
-			bandwidthStats, err := models.SharedServerBandwidthStatDAO.FindServerStats(tx, req.ServerId, r.Day, r.MinuteFrom, r.MinuteTo)
+			if len(timeFrom) == 0 || timeFrom > r.Day+r.MinuteFrom {
+				timeFrom = r.Day + r.MinuteFrom
+			}
+			if len(timeTo) == 0 || timeTo < r.Day+r.MinuteTo {
+				timeTo = r.Day + r.MinuteTo
+			}
+
+			bandwidthStats, err := models.SharedServerBandwidthStatDAO.FindServerStats(tx, req.ServerId, r.Day, r.MinuteFrom, r.MinuteTo, bandwidthAglo == systemconfigs.BandwidthAlgoAvg)
 			if err != nil {
 				return nil, err
 			}
@@ -477,6 +538,7 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 					Day:      stat.Day,
 					TimeAt:   stat.TimeAt,
 					Bytes:    int64(stat.Bytes),
+					Bits:     int64(stat.Bytes * 8),
 				}
 			}
 		}
@@ -486,28 +548,53 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 			if ok {
 				pbBandwidthStats = append(pbBandwidthStats, stat)
 			} else {
+				var bytes = ServerBandwidthGetCacheBytes(req.ServerId, minute.Minute) // 从当前缓存中读取
 				pbBandwidthStats = append(pbBandwidthStats, &pb.ServerBandwidthStat{
 					Id:       0,
 					ServerId: req.ServerId,
 					Day:      minute.Day,
 					TimeAt:   minute.Minute,
-					Bytes:    ServerBandwidthGetCacheBytes(req.ServerId, minute.Day, minute.Minute), // 从当前缓存中读取
+					Bytes:    bytes,
+					Bits:     bytes * 8,
 				})
 			}
 		}
 		result.MinutelyBandwidthStats = pbBandwidthStats
+
+		// percentile
+		if len(timeFrom) > 0 && len(timeTo) > 0 {
+			var percentile = systemconfigs.DefaultBandwidthPercentile
+			userUIConfig, _ := models.SharedSysSettingDAO.ReadUserUIConfig(tx)
+			if userUIConfig != nil && userUIConfig.TrafficStats.BandwidthPercentile > 0 {
+				percentile = userUIConfig.TrafficStats.BandwidthPercentile
+			}
+			result.BandwidthPercentile = percentile
+
+			percentileStat, err := models.SharedServerBandwidthStatDAO.FindPercentileBetweenTimes(tx, req.ServerId, timeFrom, timeTo, percentile, bandwidthAglo == systemconfigs.BandwidthAlgoAvg)
+			if err != nil {
+				return nil, err
+			}
+			if percentileStat != nil {
+				result.MinutelyNthBandwidthStat = &pb.ServerBandwidthStat{
+					Day:    percentileStat.Day,
+					TimeAt: percentileStat.TimeAt,
+					Bytes:  int64(percentileStat.Bytes),
+					Bits:   int64(percentileStat.Bytes * 8),
+				}
+			}
+		}
 	}
 
 	// 按日流量统计
 	var dayFrom = timeutil.Format("Ymd", time.Now().AddDate(0, 0, -14))
-	dailyTrafficStats, err := models.SharedServerDailyStatDAO.FindDailyStats(tx, req.ServerId, dayFrom, timeutil.Format("Ymd"))
+	dailyTrafficStats, err := models.SharedServerBandwidthStatDAO.FindDailyStats(tx, req.ServerId, dayFrom, timeutil.Format("Ymd"))
 	if err != nil {
 		return nil, err
 	}
 	for _, stat := range dailyTrafficStats {
 		result.DailyTrafficStats = append(result.DailyTrafficStats, &pb.ComposeServerStatBoardResponse_DailyTrafficStat{
 			Day:                 stat.Day,
-			Bytes:               int64(stat.Bytes),
+			Bytes:               int64(stat.TotalBytes),
 			CachedBytes:         int64(stat.CachedBytes),
 			CountRequests:       int64(stat.CountRequests),
 			CountCachedRequests: int64(stat.CountCachedRequests),
@@ -519,14 +606,14 @@ func (this *ServerStatBoardService) ComposeServerStatBoard(ctx context.Context, 
 	// 小时流量统计
 	var hourFrom = timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
 	var hourTo = timeutil.Format("YmdH")
-	hourlyTrafficStats, err := models.SharedServerDailyStatDAO.FindHourlyStats(tx, req.ServerId, hourFrom, hourTo)
+	hourlyTrafficStats, err := models.SharedServerBandwidthStatDAO.FindHourlyStats(tx, req.ServerId, hourFrom, hourTo)
 	if err != nil {
 		return nil, err
 	}
 	for _, stat := range hourlyTrafficStats {
 		result.HourlyTrafficStats = append(result.HourlyTrafficStats, &pb.ComposeServerStatBoardResponse_HourlyTrafficStat{
-			Hour:                stat.Hour,
-			Bytes:               int64(stat.Bytes),
+			Hour:                stat.Day + stat.TimeAt[:2],
+			Bytes:               int64(stat.TotalBytes),
 			CachedBytes:         int64(stat.CachedBytes),
 			CountRequests:       int64(stat.CountRequests),
 			CountCachedRequests: int64(stat.CountCachedRequests),

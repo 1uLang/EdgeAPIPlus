@@ -6,10 +6,6 @@ package nameservers
 import (
 	"context"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/configutils"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
@@ -17,6 +13,11 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/installers"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/logs"
 	stringutil "github.com/iwind/TeaGo/utils/string"
@@ -257,7 +258,7 @@ func (this *NSNodeService) FindNSNode(ctx context.Context, req *pb.FindNSNodeReq
 	if err != nil {
 		return nil, err
 	}
-	installStatusResult := &pb.NodeInstallStatus{}
+	var installStatusResult = &pb.NodeInstallStatus{}
 	if installStatus != nil {
 		installStatusResult = &pb.NodeInstallStatus{
 			IsRunning:  installStatus.IsRunning,
@@ -270,13 +271,14 @@ func (this *NSNodeService) FindNSNode(ctx context.Context, req *pb.FindNSNodeReq
 	}
 
 	return &pb.FindNSNodeResponse{NsNode: &pb.NSNode{
-		Id:          int64(node.Id),
-		Name:        node.Name,
-		StatusJSON:  node.Status,
-		UniqueId:    node.UniqueId,
-		Secret:      node.Secret,
-		IsInstalled: node.IsInstalled,
-		InstallDir:  node.InstallDir,
+		Id:               int64(node.Id),
+		Name:             node.Name,
+		StatusJSON:       node.Status,
+		UniqueId:         node.UniqueId,
+		Secret:           node.Secret,
+		IsInstalled:      node.IsInstalled,
+		InstallDir:       node.InstallDir,
+		ApiNodeAddrsJSON: node.ApiNodeAddrs,
 		NsCluster: &pb.NSCluster{
 			Id:   int64(node.ClusterId),
 			Name: clusterName,
@@ -683,5 +685,52 @@ func (this *NSNodeService) UpdateNSNodeDDoSProtection(ctx context.Context, req *
 	if err != nil {
 		return nil, err
 	}
+	return this.Success()
+}
+
+// FindNSNodeAPIConfig 查找单个节点的API相关配置
+func (this *NSNodeService) FindNSNodeAPIConfig(ctx context.Context, req *pb.FindNSNodeAPIConfigRequest) (*pb.FindNSNodeAPIConfigResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	node, err := models.SharedNSNodeDAO.FindNodeAPIConfig(tx, req.NsNodeId)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return &pb.FindNSNodeAPIConfigResponse{
+			ApiNodeAddrsJSON: nil,
+		}, nil
+	}
+
+	return &pb.FindNSNodeAPIConfigResponse{
+		ApiNodeAddrsJSON: node.ApiNodeAddrs,
+	}, nil
+}
+
+// UpdateNSNodeAPIConfig 修改某个节点的API相关配置
+func (this *NSNodeService) UpdateNSNodeAPIConfig(ctx context.Context, req *pb.UpdateNSNodeAPIConfigRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	var apiNodeAddrs = []*serverconfigs.NetworkAddressConfig{}
+	if len(req.ApiNodeAddrsJSON) > 0 {
+		err = json.Unmarshal(req.ApiNodeAddrsJSON, &apiNodeAddrs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = models.SharedNSNodeDAO.UpdateNodeAPIConfig(tx, req.NsNodeId, apiNodeAddrs)
+	if err != nil {
+		return nil, err
+	}
+
 	return this.Success()
 }

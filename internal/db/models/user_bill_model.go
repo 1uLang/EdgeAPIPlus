@@ -5,6 +5,7 @@ type UserBill struct {
 	Id          uint64  `field:"id"`          // ID
 	UserId      uint32  `field:"userId"`      // 用户ID
 	Type        string  `field:"type"`        // 消费类型
+	PricePeriod string  `field:"pricePeriod"` // 计费周期
 	Description string  `field:"description"` // 描述
 	Amount      float64 `field:"amount"`      // 消费数额
 	DayFrom     string  `field:"dayFrom"`     // YYYYMMDD
@@ -15,22 +16,27 @@ type UserBill struct {
 	PaidAt      uint64  `field:"paidAt"`      // 支付时间
 	Code        string  `field:"code"`        // 账单编号
 	CreatedAt   uint64  `field:"createdAt"`   // 创建时间
+	CreatedDay  string  `field:"createdDay"`  // 创建日期
+	State       uint8   `field:"state"`       // 状态
 }
 
 type UserBillOperator struct {
-	Id          interface{} // ID
-	UserId      interface{} // 用户ID
-	Type        interface{} // 消费类型
-	Description interface{} // 描述
-	Amount      interface{} // 消费数额
-	DayFrom     interface{} // YYYYMMDD
-	DayTo       interface{} // YYYYMMDD
-	Month       interface{} // 帐期YYYYMM
-	CanPay      interface{} // 是否可以支付
-	IsPaid      interface{} // 是否已支付
-	PaidAt      interface{} // 支付时间
-	Code        interface{} // 账单编号
-	CreatedAt   interface{} // 创建时间
+	Id          any // ID
+	UserId      any // 用户ID
+	Type        any // 消费类型
+	PricePeriod any // 计费周期
+	Description any // 描述
+	Amount      any // 消费数额
+	DayFrom     any // YYYYMMDD
+	DayTo       any // YYYYMMDD
+	Month       any // 帐期YYYYMM
+	CanPay      any // 是否可以支付
+	IsPaid      any // 是否已支付
+	PaidAt      any // 支付时间
+	Code        any // 账单编号
+	CreatedAt   any // 创建时间
+	CreatedDay  any // 创建日期
+	State       any // 状态
 }
 
 func NewUserBillOperator() *UserBillOperator {

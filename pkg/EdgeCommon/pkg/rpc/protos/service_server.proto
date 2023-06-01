@@ -1,0 +1,730 @@
+syntax = "proto3";
+option go_package = "./pb";
+
+package pb;
+
+import "models/model_server.proto";
+import "models/model_dns_domain.proto";
+import "models/model_server_name_auditing_result.proto";
+import "models/rpc_messages.proto";
+import "models/model_user_plan.proto";
+
+// 网站服务相关服务
+service ServerService {
+	// 创建服务
+	rpc createServer (CreateServerRequest) returns (CreateServerResponse);
+
+	// 修改服务基本信息
+	rpc updateServerBasic (UpdateServerBasicRequest) returns (RPCSuccess);
+
+	// 修改服务所在分组
+	rpc updateServerGroupIds(UpdateServerGroupIdsRequest) returns (RPCSuccess);
+
+	// 修改服务是否启用
+	rpc updateServerIsOn (UpdateServerIsOnRequest) returns (RPCSuccess);
+
+	// 修改服务的HTTP设置
+	rpc updateServerHTTP (UpdateServerHTTPRequest) returns (RPCSuccess);
+
+	// 修改服务的HTTPS设置
+	rpc updateServerHTTPS (UpdateServerHTTPSRequest) returns (RPCSuccess);
+
+	// 修改服务的TCP设置
+	rpc updateServerTCP (UpdateServerTCPRequest) returns (RPCSuccess);
+
+	// 修改服务的TLS设置
+	rpc updateServerTLS (UpdateServerTLSRequest) returns (RPCSuccess);
+
+	// 修改服务的Unix设置
+	rpc updateServerUnix (UpdateServerUnixRequest) returns (RPCSuccess);
+
+	// 修改服务的UDP设置
+	rpc updateServerUDP (UpdateServerUDPRequest) returns (RPCSuccess);
+
+	// 修改服务的Web设置
+	rpc updateServerWeb (UpdateServerWebRequest) returns (RPCSuccess);
+
+	// 修改服务的反向代理设置
+	rpc updateServerReverseProxy (UpdateServerReverseProxyRequest) returns (RPCSuccess);
+
+	// 查找服务的域名设置
+	rpc findServerNames (FindServerNamesRequest) returns (FindServerNamesResponse);
+
+	// 修改服务的域名设置
+	rpc updateServerNames (UpdateServerNamesRequest) returns (RPCSuccess);
+
+	// 审核服务的域名设置
+	rpc updateServerNamesAuditing (UpdateServerNamesAuditingRequest) returns (RPCSuccess);
+
+	// 修改服务的DNS相关设置
+	rpc updateServerDNS(UpdateServerDNSRequest) returns (RPCSuccess);
+
+	// 重新生成CNAME
+	rpc regenerateServerDNSName(RegenerateServerDNSNameRequest) returns (RPCSuccess);
+
+	// 修改服务的CNAME
+	rpc updateServerDNSName(UpdateServerDNSNameRequest) returns (RPCSuccess);
+
+	// 使用CNAME查找服务
+	rpc findServerIdWithDNSName(FindServerIdWithDNSNameRequest) returns (FindServerIdWithDNSNameResponse);
+
+	// 计算匹配的服务数量
+	rpc countAllEnabledServersMatch (CountAllEnabledServersMatchRequest) returns (RPCCountResponse);
+
+	// 列出单页服务
+	rpc listEnabledServersMatch (ListEnabledServersMatchRequest) returns (ListEnabledServersMatchResponse);
+
+	// 禁用某服务
+	rpc deleteServer (DeleteServerRequest) returns (RPCSuccess);
+
+	// 查找单个服务
+	rpc findEnabledServer (FindEnabledServerRequest) returns (FindEnabledServerResponse);
+
+	// 查找服务配置
+	rpc findEnabledServerConfig (FindEnabledServerConfigRequest) returns (FindEnabledServerConfigResponse);
+
+	// 查找服务的服务类型
+	rpc findEnabledServerType (FindEnabledServerTypeRequest) returns (FindEnabledServerTypeResponse);
+
+	// 查找反向代理设置
+	rpc findAndInitServerReverseProxyConfig (FindAndInitServerReverseProxyConfigRequest) returns (FindAndInitServerReverseProxyConfigResponse);
+
+	// 初始化Web设置
+	rpc findAndInitServerWebConfig (FindAndInitServerWebConfigRequest) returns (FindAndInitServerWebConfigResponse);
+
+	// 计算使用某个国密证书的服务数量
+	rpc countAllEnabledServersWithGMCertId (CountAllEnabledServersWithGMCertIdRequest) returns (RPCCountResponse);
+
+	// 查找使用某个国密证书的所有服务
+	rpc findAllEnabledServersWithGMCertId (FindAllEnabledServersWithGMCertIdRequest) returns (FindAllEnabledServersWithGMCertIdResponse);
+
+
+	// 计算使用某个SSL证书的服务数量
+	rpc countAllEnabledServersWithSSLCertId (CountAllEnabledServersWithSSLCertIdRequest) returns (RPCCountResponse);
+
+	// 查找使用某个SSL证书的所有服务
+	rpc findAllEnabledServersWithSSLCertId (FindAllEnabledServersWithSSLCertIdRequest) returns (FindAllEnabledServersWithSSLCertIdResponse);
+
+	// 计算运行在某个集群上的所有服务数量
+	rpc countAllEnabledServersWithNodeClusterId (CountAllEnabledServersWithNodeClusterIdRequest) returns (RPCCountResponse);
+
+	// 计算使用某个分组的服务数量
+	rpc countAllEnabledServersWithServerGroupId (CountAllEnabledServersWithServerGroupIdRequest) returns (RPCCountResponse);
+
+	// 通知更新
+	rpc notifyServersChange (NotifyServersChangeRequest) returns (NotifyServersChangeResponse);
+
+	// 取得某个集群下的所有服务相关的DNS
+	rpc findAllEnabledServersDNSWithNodeClusterId (FindAllEnabledServersDNSWithNodeClusterIdRequest) returns (FindAllEnabledServersDNSWithNodeClusterIdResponse);
+
+	// 查找单个服务的DNS信息
+	rpc findEnabledServerDNS (FindEnabledServerDNSRequest) returns (FindEnabledServerDNSResponse);
+
+	// 检查服务是否属于某个用户
+	rpc checkUserServer (CheckUserServerRequest) returns (RPCSuccess);
+
+	// 查找一个用户下的所有域名列表
+	rpc findAllEnabledServerNamesWithUserId (FindAllEnabledServerNamesWithUserIdRequest) returns (FindAllEnabledServerNamesWithUserIdResponse);
+
+	// 查找一个用户下的所有服务
+	rpc findAllUserServers(FindAllUserServersRequest) returns (FindAllUserServersResponse);
+
+	// 查找某个用户下的服务配置
+	rpc composeAllUserServersConfig(ComposeAllUserServersConfigRequest) returns (ComposeAllUserServersConfigResponse);
+
+	// 查找用户服务基本信息
+	rpc findEnabledUserServerBasic (FindEnabledUserServerBasicRequest) returns (FindEnabledUserServerBasicResponse);
+
+	// 修改用户服务基本信息
+	rpc updateEnabledUserServerBasic (UpdateEnabledUserServerBasicRequest) returns (RPCSuccess);
+
+	// 上传HTTP请求待统计数据
+	rpc uploadServerHTTPRequestStat (UploadServerHTTPRequestStatRequest) returns (RPCSuccess);
+
+	// 检查域名是否已经存在
+	rpc checkServerNameDuplicationInNodeCluster (CheckServerNameDuplicationInNodeClusterRequest) returns (CheckServerNameDuplicationInNodeClusterResponse);
+
+	// 查找最近访问的服务
+	rpc findLatestServers (FindLatestServersRequest) returns (FindLatestServersResponse);
+
+	// 查找某个服务附近的服务
+	rpc findNearbyServers(FindNearbyServersRequest) returns (FindNearbyServersResponse);
+
+	// 清除缓存
+	rpc purgeServerCache(PurgeServerCacheRequest) returns (PurgeServerCacheResponse);
+
+	// 查找流量限制
+	rpc findEnabledServerTrafficLimit(FindEnabledServerTrafficLimitRequest) returns (FindEnabledServerTrafficLimitResponse);
+
+	// 设置流量限制
+	rpc updateServerTrafficLimit(UpdateServerTrafficLimitRequest) returns (RPCSuccess);
+
+	// 修改服务套餐
+	rpc updateServerUserPlan(UpdateServerUserPlanRequest) returns (RPCSuccess);
+
+	// 获取服务套餐信息
+	rpc findServerUserPlan(FindServerUserPlanRequest) returns (FindServerUserPlanResponse);
+
+	// 获取服务配置
+	rpc composeServerConfig(ComposeServerConfigRequest) returns (ComposeServerConfigResponse);
+
+	// 修改服务CRS设置
+	rpc updateServerCRS(UpdateServerCRSRequest) returns (RPCSuccess);
+
+	// 查找服务CRS设置
+	rpc findEnabledServerCRS(FindEnabledServerCRSRequest) returns (FindEnabledServerCRSResponse);
+
+	// 修改服务UAM设置
+	rpc updateServerUAM(UpdateServerUAMRequest) returns (RPCSuccess);
+
+	// 查找服务UAM设置
+	rpc findEnabledServerUAM(FindEnabledServerUAMRequest) returns (FindEnabledServerUAMResponse);
+
+	// 修改服务所属用户
+	rpc updateServerUser(UpdateServerUserRequest) returns (RPCSuccess);
+
+	// 修改服务名称
+	rpc updateServerName(UpdateServerNameRequest) returns (RPCSuccess);
+
+	// 在服务之间复制配置
+	rpc copyServerConfig(CopyServerConfigRequest) returns (RPCSuccess);
+}
+
+// 创建服务
+message CreateServerRequest {
+	int64 userId = 1;
+	int64 adminId = 2;
+	string type = 3;
+	string name = 4;
+	string description = 5;
+
+	// 配置相关
+	bytes serverNamesJSON = 8; // @link json:server_names
+	bytes serverNamesJON = 19 [deprecated = true]; // 已过期，请使用 serverNamesJSON 代替
+	bytes httpJSON = 9;
+	bytes httpsJSON = 10;
+	bytes tcpJSON = 11;
+	bytes tlsJSON = 12;
+	bytes unixJSON = 13;
+	bytes udpJSON = 14;
+	int64 webId = 15;
+	bytes reverseProxyJSON = 16;
+	repeated int64 serverGroupIds = 17;
+	int64 userPlanId = 18;
+
+	int64 nodeClusterId = 30;
+	bytes includeNodesJSON = 31;
+	bytes excludeNodesJSON = 32;
+}
+
+message CreateServerResponse {
+	int64 serverId = 1;
+}
+
+// 修改服务基本信息
+message UpdateServerBasicRequest {
+	int64 serverId = 1;
+	string name = 2;
+	string description = 3;
+	int64 nodeClusterId = 4;
+	bool keepOldConfigs = 7; // 是否在老节点上保留一段时间配置
+	bool isOn = 5;
+	repeated int64 serverGroupIds = 6;
+}
+
+// 修改服务所在分组
+message UpdateServerGroupIdsRequest {
+	int64 serverId = 1;
+	repeated int64 serverGroupIds = 2;
+}
+
+// 修改服务启是否启用
+message UpdateServerIsOnRequest {
+	int64 serverId = 1;
+	bool isOn = 2;
+}
+
+// 修改服务的HTTP等设置
+message UpdateServerHTTPRequest {
+	int64 serverId = 1;
+	bytes httpJSON = 2;
+}
+
+message UpdateServerHTTPSRequest {
+	int64 serverId = 1;
+	bytes httpsJSON = 2;
+}
+
+message UpdateServerTCPRequest {
+	int64 serverId = 1;
+	bytes tcpJSON = 2;
+}
+
+message UpdateServerTLSRequest {
+	int64 serverId = 1;
+	bytes tlsJSON = 2;
+}
+
+message UpdateServerUnixRequest {
+	int64 serverId = 1;
+	bytes unixJSON = 2;
+}
+
+message UpdateServerUDPRequest {
+	int64 serverId = 1;
+	bytes udpJSON = 2;
+}
+
+message UpdateServerWebRequest {
+	int64 serverId = 1;
+	int64 webId = 2;
+}
+
+// 修改服务的反向代理设置
+message UpdateServerReverseProxyRequest {
+	int64 serverId = 1;
+	bytes reverseProxyJSON = 2;
+}
+
+// 查找服务的域名设置
+message FindServerNamesRequest {
+	int64 serverId = 1;
+}
+
+message FindServerNamesResponse {
+	bytes serverNamesJSON = 1;
+	bool isAuditing = 2;
+	int64 auditingAt = 5;
+	bytes auditingServerNamesJSON = 3;
+	ServerNameAuditingResult auditingResult = 4;
+}
+
+// 修改服务的域名设置
+message UpdateServerNamesRequest {
+	int64 serverId = 1;
+	bytes serverNamesJSON = 2;
+}
+
+// 审核服务的域名设置
+message UpdateServerNamesAuditingRequest {
+	int64 serverId = 1;
+	ServerNameAuditingResult auditingResult = 2;
+}
+
+// 修改服务的DNS相关设置
+message UpdateServerDNSRequest {
+	int64 serverId = 1;
+	bool supportCNAME = 2;
+}
+
+// 重新生成CNAME
+message RegenerateServerDNSNameRequest {
+	int64 serverId = 1;
+}
+
+// 修改服务的CNAME
+message UpdateServerDNSNameRequest {
+	int64 serverId = 1;
+	string dnsName = 2;
+}
+
+// 使用CNAME查找服务
+message FindServerIdWithDNSNameRequest {
+	int64 nodeClusterId = 1;
+	string dnsName = 2;
+}
+
+message FindServerIdWithDNSNameResponse {
+	int64 serverId = 1;
+}
+
+// 计算服务数量
+message CountAllEnabledServersMatchRequest {
+	int64 serverGroupId = 1; // 服务分组ID，如果为-1表示查找未分组
+	string keyword = 2;
+	int64 userId = 3;
+	int64 nodeClusterId = 4;
+	int32 auditingFlag = 5;
+	string protocolFamily = 6;
+}
+
+// 列出单页服务
+message ListEnabledServersMatchRequest {
+	int64 offset = 1;
+	int64 size = 2;
+	int64 serverGroupId = 3;  // 服务分组ID，如果为-1表示查找未分组
+	string keyword = 4;
+	int64 userId = 5;
+	int64 nodeClusterId = 6;
+	int32 auditingFlag = 7;
+	string protocolFamily = 8;
+	bool trafficOutAsc = 9;
+	bool trafficOutDesc = 10;
+	bool ignoreServerNames = 11; // 忽略域名
+	bool ignoreSSLCerts = 12; // 忽略证书
+}
+
+message ListEnabledServersMatchResponse {
+	repeated Server servers = 1;
+}
+
+// 禁用服务
+message DeleteServerRequest {
+	int64 serverId = 1;
+}
+
+// 查找单个服务
+message FindEnabledServerRequest {
+	int64 serverId = 1; // 服务ID
+	bool ignoreSSLCerts = 2; // 忽略SSL证书数据
+}
+
+message FindEnabledServerResponse {
+	Server server = 1;
+}
+
+// 查找服务配置
+message FindEnabledServerConfigRequest {
+	int64 serverId = 1;
+}
+
+message FindEnabledServerConfigResponse {
+	bytes serverJSON = 1;
+}
+
+// 查找服务的服务类型
+message FindEnabledServerTypeRequest {
+	int64 serverId = 1;
+}
+
+message FindEnabledServerTypeResponse {
+	string type = 1;
+}
+
+// 查找反向代理设置
+message FindAndInitServerReverseProxyConfigRequest {
+	int64 serverId = 1;
+}
+
+message FindAndInitServerReverseProxyConfigResponse {
+	bytes reverseProxyJSON = 1;
+	bytes reverseProxyRefJSON = 2;
+}
+
+// 初始化Web设置
+message FindAndInitServerWebConfigRequest {
+	int64 serverId = 1;
+}
+
+message FindAndInitServerWebConfigResponse {
+	bytes webJSON = 1;
+}
+
+// 计算使用某个国密证书的服务数量
+message CountAllEnabledServersWithGMCertIdRequest {
+	int64 gmCertId = 1;
+}
+
+// 查找使用某个国密证书的所有服务
+message FindAllEnabledServersWithGMCertIdRequest {
+	int64 gmCertId = 1;
+}
+
+message FindAllEnabledServersWithGMCertIdResponse {
+	repeated Server servers = 1;
+}
+
+// 计算使用某个SSL证书的服务数量
+message CountAllEnabledServersWithSSLCertIdRequest {
+	int64 sslCertId = 1;
+}
+
+// 查找使用某个SSL证书的所有服务
+message FindAllEnabledServersWithSSLCertIdRequest {
+	int64 sslCertId = 1;
+}
+
+message FindAllEnabledServersWithSSLCertIdResponse {
+	repeated Server servers = 1;
+}
+
+// 计算运行在某个集群上的所有服务数量
+message CountAllEnabledServersWithNodeClusterIdRequest {
+	int64 nodeClusterId = 1;
+}
+
+// 计算使用某个分组的服务数量
+message CountAllEnabledServersWithServerGroupIdRequest {
+	int64 serverGroupId = 1;
+}
+
+// 通知更新
+message NotifyServersChangeRequest {
+
+}
+
+message NotifyServersChangeResponse {
+
+}
+
+// 取得某个集群下的所有服务相关的DNS
+message FindAllEnabledServersDNSWithNodeClusterIdRequest {
+	int64 nodeClusterId = 1;
+}
+
+message FindAllEnabledServersDNSWithNodeClusterIdResponse {
+	repeated ServerDNSInfo servers = 1;
+}
+
+message ServerDNSInfo {
+	int64 id = 1;
+	string name = 2;
+	string dnsName = 3;
+}
+
+// 查找单个服务的DNS信息
+message FindEnabledServerDNSRequest {
+	int64 serverId = 1;
+}
+
+message FindEnabledServerDNSResponse {
+	string dnsName = 1;
+	DNSDomain domain = 2;
+	bool supportCNAME = 3;
+}
+
+// 检查服务是否属于某个用户
+message CheckUserServerRequest {
+	int64 serverId = 1;
+}
+
+// 查找一个用户下的所有域名列表
+message FindAllEnabledServerNamesWithUserIdRequest {
+	int64 userId = 1;
+}
+
+message FindAllEnabledServerNamesWithUserIdResponse {
+	repeated string serverNames = 1;
+}
+
+// 查找一个用户下的所有服务
+message FindAllUserServersRequest {
+	int64 userId = 1;
+}
+
+message FindAllUserServersResponse {
+	repeated Server servers = 1; // 只返回一些简要信息
+}
+
+// 查找某个用户下的服务配置
+message ComposeAllUserServersConfigRequest {
+	int64 userId = 1;
+}
+
+message ComposeAllUserServersConfigResponse {
+	bytes serversConfigJSON = 1; // [server config1, server config2, ...]
+}
+
+// 查找用户服务基本信息
+message FindEnabledUserServerBasicRequest {
+	int64 serverId = 1;
+}
+
+message FindEnabledUserServerBasicResponse {
+	Server server = 1;
+}
+
+// 修改用户服务基本信息
+message UpdateEnabledUserServerBasicRequest {
+	int64 serverId = 1;
+	string name = 2;
+}
+
+// 上传HTTP请求待统计数据
+message UploadServerHTTPRequestStatRequest {
+	string month = 1;
+	string day = 2;
+	repeated RegionCity regionCities = 3;
+	repeated RegionProvider regionProviders = 4;
+	repeated System systems = 5;
+	repeated Browser browsers = 6;
+	repeated HTTPFirewallRuleGroup httpFirewallRuleGroups = 7;
+
+	message RegionCity {
+		int64 serverId = 1;
+		int64 countRequests = 5;
+		int64 bytes = 6;
+		int64 countAttackRequests = 7;
+		int64 attackBytes = 8;
+		int64 countryId = 9;
+		int64 provinceId = 10;
+		int64 cityId = 11;
+	}
+
+	message RegionProvider {
+		int64 serverId = 1;
+		int64 count = 3;
+		int64 providerId = 4;
+	}
+
+	message System {
+		int64 serverId = 1;
+		string name = 2;
+		string version = 3;
+		int64 count = 4;
+	}
+
+	message Browser {
+		int64 serverId = 1;
+		string name = 2;
+		string version = 3;
+		int64 count = 4;
+	}
+
+	message HTTPFirewallRuleGroup {
+		int64 serverId = 1;
+		int64 httpFirewallRuleGroupId = 2;
+		string action = 3;
+		int64 count = 4;
+	}
+}
+
+// 检查域名是否已经存在
+message CheckServerNameDuplicationInNodeClusterRequest {
+	int64 nodeClusterId = 1;
+	repeated string serverNames = 2; // 可以同时检查一批域名
+	int64 excludeServerId = 3; // 要排除的服务ID
+	bool supportWildcard = 4;// 支持泛解析
+}
+
+message CheckServerNameDuplicationInNodeClusterResponse {
+	repeated string duplicatedServerNames = 1;
+}
+
+// 查找最近访问的服务
+message FindLatestServersRequest {
+	int64 size = 1;
+}
+
+message FindLatestServersResponse {
+	repeated Server servers = 1;
+}
+
+// 查找某个服务附近的服务
+message FindNearbyServersRequest {
+	int64 serverId = 1;
+}
+
+message FindNearbyServersResponse {
+	string scope = 1; // 范围 cluster|group
+	repeated GroupInfo groups = 2;
+
+	message GroupInfo {
+		string name = 1;
+		repeated Server servers = 2;
+	}
+}
+
+// 清除缓存
+message PurgeServerCacheRequest {
+	repeated string keys = 2;
+	repeated string prefixes = 3;
+	string description = 4; // 任务描述
+}
+
+message PurgeServerCacheResponse {
+	bool isOk = 1;
+	string message = 2;
+}
+
+// 查找流量限制
+message FindEnabledServerTrafficLimitRequest {
+	int64 serverId = 1;
+}
+
+message FindEnabledServerTrafficLimitResponse {
+	bytes trafficLimitJSON = 1;
+}
+
+// 设置流量限制
+message UpdateServerTrafficLimitRequest {
+	int64 serverId = 1;
+	bytes trafficLimitJSON = 2;
+}
+
+// 修改服务套餐
+message UpdateServerUserPlanRequest {
+	int64 serverId = 1;
+	int64 userPlanId = 2;
+}
+
+// 获取服务套餐信息
+message FindServerUserPlanRequest {
+	int64 serverId = 1;
+}
+
+message FindServerUserPlanResponse {
+	UserPlan userPlan = 1;
+}
+
+// 获取服务配置
+message ComposeServerConfigRequest {
+	int64 serverId = 1;
+}
+
+message ComposeServerConfigResponse {
+	bytes serverConfigJSON = 1;
+}
+
+// 修改服务CRS设置
+message UpdateServerCRSRequest {
+	int64 serverId = 1;
+	bytes crsJSON = 2;
+}
+
+// 查找服务CRS设置
+message FindEnabledServerCRSRequest {
+	int64 serverId = 1;
+}
+
+message FindEnabledServerCRSResponse {
+	bytes crsJSON = 1;
+}
+
+// 修改服务UAM设置
+message UpdateServerUAMRequest {
+	int64 serverId = 1;
+	bytes uamJSON = 2;
+}
+
+// 查找服务UAM设置
+message FindEnabledServerUAMRequest {
+	int64 serverId = 1;
+}
+
+message FindEnabledServerUAMResponse {
+	bytes uamJSON = 1;
+}
+
+// 修改服务所属用户
+message UpdateServerUserRequest {
+	int64 serverId = 1;
+	int64 userId = 2;
+}
+
+// 修改服务名称
+message UpdateServerNameRequest {
+	int64 serverId = 1; // 服务ID
+	string name = 2; // 服务名称
+}
+
+// 在服务之间复制配置
+message CopyServerConfigRequest {
+	int64 serverId = 1; // 被复制服务ID
+	string configCode = 2; // 要拷贝的配置代号
+	string targetType = 3; // 目标类型：servers, groups, cluster（当前集群下所有服务，只有管理员才有权限）、user（当前用户下所有服务）
+	repeated int64 targetServerIds = 4; // 目标服务ID列表
+	repeated int64 targetServerGroupIds = 5; // 目标服务分组ID列表
+	int64 targetClusterId = 6; // 目标集群ID
+	int64 targetUserId = 7; // 目标用户ID
+}

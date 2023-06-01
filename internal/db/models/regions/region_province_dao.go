@@ -18,8 +18,6 @@ const (
 	RegionProvinceStateDisabled = 0 // 已禁用
 )
 
-var regionProvinceNameAndIdCacheMap = map[string]int64{} // province name @ country id => province id
-
 type RegionProvinceDAO dbs.DAO
 
 func NewRegionProvinceDAO() *RegionProvinceDAO {
@@ -98,31 +96,6 @@ func (this *RegionProvinceDAO) FindProvinceIdWithName(tx *dbs.Tx, countryId int6
 		FindInt64Col(0)
 }
 
-// FindProvinceIdWithNameCacheable 根据省份名查找省份ID，并可使用缓存
-func (this *RegionProvinceDAO) FindProvinceIdWithNameCacheable(tx *dbs.Tx, countryId int64, provinceName string) (int64, error) {
-	var key = provinceName + "@" + numberutils.FormatInt64(countryId)
-
-	SharedCacheLocker.RLock()
-	provinceId, ok := regionProvinceNameAndIdCacheMap[key]
-	if ok {
-		SharedCacheLocker.RUnlock()
-		return provinceId, nil
-	}
-	SharedCacheLocker.RUnlock()
-
-	provinceId, err := this.FindProvinceIdWithName(tx, countryId, provinceName)
-	if err != nil {
-		return 0, err
-	}
-	if provinceId > 0 {
-		SharedCacheLocker.Lock()
-		regionProvinceNameAndIdCacheMap[key] = provinceId
-		SharedCacheLocker.Unlock()
-	}
-
-	return provinceId, nil
-}
-
 // CreateProvince 创建省份
 func (this *RegionProvinceDAO) CreateProvince(tx *dbs.Tx, countryId int64, name string, dataId string) (int64, error) {
 	var op = NewRegionProvinceOperator()
@@ -149,7 +122,7 @@ func (this *RegionProvinceDAO) FindAllEnabledProvincesWithCountryId(tx *dbs.Tx, 
 	_, err = this.Query(tx).
 		State(RegionProvinceStateEnabled).
 		Attr("countryId", countryId).
-		Asc().
+		AscPk().
 		Slice(&result).
 		FindAll()
 	return
@@ -159,7 +132,7 @@ func (this *RegionProvinceDAO) FindAllEnabledProvincesWithCountryId(tx *dbs.Tx, 
 func (this *RegionProvinceDAO) FindAllEnabledProvinces(tx *dbs.Tx) (result []*RegionProvince, err error) {
 	_, err = this.Query(tx).
 		State(RegionProvinceStateEnabled).
-		Asc().
+		AscPk().
 		Slice(&result).
 		FindAll()
 	return
@@ -174,13 +147,6 @@ func (this *RegionProvinceDAO) UpdateProvinceCustom(tx *dbs.Tx, provinceId int64
 	if err != nil {
 		return err
 	}
-
-	// 清空缓存
-	defer func() {
-		SharedCacheLocker.Lock()
-		regionProvinceNameAndIdCacheMap = map[string]int64{}
-		SharedCacheLocker.Unlock()
-	}()
 
 	return this.Query(tx).
 		Pk(provinceId).

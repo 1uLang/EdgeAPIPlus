@@ -2,9 +2,9 @@ package services
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/acme"
 	acmemodels "github.com/TeaOSLab/EdgeAPI/internal/db/models/acme"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // ACMEUserService 用户服务
@@ -21,6 +21,12 @@ func (this *ACMEUserService) CreateACMEUser(ctx context.Context, req *pb.CreateA
 	}
 
 	var tx = this.NullTx()
+
+	if adminId > 0 {
+		if req.UserId > 0 {
+			userId = req.UserId
+		}
+	}
 
 	acmeUserId, err := acmemodels.SharedACMEUserDAO.CreateACMEUser(tx, adminId, userId, req.AcmeProviderCode, req.AcmeProviderAccountId, req.Email, req.Description)
 	if err != nil {

@@ -3,7 +3,7 @@ package models
 import (
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -157,6 +157,9 @@ func (this *HTTPHeaderPolicyDAO) UpdateDeletingHeaders(tx *dbs.Tx, policyId int6
 		return errors.New("invalid policyId")
 	}
 
+	if headerNames == nil {
+		headerNames = []string{}
+	}
 	namesJSON, err := json.Marshal(headerNames)
 	if err != nil {
 		return err
@@ -164,7 +167,31 @@ func (this *HTTPHeaderPolicyDAO) UpdateDeletingHeaders(tx *dbs.Tx, policyId int6
 
 	var op = NewHTTPHeaderPolicyOperator()
 	op.Id = policyId
-	op.DeleteHeaders = string(namesJSON)
+	op.DeleteHeaders = namesJSON
+	err = this.Save(tx, op)
+	if err != nil {
+		return err
+	}
+	return this.NotifyUpdate(tx, policyId)
+}
+
+// UpdateNonStandardHeaders 修改非标Headers
+func (this *HTTPHeaderPolicyDAO) UpdateNonStandardHeaders(tx *dbs.Tx, policyId int64, headerNames []string) error {
+	if policyId <= 0 {
+		return errors.New("invalid policyId")
+	}
+
+	if headerNames == nil {
+		headerNames = []string{}
+	}
+	namesJSON, err := json.Marshal(headerNames)
+	if err != nil {
+		return err
+	}
+
+	var op = NewHTTPHeaderPolicyOperator()
+	op.Id = policyId
+	op.NonStandardHeaders = namesJSON
 	err = this.Save(tx, op)
 	if err != nil {
 		return err
@@ -182,19 +209,19 @@ func (this *HTTPHeaderPolicyDAO) ComposeHeaderPolicyConfig(tx *dbs.Tx, headerPol
 		return nil, nil
 	}
 
-	config := &shared.HTTPHeaderPolicy{}
+	var config = &shared.HTTPHeaderPolicy{}
 	config.Id = int64(policy.Id)
 	config.IsOn = policy.IsOn
 
 	// SetHeaders
 	if IsNotNull(policy.SetHeaders) {
-		refs := []*shared.HTTPHeaderRef{}
+		var refs = []*shared.HTTPHeaderRef{}
 		err = json.Unmarshal(policy.SetHeaders, &refs)
 		if err != nil {
 			return nil, err
 		}
 		if len(refs) > 0 {
-			resultRefs := []*shared.HTTPHeaderRef{}
+			var resultRefs = []*shared.HTTPHeaderRef{}
 			for _, ref := range refs {
 				headerConfig, err := SharedHTTPHeaderDAO.ComposeHeaderConfig(tx, ref.HeaderId)
 				if err != nil {
@@ -212,12 +239,32 @@ func (this *HTTPHeaderPolicyDAO) ComposeHeaderPolicyConfig(tx *dbs.Tx, headerPol
 
 	// Delete Headers
 	if IsNotNull(policy.DeleteHeaders) {
-		headers := []string{}
+		var headers = []string{}
 		err = json.Unmarshal(policy.DeleteHeaders, &headers)
 		if err != nil {
 			return nil, err
 		}
 		config.DeleteHeaders = headers
+	}
+
+	// Non-Standard Headers
+	if IsNotNull(policy.NonStandardHeaders) {
+		var headers = []string{}
+		err = json.Unmarshal(policy.NonStandardHeaders, &headers)
+		if err != nil {
+			return nil, err
+		}
+		config.NonStandardHeaders = headers
+	}
+
+	// CORS
+	if IsNotNull(policy.Cors) {
+		var corsConfig = shared.NewHTTPCORSHeaderConfig()
+		err = json.Unmarshal(policy.Cors, corsConfig)
+		if err != nil {
+			return nil, err
+		}
+		config.CORS = corsConfig
 	}
 
 	// Expires
@@ -233,6 +280,46 @@ func (this *HTTPHeaderPolicyDAO) FindHeaderPolicyIdWithHeaderId(tx *dbs.Tx, head
 		Param("jsonQuery", maps.Map{"headerId": headerId}.AsJSON()).
 		ResultPk().
 		FindInt64Col(0)
+}
+
+// UpdateHeaderPolicyCORS 修改CORS
+func (this *HTTPHeaderPolicyDAO) UpdateHeaderPolicyCORS(tx *dbs.Tx, headerPolicyId int64, corsConfig *shared.HTTPCORSHeaderConfig) error {
+	if headerPolicyId <= 0 {
+		return errors.New("invalid headerId")
+	}
+
+	corsJSON, err := json.Marshal(corsConfig)
+	if err != nil {
+		return err
+	}
+
+	err = this.Query(tx).
+		Pk(headerPolicyId).
+		Set("cors", corsJSON).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyUpdate(tx, headerPolicyId)
+}
+
+// CheckUserHeaderPolicy 检查用户权限
+func (this *HTTPHeaderPolicyDAO) CheckUserHeaderPolicy(tx *dbs.Tx, userId int64, policyId int64) error {
+	if userId <= 0 || policyId <= 0 {
+		return ErrNotFound
+	}
+
+	webId, err := SharedHTTPWebDAO.FindEnabledWebIdWithHeaderPolicyId(tx, policyId)
+	if err != nil {
+		return err
+	}
+
+	if webId <= 0 {
+		return ErrNotFound
+	}
+
+	return SharedHTTPWebDAO.CheckUserWeb(tx, userId, webId)
 }
 
 // NotifyUpdate 通知更新

@@ -1,0 +1,205 @@
+syntax = "proto3";
+option go_package = "./pb";
+
+package pb;
+
+import "models/model_http_access_log.proto";
+
+// 访问日志相关服务
+service HTTPAccessLogService {
+	// 创建访问日志
+	rpc createHTTPAccessLogs (CreateHTTPAccessLogsRequest) returns (CreateHTTPAccessLogsResponse);
+
+	// 列出单页访问日志
+	rpc listHTTPAccessLogs (ListHTTPAccessLogsRequest) returns (ListHTTPAccessLogsResponse);
+
+	// 查找单个日志
+	rpc findHTTPAccessLog (FindHTTPAccessLogRequest) returns (FindHTTPAccessLogResponse);
+
+	// 查找日志分区
+	rpc findHTTPAccessLogPartitions(FindHTTPAccessLogPartitionsRequest) returns (FindHTTPAccessLogPartitionsResponse);
+
+	// dengbao-waf 定制rpc接口 列出单页访问日志 新增 时间条件
+	rpc searchHTTPAccessLogs (SearchHTTPAccessLogsRequest) returns (SearchHTTPAccessLogsResponse);
+
+	// 统计用户相关域名的攻击排行（ip/区域）
+	rpc statisticsHTTPAccessTop (StatisticsHTTPAccessTopRequest) returns (StatisticsHTTPAccessTopResponse);
+
+	// 统计指定日期用户相关域名对应的攻击次数
+	rpc statisticsHTTPAccess (StatisticsHTTPAccessRequest) returns (StatisticsHTTPAccessResponse);
+
+	// 统计指定日期用户相关域名对应的攻击类型次数
+	rpc statisticsHTTPAccessType (StatisticsHTTPAccessTypeRequest) returns (StatisticsHTTPAccessTypeResponse);
+	// 统计统计指定用户日期下 各访问的 访问条数 访问总次数  防护总次数 访问IP总数 拦截IP总数
+	rpc StatisticsHTTPAccessLogs( StatisticsHTTPAccessTypeRequest)returns(StatisticsHTTPAccessLogResponse);
+	// 统计最受攻击的域名排行
+	rpc  StatisticsAttackURLTop(StatisticsHTTPAccessTopRequest)returns(StatisticsHTTPAttackURLTopResponse);
+	// 统计客户端访问IP排行
+	rpc  StatisticsAccessIPTop(StatisticsHTTPAccessTopRequest)returns(StatisticsHTTPAccessIPTopResponse);
+	// 统计客户端访问IP排行
+	rpc  StatusCodeStatistics(StatisticsHTTPAccessTopRequest)returns(StatisticsStatusCodeTopResponse);
+}
+
+// 创建访问日志
+message CreateHTTPAccessLogsRequest {
+	repeated HTTPAccessLog httpAccessLogs = 1;
+}
+
+message CreateHTTPAccessLogsResponse {
+
+}
+
+// 列出往前的单页访问日志
+message ListHTTPAccessLogsRequest {
+	string requestId = 1; // 上一页请求ID，可选
+	int64 serverId = 2; // 服务ID
+	int64 size = 3; // 单页条数
+	string day = 4; // 日期，格式YYYYMMDD
+	string hourFrom = 17; // 开始小时
+	string hourTo = 18; // 结束小时
+	bool reverse = 5; // 是否反向查找，可选
+	bool hasError = 6; // 是否有错误，可选
+	int64 firewallPolicyId = 7; // WAF策略ID，可选
+	int64 firewallRuleGroupId = 8; // WAF分组ID，可选
+	int64 firewallRuleSetId = 9; // WAF规则集ID，可选
+	int64 userId = 10; // 用户ID
+	bool hasFirewallPolicy = 11; // 是否有WAF策略
+	string keyword = 12; // 关键词
+	string ip = 13;
+	string domain = 14;
+	int64 nodeClusterId = 15;
+	int64 nodeId = 16;
+	int32 partition = 19; // 分区
+}
+
+message ListHTTPAccessLogsResponse {
+	repeated HTTPAccessLog accessLogs = 1 [deprecated = true];
+	repeated HTTPAccessLog httpAccessLogs = 4;
+	string requestId = 2;
+	bool hasMore = 3;
+}
+
+// 查找单个日志
+message FindHTTPAccessLogRequest {
+	string requestId = 1;
+}
+
+message FindHTTPAccessLogResponse {
+	HTTPAccessLog httpAccessLog = 1;
+}
+
+// 查找日志分区
+message FindHTTPAccessLogPartitionsRequest {
+	string day = 1; // YYYYMMDD
+}
+
+message FindHTTPAccessLogPartitionsResponse {
+	repeated int32  partitions = 1;
+	repeated int32 reversePartitions = 2;
+}
+
+
+// 列出往前的单页访问日志
+message SearchHTTPAccessLogsRequest {
+	string requestId = 1; // 上一页请求ID，可选
+	int64 serverId = 2; // 服务ID
+	int64 size = 3; // 单页条数
+	string day = 4; // 日期，格式YYYYMMDD
+	int64 userId = 5; // 用户ID
+	string ip = 6;    //攻击ip
+	string domain = 7;    //被攻击域名
+	uint64  startAt = 8;    //起始时间
+	uint64 endAt = 9;    //结束时间
+	string code = 10;   //攻击类型code
+	bool hasAll = 11;   //所有访问日志
+	bool hasError = 12;//错误日志
+	string requestMethod = 13;  //请求方式
+	string keyword = 14; // 关键词
+}
+
+message SearchHTTPAccessLogsResponse {
+	repeated HTTPAccessLog accessLogs = 1 [deprecated = true];
+	repeated HTTPAccessLog httpAccessLogs = 4;
+	string requestId = 2;
+	bool hasMore = 3;
+}
+message StatisticsHTTPAccessTopRequest {
+	string day = 1 ; //查询日期
+	int64 user = 2;    //用户id
+	int32 top = 3;    //排行前几
+}
+message StatisticsHTTPAccessTopResponse {
+	repeated StatisticsHTTPAccess stats = 1;  //攻击
+}
+
+message StatisticsHTTPAccess {
+	AccessTop ip = 1;   //ip排名
+	AccessTop region = 2;   //区域排名
+	int64  total = 3;   //总数
+	int64 serverId=4; // 服务ID
+}
+message AccessTop {
+	repeated string names = 1;    //值
+	repeated int64 counts = 2;  //次数
+}
+message StatisticsHTTPAccessRequest {
+	repeated string days = 1;   //查询日期
+	int64 user = 2;   //用户id
+}
+message StatisticsHTTPAccessResponse {
+	repeated int64 counts = 1;  //次数
+}
+message StatisticsHTTPAccessTypeRequest {
+	string day = 1;   //查询日期
+	int64 user = 2;   //用户id
+}
+message StatisticsHTTPAccessTypeResponse {
+	repeated HTTPAccessType attacks = 1;  //攻击
+}
+message HTTPAccessType {
+	string serverId = 1; // 服务ID
+	string code = 2; //攻击类型分组code
+	string name = 3; //攻击类型名称
+	int64  count = 4;//攻击次数
+}
+message StatisticsHTTPAccessLogResponse {
+	repeated HTTPAccessStat attacks = 1;  //攻击
+}
+message HTTPAccessStat {
+	int64 serverId = 1; // 服务ID
+	int64 accessTotal = 2; //访问总数
+	int64 attackTotal = 3; //防护总数
+	int64  accessIpTotal = 4;//访问IP数
+	int64  attackIpTotal = 5;//拦截IP数
+}
+message StatisticsHTTPAttackURLTopResponse {
+	repeated HTTPAttackURL attacks = 1;  //攻击
+}
+message HTTPAttackURL {
+	int64 serverId = 1; // 服务ID
+	attackCount hosts = 2; //攻击域名 - 次数
+	attackCount  uris = 3;//攻击uri - 次数
+}
+message attackCount {
+	repeated  string values = 1;
+	repeated int64 counts = 2;
+}
+message StatisticsHTTPAccessIPTopResponse {
+	repeated HTTPAccessIP access = 1;  //访问
+}
+message HTTPAccessIP {
+	int64 serverId = 1; // 服务ID
+	repeated string ip = 2; //访问域名
+	repeated int64  count = 3;//攻击次数
+}
+
+message StatisticsStatusCodeTopResponse {
+	repeated StatusCode codes = 1;  //访问
+}
+message StatusCode {
+	int64 serverId = 1; // 服务ID
+	repeated uint32 code = 2; //状态码
+	repeated int64  count = 3;//次数
+}
+
+

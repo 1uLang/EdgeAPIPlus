@@ -3,12 +3,12 @@ package tasks
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/iwind/TeaGo/maps"
 	"time"
 )
@@ -64,11 +64,11 @@ func (this *HealthCheckClusterTask) Run() {
 	if this.config.Interval == nil {
 		return
 	}
-	duration := this.config.Interval.Duration()
+	var duration = this.config.Interval.Duration()
 	if duration <= 0 {
 		return
 	}
-	ticker := utils.NewTicker(duration)
+	var ticker = utils.NewTicker(duration)
 	goman.New(func() {
 		for ticker.Wait() {
 			err := this.Loop()
@@ -92,7 +92,7 @@ func (this *HealthCheckClusterTask) Stop() {
 // Loop 单个循环任务
 func (this *HealthCheckClusterTask) Loop() error {
 	// 检查是否为主节点
-	if !models.SharedAPINodeDAO.CheckAPINodeIsPrimaryWithoutErr() {
+	if !this.IsPrimaryNode() {
 		return nil
 	}
 
@@ -127,7 +127,7 @@ func (this *HealthCheckClusterTask) Loop() error {
 			if err != nil {
 				return err
 			}
-			var message = "有" + numberutils.FormatInt(len(failedResults)) + "个节点在健康检查中出现问题"
+			var message = "有" + numberutils.FormatInt(len(failedResults)) + "个节点IP在健康检查中出现问题"
 			err = models.NewMessageDAO().CreateClusterMessage(nil, nodeconfigs.NodeRoleNode, this.clusterId, models.MessageTypeHealthCheckFailed, models.MessageLevelError, message, message, failedResultsJSON)
 			if err != nil {
 				return err

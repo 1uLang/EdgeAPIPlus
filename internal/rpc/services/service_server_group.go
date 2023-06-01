@@ -3,9 +3,9 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 )
 
 // ServerGroupService 服务分组相关服务
@@ -85,9 +85,13 @@ func (this *ServerGroupService) DeleteServerGroup(ctx context.Context, req *pb.D
 // FindAllEnabledServerGroups 查询所有分组
 func (this *ServerGroupService) FindAllEnabledServerGroups(ctx context.Context, req *pb.FindAllEnabledServerGroupsRequest) (*pb.FindAllEnabledServerGroupsResponse, error) {
 	// 校验请求
-	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	adminId, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
+	}
+
+	if adminId > 0 {
+		userId = req.UserId
 	}
 
 	var tx = this.NullTx()
@@ -96,10 +100,11 @@ func (this *ServerGroupService) FindAllEnabledServerGroups(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
-	result := []*pb.ServerGroup{}
+	var result = []*pb.ServerGroup{}
 	for _, group := range groups {
 		result = append(result, &pb.ServerGroup{
 			Id:   int64(group.Id),
+			IsOn: group.IsOn,
 			Name: group.Name,
 		})
 	}
@@ -153,6 +158,7 @@ func (this *ServerGroupService) FindEnabledServerGroup(ctx context.Context, req 
 	return &pb.FindEnabledServerGroupResponse{
 		ServerGroup: &pb.ServerGroup{
 			Id:   int64(group.Id),
+			IsOn: group.IsOn,
 			Name: group.Name,
 		},
 	}, nil
@@ -193,7 +199,7 @@ func (this *ServerGroupService) FindAndInitServerGroupHTTPReverseProxyConfig(ctx
 		}
 	}
 
-	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, nil)
+	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +252,7 @@ func (this *ServerGroupService) FindAndInitServerGroupTCPReverseProxyConfig(ctx 
 		}
 	}
 
-	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, nil)
+	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +305,7 @@ func (this *ServerGroupService) FindAndInitServerGroupUDPReverseProxyConfig(ctx 
 		}
 	}
 
-	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, nil)
+	reverseProxyConfig, err := models.SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +469,7 @@ func (this *ServerGroupService) FindEnabledServerGroupConfigInfo(ctx context.Con
 		result.HasUDPReverseProxy = ref.IsPrior
 	}
 
-	config, err := models.SharedServerGroupDAO.ComposeGroupConfig(tx, int64(group.Id), nil)
+	config, err := models.SharedServerGroupDAO.ComposeGroupConfig(tx, int64(group.Id), false, false, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +516,7 @@ func (this *ServerGroupService) FindAndInitServerGroupWebConfig(ctx context.Cont
 		}
 	}
 
-	webConfig, err := models.SharedHTTPWebDAO.ComposeWebConfig(tx, webId, nil)
+	webConfig, err := models.SharedHTTPWebDAO.ComposeWebConfig(tx, webId, true, false, nil, nil)
 	if err != nil {
 		return nil, err
 	}

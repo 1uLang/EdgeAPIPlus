@@ -2,9 +2,10 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -279,7 +280,7 @@ func (this *ServerGroupDAO) InitGroupWeb(tx *dbs.Tx, groupId int64) (int64, erro
 }
 
 // ComposeGroupConfig 组合配置
-func (this *ServerGroupDAO) ComposeGroupConfig(tx *dbs.Tx, groupId int64, cacheMap *utils.CacheMap) (*serverconfigs.ServerGroupConfig, error) {
+func (this *ServerGroupDAO) ComposeGroupConfig(tx *dbs.Tx, groupId int64, forNode bool, forList bool, dataMap *shared.DataMap, cacheMap *utils.CacheMap) (*serverconfigs.ServerGroupConfig, error) {
 	if cacheMap == nil {
 		cacheMap = utils.NewCacheMap()
 	}
@@ -315,65 +316,67 @@ func (this *ServerGroupDAO) ComposeGroupConfig(tx *dbs.Tx, groupId int64, cacheM
 		IsOn: group.IsOn,
 	}
 
-	if IsNotNull(group.HttpReverseProxy) {
-		reverseProxyRef := &serverconfigs.ReverseProxyRef{}
-		err := json.Unmarshal(group.HttpReverseProxy, reverseProxyRef)
-		if err != nil {
-			return nil, err
-		}
-		config.HTTPReverseProxyRef = reverseProxyRef
+	if !forList {
+		if IsNotNull(group.HttpReverseProxy) {
+			reverseProxyRef := &serverconfigs.ReverseProxyRef{}
+			err := json.Unmarshal(group.HttpReverseProxy, reverseProxyRef)
+			if err != nil {
+				return nil, err
+			}
+			config.HTTPReverseProxyRef = reverseProxyRef
 
-		reverseProxyConfig, err := SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, cacheMap)
-		if err != nil {
-			return nil, err
+			reverseProxyConfig, err := SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, dataMap, cacheMap)
+			if err != nil {
+				return nil, err
+			}
+			if reverseProxyConfig != nil {
+				config.HTTPReverseProxy = reverseProxyConfig
+			}
 		}
-		if reverseProxyConfig != nil {
-			config.HTTPReverseProxy = reverseProxyConfig
-		}
-	}
 
-	if IsNotNull(group.TcpReverseProxy) {
-		reverseProxyRef := &serverconfigs.ReverseProxyRef{}
-		err := json.Unmarshal(group.TcpReverseProxy, reverseProxyRef)
-		if err != nil {
-			return nil, err
-		}
-		config.TCPReverseProxyRef = reverseProxyRef
+		if IsNotNull(group.TcpReverseProxy) {
+			reverseProxyRef := &serverconfigs.ReverseProxyRef{}
+			err := json.Unmarshal(group.TcpReverseProxy, reverseProxyRef)
+			if err != nil {
+				return nil, err
+			}
+			config.TCPReverseProxyRef = reverseProxyRef
 
-		reverseProxyConfig, err := SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, cacheMap)
-		if err != nil {
-			return nil, err
+			reverseProxyConfig, err := SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, dataMap, cacheMap)
+			if err != nil {
+				return nil, err
+			}
+			if reverseProxyConfig != nil {
+				config.TCPReverseProxy = reverseProxyConfig
+			}
 		}
-		if reverseProxyConfig != nil {
-			config.TCPReverseProxy = reverseProxyConfig
-		}
-	}
 
-	if IsNotNull(group.UdpReverseProxy) {
-		reverseProxyRef := &serverconfigs.ReverseProxyRef{}
-		err := json.Unmarshal(group.UdpReverseProxy, reverseProxyRef)
-		if err != nil {
-			return nil, err
-		}
-		config.UDPReverseProxyRef = reverseProxyRef
+		if IsNotNull(group.UdpReverseProxy) {
+			reverseProxyRef := &serverconfigs.ReverseProxyRef{}
+			err := json.Unmarshal(group.UdpReverseProxy, reverseProxyRef)
+			if err != nil {
+				return nil, err
+			}
+			config.UDPReverseProxyRef = reverseProxyRef
 
-		reverseProxyConfig, err := SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, cacheMap)
-		if err != nil {
-			return nil, err
+			reverseProxyConfig, err := SharedReverseProxyDAO.ComposeReverseProxyConfig(tx, reverseProxyRef.ReverseProxyId, dataMap, cacheMap)
+			if err != nil {
+				return nil, err
+			}
+			if reverseProxyConfig != nil {
+				config.UDPReverseProxy = reverseProxyConfig
+			}
 		}
-		if reverseProxyConfig != nil {
-			config.UDPReverseProxy = reverseProxyConfig
-		}
-	}
 
-	// web
-	if group.WebId > 0 {
-		webConfig, err := SharedHTTPWebDAO.ComposeWebConfig(tx, int64(group.WebId), cacheMap)
-		if err != nil {
-			return nil, err
-		}
-		if webConfig != nil {
-			config.Web = webConfig
+		// web
+		if group.WebId > 0 {
+			webConfig, err := SharedHTTPWebDAO.ComposeWebConfig(tx, int64(group.WebId), true, forNode, dataMap, cacheMap)
+			if err != nil {
+				return nil, err
+			}
+			if webConfig != nil {
+				config.Web = webConfig
+			}
 		}
 	}
 
@@ -419,6 +422,18 @@ func (this *ServerGroupDAO) ExistsGroup(tx *dbs.Tx, groupId int64) (bool, error)
 		Pk(groupId).
 		State(ServerGroupStateEnabled).
 		Exist()
+}
+
+// FindGroupUserId 读取分组所属用户
+func (this *ServerGroupDAO) FindGroupUserId(tx *dbs.Tx, groupId int64) (userId int64, err error) {
+	if groupId <= 0 {
+		return
+	}
+	return this.Query(tx).
+		Pk(groupId).
+		State(ServerGroupStateEnabled).
+		Result("userId").
+		FindInt64Col(0)
 }
 
 // NotifyUpdate 通知更新

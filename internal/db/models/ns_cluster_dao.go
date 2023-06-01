@@ -1,7 +1,7 @@
 package models
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -149,5 +149,5 @@ func (this *NSClusterDAO) CountAllClustersWithSSLPolicyIds(tx *dbs.Tx, sslPolicy
 
 // NotifyUpdate 通知更改
 func (this *NSClusterDAO) NotifyUpdate(tx *dbs.Tx, clusterId int64) error {
-	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleDNS, clusterId, 0, NSNodeTaskTypeConfigChanged)
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleDNS, clusterId, 0, 0, NSNodeTaskTypeConfigChanged)
 }

@@ -6,9 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/regions"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/types"
 )
@@ -70,6 +70,7 @@ func (this *IPLibraryFileService) FindAllFinishedIPLibraryFiles(ctx context.Cont
 			CreatedAt:       int64(libraryFile.CreatedAt),
 			GeneratedFileId: int64(libraryFile.GeneratedFileId),
 			GeneratedAt:     int64(libraryFile.GeneratedAt),
+			Password:        libraryFile.Password,
 			CountryNames:    pbCountryNames,
 			Provinces:       pbProvinces,
 			Cities:          pbCities,
@@ -133,6 +134,7 @@ func (this *IPLibraryFileService) FindAllUnfinishedIPLibraryFiles(ctx context.Co
 			FileId:        int64(libraryFile.FileId),
 			IsFinished:    libraryFile.IsFinished,
 			CreatedAt:     int64(libraryFile.CreatedAt),
+			Password:      libraryFile.Password,
 			CountryNames:  pbCountryNames,
 			Provinces:     pbProvinces,
 			Cities:        pbCities,
@@ -204,6 +206,7 @@ func (this *IPLibraryFileService) FindIPLibraryFile(ctx context.Context, req *pb
 			IsFinished:      libraryFile.IsFinished,
 			CreatedAt:       int64(libraryFile.CreatedAt),
 			GeneratedFileId: int64(libraryFile.GeneratedFileId),
+			Password:        libraryFile.Password,
 			CountryNames:    pbCountryNames,
 			Provinces:       pbProvinces,
 			Cities:          pbCities,
@@ -252,7 +255,7 @@ func (this *IPLibraryFileService) CreateIPLibraryFile(ctx context.Context, req *
 	}
 
 	var tx = this.NullTx()
-	libraryFileId, err := models.SharedIPLibraryFileDAO.CreateLibraryFile(tx, req.Name, req.Template, req.EmptyValues, req.FileId, countries, provinces, cities, towns, providers)
+	libraryFileId, err := models.SharedIPLibraryFileDAO.CreateLibraryFile(tx, req.Name, req.Template, req.EmptyValues, req.Password, req.FileId, countries, provinces, cities, towns, providers)
 	if err != nil {
 		return nil, err
 	}

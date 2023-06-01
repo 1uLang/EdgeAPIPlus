@@ -1,6 +1,11 @@
 package numberutils
 
-import "strconv"
+import (
+	"fmt"
+	"github.com/iwind/TeaGo/types"
+	"strconv"
+	"strings"
+)
 
 func FormatInt64(value int64) string {
 	return strconv.FormatInt(value, 10)
@@ -38,4 +43,18 @@ func Min[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32 |
 		}
 	}
 	return min
+}
+
+func FloorFloat64(f float64, decimal int) float64 {
+	if decimal <= 0 {
+		return f
+	}
+
+	var s = fmt.Sprintf("%f", f)
+	var index = strings.Index(s, ".")
+	if index < 0 || len(s[index:]) <= decimal+1 {
+		return f
+	}
+
+	return types.Float64(s[:index+decimal+1])
 }

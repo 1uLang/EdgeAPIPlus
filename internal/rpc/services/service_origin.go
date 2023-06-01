@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	"github.com/iwind/TeaGo/maps"
 )
 
@@ -211,7 +211,7 @@ func (this *OriginService) FindEnabledOriginConfig(ctx context.Context, req *pb.
 		}
 	}
 
-	config, err := models.SharedOriginDAO.ComposeOriginConfig(tx, req.OriginId, nil)
+	config, err := models.SharedOriginDAO.ComposeOriginConfig(tx, req.OriginId, nil, nil)
 	if err != nil {
 		return nil, err
 	}

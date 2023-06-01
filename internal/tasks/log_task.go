@@ -3,10 +3,10 @@ package tasks
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	"github.com/iwind/TeaGo/dbs"
 	"time"
 )
@@ -86,7 +86,7 @@ func (this *LogTask) RunMonitor() {
 
 func (this *LogTask) LoopMonitor() error {
 	// 检查是否为主节点
-	if !models.SharedAPINodeDAO.CheckAPINodeIsPrimaryWithoutErr() {
+	if !this.IsPrimaryNode() {
 		return nil
 	}
 

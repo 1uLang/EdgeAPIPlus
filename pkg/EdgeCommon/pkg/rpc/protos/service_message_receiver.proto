@@ -1,0 +1,66 @@
+syntax = "proto3";
+option go_package = "./pb";
+
+package pb;
+
+import "models/model_message_receiver.proto";
+import "models/rpc_messages.proto";
+
+// 消息对象接收者设置
+service MessageReceiverService {
+	// 修改接收者
+	rpc updateMessageReceivers (UpdateMessageReceiversRequest) returns (RPCSuccess);
+
+	// 查找接收者
+	rpc findAllEnabledMessageReceivers (FindAllEnabledMessageReceiversRequest) returns (FindAllEnabledMessageReceiversResponse);
+
+	// 删除接收者
+	rpc deleteMessageReceiver (DeleteMessageReceiverRequest) returns (RPCSuccess);
+
+	// 计算接收者数量
+	rpc countAllEnabledMessageReceivers (CountAllEnabledMessageReceiversRequest) returns (RPCCountResponse);
+}
+
+// 修改接收者
+message UpdateMessageReceiversRequest {
+	string role = 7;
+	int64 nodeClusterId = 1;
+	int64 nodeId = 2;
+	int64 serverId = 3;
+	bytes paramsJSON = 5;
+	map<string, RecipientOptions> recipientOptions = 6; // type => options
+
+	message RecipientOption {
+		int64 messageRecipientId = 1;
+		int64 messageRecipientGroupId = 2;
+	}
+
+	message RecipientOptions {
+		repeated RecipientOption recipientOptions = 1;
+	}
+}
+
+// 查找接收者
+message FindAllEnabledMessageReceiversRequest {
+	string role = 4;
+	int64 nodeClusterId = 1;
+	int64 nodeId = 2;
+	int64 serverId = 3;
+}
+
+message FindAllEnabledMessageReceiversResponse {
+	repeated MessageReceiver messageReceivers = 1;
+}
+
+// 删除接收者
+message DeleteMessageReceiverRequest {
+	int64 messageReceiverId = 1;
+}
+
+// 计算接收者数量
+message CountAllEnabledMessageReceiversRequest {
+	string role = 4;
+	int64 nodeClusterId = 1;
+	int64 nodeId = 2;
+	int64 serverId = 3;
+}

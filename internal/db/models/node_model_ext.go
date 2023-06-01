@@ -2,9 +2,12 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/ddosconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
+	timeutil "github.com/iwind/TeaGo/utils/time"
 	"sort"
 	"time"
 )
@@ -14,7 +17,7 @@ func (this *Node) DecodeInstallStatus() (*NodeInstallStatus, error) {
 	if len(this.InstallStatus) == 0 {
 		return NewNodeInstallStatus(), nil
 	}
-	status := &NodeInstallStatus{}
+	var status = &NodeInstallStatus{}
 	err := json.Unmarshal(this.InstallStatus, status)
 	if err != nil {
 		return NewNodeInstallStatus(), err
@@ -35,7 +38,7 @@ func (this *Node) DecodeStatus() (*nodeconfigs.NodeStatus, error) {
 	if len(this.Status) == 0 {
 		return nil, nil
 	}
-	status := &nodeconfigs.NodeStatus{}
+	var status = &nodeconfigs.NodeStatus{}
 	err := json.Unmarshal(this.Status, status)
 	if err != nil {
 		return nil, err
@@ -45,7 +48,7 @@ func (this *Node) DecodeStatus() (*nodeconfigs.NodeStatus, error) {
 
 // DNSRouteCodes 所有的DNS线路
 func (this *Node) DNSRouteCodes() map[int64][]string {
-	routes := map[int64][]string{} // domainId => routes
+	var routes = map[int64][]string{} // domainId => routes
 	if len(this.DnsRoutes) == 0 {
 		return routes
 	}
@@ -59,7 +62,7 @@ func (this *Node) DNSRouteCodes() map[int64][]string {
 
 // DNSRouteCodesForDomainId DNS线路
 func (this *Node) DNSRouteCodesForDomainId(dnsDomainId int64) ([]string, error) {
-	routes := map[int64][]string{} // domainId => routes
+	var routes = map[int64][]string{} // domainId => routes
 	if len(this.DnsRoutes) == 0 {
 		return nil, nil
 	}
@@ -78,7 +81,7 @@ func (this *Node) DNSRouteCodesForDomainId(dnsDomainId int64) ([]string, error) 
 
 // DecodeConnectedAPINodeIds 连接的API
 func (this *Node) DecodeConnectedAPINodeIds() ([]int64, error) {
-	apiNodeIds := []int64{}
+	var apiNodeIds = []int64{}
 	if IsNotNull(this.ConnectedAPINodes) {
 		err := json.Unmarshal(this.ConnectedAPINodes, &apiNodeIds)
 		if err != nil {
@@ -135,6 +138,7 @@ func (this *Node) HasDDoSProtection() bool {
 	return false
 }
 
+// DecodeMaxCacheDiskCapacity 解析硬盘容量
 func (this *Node) DecodeMaxCacheDiskCapacity() *shared.SizeCapacity {
 	if this.MaxCacheDiskCapacity.IsNull() {
 		return nil
@@ -145,6 +149,7 @@ func (this *Node) DecodeMaxCacheDiskCapacity() *shared.SizeCapacity {
 	return capacity
 }
 
+// DecodeMaxCacheMemoryCapacity 解析内存容量
 func (this *Node) DecodeMaxCacheMemoryCapacity() *shared.SizeCapacity {
 	if this.MaxCacheMemoryCapacity.IsNull() {
 		return nil
@@ -169,6 +174,7 @@ func (this *Node) DecodeDNSResolver() *nodeconfigs.DNSResolverConfig {
 	return resolverConfig
 }
 
+// DecodeLnAddrs 解析Ln地址
 func (this *Node) DecodeLnAddrs() []string {
 	if IsNull(this.LnAddrs) {
 		return nil
@@ -180,4 +186,37 @@ func (this *Node) DecodeLnAddrs() []string {
 		// ignore error
 	}
 	return result
+}
+
+// DecodeCacheDiskSubDirs 解析缓存目录
+func (this *Node) DecodeCacheDiskSubDirs() []*serverconfigs.CacheDir {
+	if IsNull(this.CacheDiskSubDirs) {
+		return nil
+	}
+
+	var result = []*serverconfigs.CacheDir{}
+	err := json.Unmarshal(this.CacheDiskSubDirs, &result)
+	if err != nil {
+		remotelogs.Error("Node.DecodeCacheDiskSubDirs", err.Error())
+	}
+	return result
+}
+
+// DecodeAPINodeAddrs 解析API节点地址
+func (this *Node) DecodeAPINodeAddrs() []*serverconfigs.NetworkAddressConfig {
+	var result = []*serverconfigs.NetworkAddressConfig{}
+	if IsNull(this.ApiNodeAddrs) {
+		return result
+	}
+
+	err := json.Unmarshal(this.ApiNodeAddrs, &result)
+	if err != nil {
+		remotelogs.Error("Node.DecodeAPINodeAddrs", err.Error())
+	}
+	return result
+}
+
+// CheckIsOffline 检查是否已经离线
+func (this *Node) CheckIsOffline() bool {
+	return len(this.OfflineDay) > 0 && this.OfflineDay < timeutil.Format("Ymd")
 }

@@ -4,10 +4,10 @@ package services
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
 	"strings"
@@ -92,7 +92,9 @@ func init() {
 					return nil
 				}(key)
 				if err != nil {
-					remotelogs.Error("METRIC_STAT", "upload metric stats failed: "+err.Error())
+					if !models.CheckSQLErrCode(err, 1213 /** transaction deadlock **/) {
+						remotelogs.Error("METRIC_STAT", "upload metric stats failed: "+err.Error())
+					}
 				}
 
 				// 人为限速

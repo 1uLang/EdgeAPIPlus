@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/authority"
@@ -13,6 +12,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/maps"
@@ -109,7 +109,7 @@ func (this *BaseService) ValidateAuthorityNode(ctx context.Context) (nodeId int6
 func (this *BaseService) ValidateNodeId(ctx context.Context, roles ...rpcutils.UserType) (role rpcutils.UserType, nodeIntId int64, err error) {
 	// 默认包含大部分节点
 	if len(roles) == 0 {
-		roles = []rpcutils.UserType{rpcutils.UserTypeNode, rpcutils.UserTypeCluster, rpcutils.UserTypeAdmin, rpcutils.UserTypeUser, rpcutils.UserTypeDNS, rpcutils.UserTypeReport, rpcutils.UserTypeMonitor, rpcutils.UserTypeLog}
+		roles = []rpcutils.UserType{rpcutils.UserTypeNode, rpcutils.UserTypeCluster, rpcutils.UserTypeAdmin, rpcutils.UserTypeUser, rpcutils.UserTypeDNS, rpcutils.UserTypeReport, rpcutils.UserTypeMonitor, rpcutils.UserTypeLog, rpcutils.UserTypeAPI}
 	}
 
 	if ctx == nil {
@@ -191,12 +191,6 @@ func (this *BaseService) ValidateNodeId(ctx context.Context, roles ...rpcutils.U
 		}
 	case rpcutils.UserTypeUser:
 		nodeIntId, err = models.SharedUserNodeDAO.FindEnabledUserNodeIdWithUniqueId(nil, nodeId)
-	case rpcutils.UserTypeAPI:
-		node, err := models.SharedAPINodeDAO.FindEnabledAPINodeWithUniqueIdAndSecret(nil, nodeId, apiToken.Secret)
-		if err != nil {
-			return rpcutils.UserTypeAPI, 0, errors.New("context: " + err.Error())
-		}
-		nodeIntId = int64(node.Id)
 	case rpcutils.UserTypeAdmin:
 		nodeIntId = 0
 	case rpcutils.UserTypeMonitor:
@@ -232,6 +226,10 @@ func (this *BaseService) Exists(b bool) (*pb.RPCExists, error) {
 // PermissionError 返回权限错误
 func (this *BaseService) PermissionError() error {
 	return errors.New("Permission Denied")
+}
+
+func (this *BaseService) NotImplementedYet() error {
+	return errors.New("not implemented yet")
 }
 
 // NullTx 空的数据库事务

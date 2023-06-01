@@ -5,7 +5,6 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"math"
 	"net"
-	"regexp"
 	"strings"
 )
 
@@ -29,15 +28,4 @@ func IP2Long(ip string) uint64 {
 // IsIPv6 判断是否为IPv6
 func IsIPv6(ip string) bool {
 	return strings.Contains(ip, ":")
-}
-
-// 判断是否为IPv4
-func IsIPv4(ip string) bool {
-	if !regexp.MustCompile(`^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$`).MatchString(ip) {
-		return false
-	}
-	if IP2Long(ip) == 0 {
-		return false
-	}
-	return true
 }

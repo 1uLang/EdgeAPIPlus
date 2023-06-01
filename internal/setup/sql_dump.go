@@ -3,10 +3,15 @@ package setup
 import (
 	"errors"
 	"fmt"
+	"github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
+	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/types"
+	"io"
 	"regexp"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -37,6 +42,24 @@ var recordsTables = []*SQLRecordsTable{
 		UniqueFields: []string{"name"},
 		ExceptFields: []string{"customName", "customCodes"},
 	},
+	{
+		TableName:    "edgeFormalClientSystems",
+		UniqueFields: []string{"dataId"},
+	},
+	{
+		TableName:    "edgeFormalClientBrowsers",
+		UniqueFields: []string{"dataId"},
+	},
+	{
+		TableName:    "edgeClientAgents",
+		UniqueFields: []string{"code"},
+		ExceptFields: []string{"countIPs"},
+	},
+	{
+		TableName:    "edgeClientAgentIPs",
+		UniqueFields: []string{"agentId", "ip"},
+		IgnoreId:     true,
+	},
 }
 
 type sqlItem struct {
@@ -45,21 +68,36 @@ type sqlItem struct {
 }
 
 type SQLDump struct {
+	logWriter io.Writer
 }
 
 func NewSQLDump() *SQLDump {
 	return &SQLDump{}
 }
 
+func (this *SQLDump) SetLogWriter(logWriter io.Writer) {
+	this.logWriter = logWriter
+}
+
 // Dump 导出数据
-func (this *SQLDump) Dump(db *dbs.DB) (result *SQLDumpResult, err error) {
+func (this *SQLDump) Dump(db *dbs.DB, includingRecords bool) (result *SQLDumpResult, err error) {
 	result = &SQLDumpResult{}
 
 	tableNames, err := db.TableNames()
 	if err != nil {
 		return result, err
 	}
-	for _, tableName := range tableNames {
+
+	fullTableMap, err := this.findFullTables(db, tableNames)
+	if err != nil {
+		return nil, err
+	}
+
+	var autoIncrementReg = regexp.MustCompile(` AUTO_INCREMENT=\d+`)
+
+	for _, table := range fullTableMap {
+		var tableName = table.Name
+
 		// 忽略一些分表
 		if strings.HasPrefix(strings.ToLower(tableName), strings.ToLower("edgeHTTPAccessLogs_")) {
 			continue
@@ -68,15 +106,11 @@ func (this *SQLDump) Dump(db *dbs.DB) (result *SQLDumpResult, err error) {
 			continue
 		}
 
-		table, err := db.FindFullTable(tableName)
-		if err != nil {
-			return nil, err
-		}
-		sqlTable := &SQLTable{
+		var sqlTable = &SQLTable{
 			Name:       table.Name,
 			Engine:     table.Engine,
 			Charset:    table.Collation,
-			Definition: regexp.MustCompile(` AUTO_INCREMENT=\d+`).ReplaceAllString(table.Code, ""),
+			Definition: autoIncrementReg.ReplaceAllString(table.Code, ""),
 		}
 
 		// 字段
@@ -101,28 +135,30 @@ func (this *SQLDump) Dump(db *dbs.DB) (result *SQLDumpResult, err error) {
 
 		// Records
 		var records = []*SQLRecord{}
-		recordsTable := this.findRecordsTable(tableName)
-		if recordsTable != nil {
-			ones, _, err := db.FindOnes("SELECT * FROM " + tableName + " ORDER BY id ASC")
-			if err != nil {
-				return result, err
-			}
-			for _, one := range ones {
-				record := &SQLRecord{
-					Id:           one.GetInt64("id"),
-					Values:       map[string]string{},
-					UniqueFields: recordsTable.UniqueFields,
-					ExceptFields: recordsTable.ExceptFields,
+		if includingRecords {
+			recordsTable := this.findRecordsTable(tableName)
+			if recordsTable != nil {
+				ones, _, err := db.FindOnes("SELECT * FROM " + tableName + " ORDER BY id ASC")
+				if err != nil {
+					return result, err
 				}
-				for k, v := range one {
-					// 需要排除的字段
-					if lists.ContainsString(record.ExceptFields, k) {
-						continue
+				for _, one := range ones {
+					record := &SQLRecord{
+						Id:           one.GetInt64("id"),
+						Values:       map[string]string{},
+						UniqueFields: recordsTable.UniqueFields,
+						ExceptFields: recordsTable.ExceptFields,
 					}
+					for k, v := range one {
+						// 需要排除的字段
+						if lists.ContainsString(record.ExceptFields, k) {
+							continue
+						}
 
-					record.Values[k] = types.String(v)
+						record.Values[k] = types.String(v)
+					}
+					records = append(records, record)
 				}
-				records = append(records, record)
 			}
 		}
 		sqlTable.Records = records
@@ -137,12 +173,22 @@ func (this *SQLDump) Dump(db *dbs.DB) (result *SQLDumpResult, err error) {
 func (this *SQLDump) Apply(db *dbs.DB, newResult *SQLDumpResult, showLog bool) (ops []string, err error) {
 	// 设置Innodb事务提交模式
 	{
-
-		result, err := db.FindOne("SHOW VARIABLES WHERE variable_name='innodb_flush_log_at_trx_commit'")
-		if err == nil && result != nil {
-			var oldValue = result.GetInt("Value")
-			if oldValue == 1 {
-				_, _ = db.Exec("SET GLOBAL innodb_flush_log_at_trx_commit=2")
+		// 检查是否为root用户
+		config, _ := db.Config()
+		if config == nil {
+			return nil, nil
+		}
+		dsnConfig, err := mysql.ParseDSN(config.Dsn)
+		if err != nil || dsnConfig == nil {
+			return nil, err
+		}
+		if dsnConfig.User == "root" {
+			result, err := db.FindOne("SHOW VARIABLES WHERE variable_name='innodb_flush_log_at_trx_commit'")
+			if err == nil && result != nil {
+				var oldValue = result.GetInt("Value")
+				if oldValue == 1 {
+					_, _ = db.Exec("SET GLOBAL innodb_flush_log_at_trx_commit=2")
+				}
 			}
 		}
 	}
@@ -207,7 +253,7 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 		}
 	}
 
-	currentResult, err := this.Dump(db)
+	currentResult, err := this.Dump(db, false)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +265,7 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 			var op = "+ table " + newTable.Name
 			ops = append(ops, op)
 			if showLog {
-				fmt.Println(op)
+				this.log(op)
 			}
 			if len(newTable.Records) == 0 {
 				execSQL(newTable.Definition)
@@ -238,7 +284,7 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 					var op = "+ " + newTable.Name + " " + newField.Name
 					ops = append(ops, op)
 					if showLog {
-						fmt.Println(op)
+						this.log(op)
 					}
 					_, err = db.Exec("ALTER TABLE " + newTable.Name + " ADD `" + newField.Name + "` " + newField.Definition)
 					if err != nil {
@@ -248,7 +294,7 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 					var op = "* " + newTable.Name + " " + newField.Name
 					ops = append(ops, op)
 					if showLog {
-						fmt.Println(op)
+						this.log(op)
 					}
 					_, err = db.Exec("ALTER TABLE " + newTable.Name + " MODIFY `" + newField.Name + "` " + newField.Definition)
 					if err != nil {
@@ -265,7 +311,7 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 					var op = "+ index " + newTable.Name + " " + newIndex.Name
 					ops = append(ops, op)
 					if showLog {
-						fmt.Println(op)
+						this.log(op)
 					}
 					_, err = db.Exec("ALTER TABLE " + newTable.Name + " ADD " + newIndex.Definition)
 					if err != nil {
@@ -278,7 +324,7 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 					var op = "* index " + newTable.Name + " " + newIndex.Name
 					ops = append(ops, op)
 					if showLog {
-						fmt.Println(op)
+						this.log(op)
 					}
 					_, err = db.Exec("ALTER TABLE " + newTable.Name + " DROP KEY " + newIndex.Name)
 					if err != nil {
@@ -301,7 +347,7 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 					var op = "- index " + oldTable.Name + " " + oldIndex.Name
 					ops = append(ops, op)
 					if showLog {
-						fmt.Println(op)
+						this.log(op)
 					}
 					_, err = db.Exec("ALTER TABLE " + oldTable.Name + " DROP KEY " + oldIndex.Name)
 					if err != nil {
@@ -318,7 +364,7 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 					var op = "- field " + oldTable.Name + " " + oldField.Name
 					ops = append(ops, op)
 					if showLog {
-						fmt.Println(op)
+						this.log(op)
 					}
 					_, err = db.Exec("ALTER TABLE " + oldTable.Name + " DROP COLUMN `" + oldField.Name + "`")
 					if err != nil {
@@ -330,9 +376,10 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 
 		// 对比记录
 		// +
+		var newRecordsTable = this.findRecordsTable(newTable.Name)
 		for _, record := range newTable.Records {
 			var queryArgs = []string{}
-			var queryValues = []interface{}{}
+			var queryValues = []any{}
 			var valueStrings = []string{}
 			for _, field := range record.UniqueFields {
 				queryArgs = append(queryArgs, field+"=?")
@@ -348,15 +395,22 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 				}
 			}
 
-			queryValues = append(queryValues, recordId)
-			one, err := db.FindOne("SELECT * FROM "+newTable.Name+" WHERE (("+strings.Join(queryArgs, " AND ")+") OR id=?)", queryValues...)
+			var one maps.Map
+
+			if newRecordsTable != nil && newRecordsTable.IgnoreId {
+				one, err = db.FindOne("SELECT * FROM "+newTable.Name+" WHERE (("+strings.Join(queryArgs, " AND ")+"))", queryValues...)
+			} else {
+				queryValues = append(queryValues, recordId)
+				one, err = db.FindOne("SELECT * FROM "+newTable.Name+" WHERE (("+strings.Join(queryArgs, " AND ")+") OR id=?)", queryValues...)
+			}
+
 			if err != nil {
 				return nil, err
 			}
 			if one == nil {
 				ops = append(ops, "+ record "+newTable.Name+" "+strings.Join(valueStrings, ", "))
 				if showLog {
-					fmt.Println("+ record " + newTable.Name + " " + strings.Join(valueStrings, ", "))
+					this.log("+ record " + newTable.Name + " " + strings.Join(valueStrings, ", "))
 				}
 				var params = []string{}
 				var args = []string{}
@@ -367,7 +421,10 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 						continue
 					}
 
-					// ID需要保留，因为各个表格之间需要有对应关系
+					if newRecordsTable != nil && newRecordsTable.IgnoreId && k == "id" {
+						continue
+					}
+
 					params = append(params, "`"+k+"`")
 					args = append(args, "?")
 					values = append(values, v)
@@ -377,10 +434,10 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 			} else if !record.ValuesEquals(one) {
 				ops = append(ops, "* record "+newTable.Name+" "+strings.Join(valueStrings, ", "))
 				if showLog {
-					fmt.Println("* record " + newTable.Name + " " + strings.Join(valueStrings, ", "))
+					this.log("* record " + newTable.Name + " " + strings.Join(valueStrings, ", "))
 				}
-				args := []string{}
-				values := []interface{}{}
+				var args = []string{}
+				var values = []any{}
 				for k, v := range record.Values {
 					if k == "id" {
 						continue
@@ -391,7 +448,7 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 						continue
 					}
 
-					args = append(args, k+"=?")
+					args = append(args, "`"+k+"`"+"=?")
 					values = append(values, v)
 				}
 				values = append(values, one.GetInt("id"))
@@ -405,6 +462,65 @@ func (this *SQLDump) applyQueue(db *dbs.DB, newResult *SQLDumpResult, showLog bo
 	// 由于我们不删除任何表格，所以这里什么都不做
 
 	return
+}
+
+// 查找所有表的完整信息
+func (this *SQLDump) findFullTables(db *dbs.DB, tableNames []string) ([]*dbs.Table, error) {
+	var fullTables = []*dbs.Table{}
+	if len(tableNames) == 0 {
+		return fullTables, nil
+	}
+
+	var locker = &sync.Mutex{}
+	var queue = make(chan string, len(tableNames))
+	for _, tableName := range tableNames {
+		queue <- tableName
+	}
+
+	var wg = &sync.WaitGroup{}
+	var concurrent = 8
+
+	if runtime.NumCPU() > 4 {
+		concurrent = 32
+	}
+
+	wg.Add(concurrent)
+	var lastErr error
+	for i := 0; i < concurrent; i++ {
+		go func() {
+			defer wg.Done()
+
+			for {
+				select {
+				case tableName := <-queue:
+					table, err := db.FindFullTable(tableName)
+					if err != nil {
+						locker.Lock()
+						lastErr = err
+						locker.Unlock()
+						return
+					}
+					locker.Lock()
+					table.Name = tableName
+					fullTables = append(fullTables, table)
+					locker.Unlock()
+				default:
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if lastErr != nil {
+		return nil, lastErr
+	}
+
+	// 排序
+	sort.Slice(fullTables, func(i, j int) bool {
+		return fullTables[i].Name < fullTables[j].Name
+	})
+
+	return fullTables, nil
 }
 
 // 查找有记录的表
@@ -446,4 +562,13 @@ func (this *SQLDump) tryCreateIndex(err error, db *dbs.DB, tableName string, ind
 	}
 
 	return err
+}
+
+// 打印操作日志
+func (this *SQLDump) log(message string) {
+	if this.logWriter != nil {
+		_, _ = this.logWriter.Write([]byte(message + "\n"))
+	} else {
+		fmt.Println(message)
+	}
 }

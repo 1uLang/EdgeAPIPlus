@@ -1,12 +1,12 @@
 package models
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ipconfigs"
 	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/firewallconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/ipconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -301,7 +301,7 @@ func (this *IPListDAO) NotifyUpdate(tx *dbs.Tx, listId int64, taskType NodeTaskT
 
 	if len(resultClusterIds) > 0 {
 		for _, clusterId := range resultClusterIds {
-			err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, taskType)
+			err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, taskType)
 			if err != nil {
 				return err
 			}
@@ -309,23 +309,4 @@ func (this *IPListDAO) NotifyUpdate(tx *dbs.Tx, listId int64, taskType NodeTaskT
 	}
 
 	return nil
-}
-
-// FindOrCreateGlobalBlackIPList 查询或创建全局黑名单分组
-func (this *IPListDAO) FindOrCreateGlobalBlackIPList(tx *dbs.Tx) (id int64, err error) {
-	id, err = this.Query(tx).
-		State(IPListStateEnabled).
-		Attr("type", "black").
-		Attr("isPublic", 1).
-		Attr("isGlobal", 1).
-		Limit(1).ResultPk().
-		FindInt64Col(0)
-	if err != nil {
-		return
-	}
-	if id == 0 { //无全局黑名单则创建
-		return this.CreateIPList(tx, 0, 0, ipconfigs.IPListTypeBlack, "全局黑名单", "", nil, "默认全局黑名单", true, true)
-	} else {
-		return
-	}
 }

@@ -3,17 +3,18 @@ package models
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/userconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/zero"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/userconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
+	"strconv"
 	"time"
 )
 
@@ -142,42 +143,6 @@ func (this *SysSettingDAO) ReadGlobalConfig(tx *dbs.Tx) (*serverconfigs.GlobalCo
 	return config, nil
 }
 
-// ReadUserServerConfig 读取用户服务配置
-func (this *SysSettingDAO) ReadUserServerConfig(tx *dbs.Tx) (*userconfigs.UserServerConfig, error) {
-	valueJSON, err := this.ReadSetting(tx, systemconfigs.SettingCodeUserServerConfig)
-	if err != nil {
-		return nil, err
-	}
-	if len(valueJSON) == 0 {
-		return userconfigs.DefaultUserServerConfig(), nil
-	}
-
-	var config = userconfigs.DefaultUserServerConfig()
-	err = json.Unmarshal(valueJSON, config)
-	if err != nil {
-		return nil, err
-	}
-	return config, nil
-}
-
-// ReadUserFinanceConfig 读取用户服务配置
-func (this *SysSettingDAO) ReadUserFinanceConfig(tx *dbs.Tx) (*userconfigs.UserFinanceConfig, error) {
-	valueJSON, err := this.ReadSetting(tx, systemconfigs.SettingCodeUserFinanceConfig)
-	if err != nil {
-		return nil, err
-	}
-	if len(valueJSON) == 0 {
-		return userconfigs.DefaultUserFinanceConfig(), nil
-	}
-
-	var config = userconfigs.DefaultUserFinanceConfig()
-	err = json.Unmarshal(valueJSON, config)
-	if err != nil {
-		return nil, err
-	}
-	return config, nil
-}
-
 // ReadAdminUIConfig 读取管理员界面配置
 func (this *SysSettingDAO) ReadAdminUIConfig(tx *dbs.Tx, cacheMap *utils.CacheMap) (*systemconfigs.AdminUIConfig, error) {
 	var cacheKey = this.Table + ":ReadAdminUIConfig"
@@ -208,6 +173,39 @@ func (this *SysSettingDAO) ReadAdminUIConfig(tx *dbs.Tx, cacheMap *utils.CacheMa
 	return &systemconfigs.AdminUIConfig{}, nil
 }
 
+// ReadProductName 读取设置的产品名称
+func (this *SysSettingDAO) ReadProductName(tx *dbs.Tx) (string, error) {
+	productName, err := this.Query(tx).
+		Attr("code", systemconfigs.SettingCodeAdminUIConfig).
+		Result("JSON_EXTRACT(value, '$.productName')").
+		FindStringCol("")
+	if err != nil {
+		return "", err
+	}
+	if len(productName) > 0 {
+		return strconv.Unquote(productName)
+	}
+	return "", nil
+}
+
+// ReadUserUIConfig 读取用户UI配置
+func (this *SysSettingDAO) ReadUserUIConfig(tx *dbs.Tx) (*systemconfigs.UserUIConfig, error) {
+	valueJSON, err := this.ReadSetting(tx, systemconfigs.SettingCodeUserUIConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(valueJSON) == 0 {
+		return systemconfigs.DefaultUserUIConfig(), nil
+	}
+
+	var config = systemconfigs.DefaultUserUIConfig()
+	err = json.Unmarshal(valueJSON, config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
 // NotifyUpdate 通知更改
 func (this *SysSettingDAO) NotifyUpdate(tx *dbs.Tx, code string) error {
 	switch code {
@@ -227,4 +225,40 @@ func (this *SysSettingDAO) NotifyUpdate(tx *dbs.Tx, code string) error {
 		}
 	}
 	return nil
+}
+
+// ReadUserServerConfig 读取用户服务配置
+func (this *SysSettingDAO) ReadUserServerConfig(tx *dbs.Tx) (*userconfigs.UserServerConfig, error) {
+	valueJSON, err := this.ReadSetting(tx, systemconfigs.SettingCodeUserServerConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(valueJSON) == 0 {
+		return userconfigs.DefaultUserServerConfig(), nil
+	}
+
+	var config = userconfigs.DefaultUserServerConfig()
+	err = json.Unmarshal(valueJSON, config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+// ReadUserRegisterConfig 读取用户注册配置
+func (this *SysSettingDAO) ReadUserRegisterConfig(tx *dbs.Tx) (*userconfigs.UserRegisterConfig, error) {
+	valueJSON, err := this.ReadSetting(tx, systemconfigs.SettingCodeUserRegisterConfig)
+	if err != nil {
+		return nil, err
+	}
+	if len(valueJSON) == 0 {
+		return userconfigs.DefaultUserRegisterConfig(), nil
+	}
+
+	var config = userconfigs.DefaultUserRegisterConfig()
+	err = json.Unmarshal(valueJSON, config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
 }

@@ -3,11 +3,11 @@ package tasks
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
 	"time"
@@ -70,15 +70,38 @@ func (this *HealthCheckTask) Loop() error {
 
 	// 启动新的或更新老的
 	for _, cluster := range clusters {
-		clusterId := int64(cluster.Id)
+		var clusterId = int64(cluster.Id)
+
+		if !cluster.IsOn {
+			this.stopClusterTask(clusterId)
+			continue
+		}
+
+		// 检查当前集群上是否有服务，如果尚没有部署服务，则直接跳过
+		countServers, err := models.SharedServerDAO.CountAllEnabledServersWithNodeClusterId(nil, clusterId)
+		if err != nil {
+			return err
+		}
+		if countServers == 0 {
+			this.stopClusterTask(clusterId)
+			continue
+		}
 
 		var config = &serverconfigs.HealthCheckConfig{}
 		if len(cluster.HealthCheck) > 0 {
 			err = json.Unmarshal(cluster.HealthCheck, config)
 			if err != nil {
 				this.logErr("HealthCheckTask", err.Error())
+				this.stopClusterTask(clusterId)
 				continue
 			}
+			if !config.IsOn {
+				this.stopClusterTask(clusterId)
+				continue
+			}
+		} else {
+			this.stopClusterTask(clusterId)
+			continue
 		}
 
 		task, ok := this.tasksMap[clusterId]
@@ -102,4 +125,12 @@ func (this *HealthCheckTask) Loop() error {
 	}
 
 	return nil
+}
+
+func (this *HealthCheckTask) stopClusterTask(clusterId int64) {
+	var task = this.tasksMap[clusterId]
+	if task != nil {
+		task.Stop()
+		delete(this.tasksMap, clusterId)
+	}
 }

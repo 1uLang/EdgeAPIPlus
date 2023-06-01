@@ -4,17 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
-	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
 	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/zero"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/firewallconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -52,6 +52,10 @@ var (
 	accessLogEnableAutoPartial       = true    // 是否启用自动分表
 	accessLogRowsPerTable      int64 = 500_000 // 自动分表的单表最大值
 )
+
+func AccessLogQueuePercent() int {
+	return accessLogQueuePercent
+}
 
 type accessLogTableQuery struct {
 	daoWrapper         *HTTPAccessLogDAOWrapper
@@ -133,13 +137,13 @@ func (this *HTTPAccessLogDAO) CreateHTTPAccessLogs(tx *dbs.Tx, accessLogs []*pb.
 	// 写入队列
 	var queue = accessLogQueue // 这样写非常重要，防止在写入过程中队列有切换
 	for _, accessLog := range accessLogs {
-		if accessLog.FirewallPolicyId == 0 { // 如果是WAF记录，则采取采样率
+		if accessLog.FirewallPolicyId == 0 { // 如果是非WAF记录，则采取采样率
 			// 采样率
 			if accessLogQueuePercent <= 0 {
 				return nil
 			}
 			if accessLogQueuePercent < 100 && rands.Int(1, 100) > accessLogQueuePercent {
-				return nil
+				continue
 			}
 		}
 
@@ -159,16 +163,27 @@ func (this *HTTPAccessLogDAO) DumpAccessLogsFromQueue(size int) (hasMore bool, e
 		size = 100
 	}
 
+	if len(oldAccessLogQueue) == 0 && len(accessLogQueue) == 0 {
+		return false, nil
+	}
+
 	var dao = randomHTTPAccessLogDAO()
 	if dao == nil {
 		dao = &HTTPAccessLogDAOWrapper{
 			DAO:    SharedHTTPAccessLogDAO,
 			NodeId: 0,
 		}
-	}
 
-	if len(oldAccessLogQueue) == 0 && len(accessLogQueue) == 0 {
-		return false, nil
+		// 检查本地数据库空间
+		if dbutils.IsLocalDatabase && !dbutils.HasFreeSpace {
+			return false, errors.New("dump accesslog failed: there is no enough space left for database (" + dbutils.LocalDatabaseDataDir + ")")
+		}
+	} else if dao.IsLocal {
+		// 检查本地数据库空间
+		// 我们假定本地只能安装一个数据库，访问日志中的数据库和当前API连接的数据库一致
+		if !dbutils.HasFreeSpace {
+			return true, errors.New("dump accesslog failed: there is no enough space left for database (" + dbutils.LocalDatabaseDataDir + ")")
+		}
 	}
 
 	// 开始事务
@@ -224,7 +239,7 @@ func (this *HTTPAccessLogDAO) CreateHTTPAccessLog(tx *dbs.Tx, dao *HTTPAccessLog
 	if len(accessLog.TimeISO8601) > 10 {
 		day = strings.ReplaceAll(accessLog.TimeISO8601[:10], "-", "")
 	} else {
-		timeutil.FormatTime("Ymd", accessLog.Timestamp)
+		day = timeutil.FormatTime("Ymd", accessLog.Timestamp)
 	}
 
 	tableDef, err := SharedHTTPAccessLogManager.FindLastTable(dao.Instance, day, true)
@@ -447,6 +462,7 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx,
 	var requestPathReg = regexp.MustCompile(`requestPath:(\S+)`)
 	var protoReg = regexp.MustCompile(`proto:(\S+)`)
 	var schemeReg = regexp.MustCompile(`scheme:(\S+)`)
+	var methodReg = regexp.MustCompile(`(?:method|requestMethod):(\S+)`)
 
 	var count = len(tableQueries)
 	var wg = &sync.WaitGroup{}
@@ -594,6 +610,11 @@ func (this *HTTPAccessLogDAO) listAccessLogs(tx *dbs.Tx,
 						query.Where("JSON_EXTRACT(content, '$.requestURI') LIKE :keyword").
 							Param("keyword", dbutils.QuoteLikePrefix("\""+u.RequestURI()))
 					}
+				} else if methodReg.MatchString(keyword) { // method|requestMethod:xxx
+					isSpecialKeyword = true
+					var matches = methodReg.FindStringSubmatch(keyword)
+					query.Where("JSON_EXTRACT(content, '$.requestMethod')=:keyword").
+						Param("keyword", strings.ToUpper(matches[1]))
 				}
 				if !isSpecialKeyword {
 					if regexp.MustCompile(`^ip:.+`).MatchString(keyword) {

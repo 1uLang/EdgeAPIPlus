@@ -1,15 +1,14 @@
 // Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
 //go:build plus
-// +build plus
 
 package accounts
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/accounts"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/lists"
 	"strings"
 )

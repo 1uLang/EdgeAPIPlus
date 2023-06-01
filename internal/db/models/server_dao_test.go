@@ -4,15 +4,16 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/logs"
 	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/types"
+	timeutil "github.com/iwind/TeaGo/utils/time"
 	"testing"
 	"time"
 )
@@ -44,7 +45,7 @@ func TestServerDAO_CreateManyServers(t *testing.T) {
 func TestServerDAO_ComposeServerConfig(t *testing.T) {
 	dbs.NotifyReady()
 	var tx *dbs.Tx
-	config, err := models.SharedServerDAO.ComposeServerConfigWithServerId(tx, 1, false)
+	config, err := models.SharedServerDAO.ComposeServerConfigWithServerId(tx, 1, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func TestServerDAO_ComposeServerConfig(t *testing.T) {
 func TestServerDAO_ComposeServerConfig_AliasServerNames(t *testing.T) {
 	dbs.NotifyReady()
 	var tx *dbs.Tx
-	config, err := models.SharedServerDAO.ComposeServerConfigWithServerId(tx, 14, false)
+	config, err := models.SharedServerDAO.ComposeServerConfigWithServerId(tx, 14, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func TestServerDAO_ComposeServerConfig_AliasServerNames(t *testing.T) {
 func TestServerDAO_UpdateServerConfig(t *testing.T) {
 	dbs.NotifyReady()
 	var tx *dbs.Tx
-	config, err := models.SharedServerDAO.ComposeServerConfigWithServerId(tx, 1, false)
+	config, err := models.SharedServerDAO.ComposeServerConfigWithServerId(tx, 1, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func TestServerDAO_FindAllEnabledServersWithNode_Cache(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, server := range servers {
-			_, _ = models.SharedServerDAO.ComposeServerConfig(nil, server, cacheMap, true)
+			_, _ = models.SharedServerDAO.ComposeServerConfig(nil, server, false, nil, cacheMap, true, false)
 		}
 	}
 
@@ -200,7 +201,7 @@ func TestServerDAO_FindAllEnabledServersWithNode_Cache(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, server := range servers {
-			_, _ = models.SharedServerDAO.ComposeServerConfig(nil, server, cacheMap, true)
+			_, _ = models.SharedServerDAO.ComposeServerConfig(nil, server, false, nil, cacheMap, true, false)
 		}
 	}
 	t.Log(time.Since(before).Seconds()*1000, "ms")
@@ -320,6 +321,25 @@ func TestServerDAO_FindBool(t *testing.T) {
 	if one != nil {
 		t.Log(one.(*models.Server).IsOn)
 	}
+}
+
+func TestServerDAO_UpdateServerBandwidth(t *testing.T) {
+	var dao = models.NewServerDAO()
+	var tx *dbs.Tx
+	err := dao.UpdateServerBandwidth(tx, 1, timeutil.FormatTime("YmdHi", time.Now().Unix()/300*300), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServerDAO_FindEnabledServersWithIds(t *testing.T) {
+	var dao = models.NewServerDAO()
+	var tx *dbs.Tx
+	servers, err := dao.FindEnabledServersWithIds(tx, []int64{23, 1071})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log(len(servers), "servers")
 }
 
 func BenchmarkServerDAO_CountAllEnabledServers(b *testing.B) {

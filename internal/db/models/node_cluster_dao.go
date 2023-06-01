@@ -3,13 +3,13 @@ package models
 import (
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/dnsconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
 	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -198,7 +198,7 @@ func (this *NodeClusterDAO) CreateCluster(tx *dbs.Tx, adminId int64, name string
 }
 
 // UpdateCluster 修改集群
-func (this *NodeClusterDAO) UpdateCluster(tx *dbs.Tx, clusterId int64, name string, grantId int64, installDir string, timezone string, nodeMaxThreads int32, autoOpenPorts bool, clockConfig *nodeconfigs.ClockConfig, autoRemoteStart bool, autoInstallTables bool) error {
+func (this *NodeClusterDAO) UpdateCluster(tx *dbs.Tx, clusterId int64, name string, grantId int64, installDir string, timezone string, nodeMaxThreads int32, autoOpenPorts bool, clockConfig *nodeconfigs.ClockConfig, autoRemoteStart bool, autoInstallTables bool, sshParams *nodeconfigs.SSHParams) error {
 	if clusterId <= 0 {
 		return errors.New("invalid clusterId")
 	}
@@ -225,6 +225,14 @@ func (this *NodeClusterDAO) UpdateCluster(tx *dbs.Tx, clusterId int64, name stri
 
 	op.AutoRemoteStart = autoRemoteStart
 	op.AutoInstallNftables = autoInstallTables
+
+	if sshParams != nil {
+		sshParamsJSON, err := json.Marshal(sshParams)
+		if err != nil {
+			return err
+		}
+		op.SshParams = sshParamsJSON
+	}
 
 	err := this.Save(tx, op)
 	if err != nil {
@@ -429,7 +437,7 @@ func (this *NodeClusterDAO) FindAllEnabledClustersWithDNSDomainId(tx *dbs.Tx, dn
 	_, err = this.Query(tx).
 		State(NodeClusterStateEnabled).
 		Attr("dnsDomainId", dnsDomainId).
-		Result("id", "name", "dnsName", "dnsDomainId", "isOn").
+		Result("id", "name", "dnsName", "dnsDomainId", "isOn", "dns").
 		Slice(&result).
 		FindAll()
 	return
@@ -452,6 +460,27 @@ func (this *NodeClusterDAO) FindClusterGrantId(tx *dbs.Tx, clusterId int64) (int
 		Pk(clusterId).
 		Result("grantId").
 		FindInt64Col(0)
+}
+
+// FindClusterSSHParams 查找集群的SSH默认参数
+func (this *NodeClusterDAO) FindClusterSSHParams(tx *dbs.Tx, clusterId int64) (*nodeconfigs.SSHParams, error) {
+	sshParamsJSON, err := this.Query(tx).
+		Pk(clusterId).
+		Result("sshParams").
+		FindJSONCol()
+	if err != nil {
+		return nil, err
+	}
+
+	var params = nodeconfigs.DefaultSSHParams()
+	if len(sshParamsJSON) == 0 {
+		return params, nil
+	}
+	err = json.Unmarshal(sshParamsJSON, params)
+	if err != nil {
+		return nil, err
+	}
+	return params, nil
 }
 
 // FindClusterDNSInfo 查找DNS信息
@@ -967,7 +996,7 @@ func (this *NodeClusterDAO) FindClusterBasicInfo(tx *dbs.Tx, clusterId int64, ca
 	cluster, err := this.Query(tx).
 		Pk(clusterId).
 		State(NodeClusterStateEnabled).
-		Result("id", "timeZone", "nodeMaxThreads", "cachePolicyId", "httpFirewallPolicyId", "autoOpenPorts", "webp", "uam", "isOn", "ddosProtection", "clock", "globalServerConfig", "autoInstallNftables").
+		Result("id", "name", "timeZone", "nodeMaxThreads", "cachePolicyId", "httpFirewallPolicyId", "autoOpenPorts", "webp", "uam", "cc", "httpPages", "isOn", "ddosProtection", "clock", "globalServerConfig", "autoInstallNftables").
 		Find()
 	if err != nil || cluster == nil {
 		return nil, err
@@ -1048,7 +1077,7 @@ func (this *NodeClusterDAO) UpdateClusterUAMPolicy(tx *dbs.Tx, clusterId int64, 
 			return err
 		}
 
-		return this.NotifyUpdate(tx, clusterId)
+		return this.NotifyUAMUpdate(tx, clusterId)
 	}
 
 	uamPolicyJSON, err := json.Marshal(uamPolicy)
@@ -1063,10 +1092,10 @@ func (this *NodeClusterDAO) UpdateClusterUAMPolicy(tx *dbs.Tx, clusterId int64, 
 		return err
 	}
 
-	return this.NotifyUpdate(tx, clusterId)
+	return this.NotifyUAMUpdate(tx, clusterId)
 }
 
-// FindClusterUAMPolicy 查询设置
+// FindClusterUAMPolicy 查询UAM设置
 func (this *NodeClusterDAO) FindClusterUAMPolicy(tx *dbs.Tx, clusterId int64, cacheMap *utils.CacheMap) (*nodeconfigs.UAMPolicy, error) {
 	var cacheKey = this.Table + ":FindClusterUAMPolicy:" + types.String(clusterId)
 	if cacheMap != nil {
@@ -1093,6 +1122,146 @@ func (this *NodeClusterDAO) FindClusterUAMPolicy(tx *dbs.Tx, clusterId int64, ca
 	if err != nil {
 		return nil, err
 	}
+	return policy, nil
+}
+
+// UpdateClusterHTTPCCPolicy 修改CC策略设置
+func (this *NodeClusterDAO) UpdateClusterHTTPCCPolicy(tx *dbs.Tx, clusterId int64, httpCCPolicy *nodeconfigs.HTTPCCPolicy) error {
+	if httpCCPolicy == nil {
+		err := this.Query(tx).
+			Pk(clusterId).
+			Set("cc", dbs.SQL("null")).
+			UpdateQuickly()
+		if err != nil {
+			return err
+		}
+
+		return this.NotifyHTTPCCUpdate(tx, clusterId)
+	}
+
+	httpCCPolicyJSON, err := json.Marshal(httpCCPolicy)
+	if err != nil {
+		return err
+	}
+	err = this.Query(tx).
+		Pk(clusterId).
+		Set("cc", httpCCPolicyJSON).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyHTTPCCUpdate(tx, clusterId)
+}
+
+// FindClusterHTTPCCPolicy 查询CC策略设置
+func (this *NodeClusterDAO) FindClusterHTTPCCPolicy(tx *dbs.Tx, clusterId int64, cacheMap *utils.CacheMap) (*nodeconfigs.HTTPCCPolicy, error) {
+	var cacheKey = this.Table + ":FindClusterHTTPCCPolicy:" + types.String(clusterId)
+	if cacheMap != nil {
+		cache, ok := cacheMap.Get(cacheKey)
+		if ok {
+			return cache.(*nodeconfigs.HTTPCCPolicy), nil
+		}
+	}
+
+	httpCCJSON, err := this.Query(tx).
+		Pk(clusterId).
+		Result("cc").
+		FindJSONCol()
+	if err != nil {
+		return nil, err
+	}
+
+	if IsNull(httpCCJSON) {
+		return nodeconfigs.NewHTTPCCPolicy(), nil
+	}
+
+	var policy = nodeconfigs.NewHTTPCCPolicy()
+	err = json.Unmarshal(httpCCJSON, policy)
+	if err != nil {
+		return nil, err
+	}
+	return policy, nil
+}
+
+// UpdateClusterHTTPPagesPolicy 修改自定义页面设置
+func (this *NodeClusterDAO) UpdateClusterHTTPPagesPolicy(tx *dbs.Tx, clusterId int64, httpPagesPolicy *nodeconfigs.HTTPPagesPolicy) error {
+	if httpPagesPolicy == nil {
+		err := this.Query(tx).
+			Pk(clusterId).
+			Set("httpPages", dbs.SQL("null")).
+			UpdateQuickly()
+		if err != nil {
+			return err
+		}
+
+		return this.NotifyHTTPPagesPolicyUpdate(tx, clusterId)
+	}
+
+	// 移除不需要保存的内容
+	var newPages = []*serverconfigs.HTTPPageConfig{}
+	for _, page := range httpPagesPolicy.Pages {
+		newPages = append(newPages, &serverconfigs.HTTPPageConfig{Id: page.Id})
+	}
+	httpPagesPolicy.Pages = newPages
+
+	httpPagesPolicyJSON, err := json.Marshal(httpPagesPolicy)
+	if err != nil {
+		return err
+	}
+	err = this.Query(tx).
+		Pk(clusterId).
+		Set("httpPages", httpPagesPolicyJSON).
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+
+	return this.NotifyHTTPPagesPolicyUpdate(tx, clusterId)
+}
+
+// FindClusterHTTPPagesPolicy 查询自定义页面设置
+func (this *NodeClusterDAO) FindClusterHTTPPagesPolicy(tx *dbs.Tx, clusterId int64, cacheMap *utils.CacheMap) (*nodeconfigs.HTTPPagesPolicy, error) {
+	var cacheKey = this.Table + ":FindClusterHTTPPagesPolicy:" + types.String(clusterId)
+	if cacheMap != nil {
+		cache, ok := cacheMap.Get(cacheKey)
+		if ok {
+			return cache.(*nodeconfigs.HTTPPagesPolicy), nil
+		}
+	}
+
+	pagesJSON, err := this.Query(tx).
+		Pk(clusterId).
+		Result("httpPages").
+		FindJSONCol()
+	if err != nil {
+		return nil, err
+	}
+
+	if IsNull(pagesJSON) {
+		return nodeconfigs.NewHTTPPagesPolicy(), nil
+	}
+
+	var policy = nodeconfigs.NewHTTPPagesPolicy()
+	err = json.Unmarshal(pagesJSON, policy)
+	if err != nil {
+		return nil, err
+	}
+
+	// 读取Page信息
+	var newPages = []*serverconfigs.HTTPPageConfig{}
+	for _, page := range policy.Pages {
+		pageConfig, err := SharedHTTPPageDAO.ComposePageConfig(tx, page.Id, cacheMap)
+		if err != nil {
+			return nil, err
+		}
+		if pageConfig == nil {
+			continue
+		}
+		newPages = append(newPages, pageConfig)
+	}
+	policy.Pages = newPages
+
 	return policy, nil
 }
 
@@ -1132,7 +1301,7 @@ func (this *NodeClusterDAO) UpdateClusterDDoSProtection(tx *dbs.Tx, clusterId in
 	if err != nil {
 		return err
 	}
-	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, NodeTaskTypeDDosProtectionChanged)
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, NodeTaskTypeDDosProtectionChanged)
 }
 
 // FindClusterGlobalServerConfig 查询全局服务配置
@@ -1175,12 +1344,27 @@ func (this *NodeClusterDAO) UpdateClusterGlobalServerConfig(tx *dbs.Tx, clusterI
 		return err
 	}
 
-	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, NodeTaskTypeGlobalServerConfigChanged)
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, NodeTaskTypeGlobalServerConfigChanged)
 }
 
 // NotifyUpdate 通知更新
 func (this *NodeClusterDAO) NotifyUpdate(tx *dbs.Tx, clusterId int64) error {
-	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, NodeTaskTypeConfigChanged)
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, NodeTaskTypeConfigChanged)
+}
+
+// NotifyUAMUpdate 通知UAM更新
+func (this *NodeClusterDAO) NotifyUAMUpdate(tx *dbs.Tx, clusterId int64) error {
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, NodeTaskTypeUAMPolicyChanged)
+}
+
+// NotifyHTTPCCUpdate 通知HTTP CC更新
+func (this *NodeClusterDAO) NotifyHTTPCCUpdate(tx *dbs.Tx, clusterId int64) error {
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, NodeTaskTypeHTTPCCPolicyChanged)
+}
+
+// NotifyHTTPPagesPolicyUpdate 通知HTTP Pages更新
+func (this *NodeClusterDAO) NotifyHTTPPagesPolicyUpdate(tx *dbs.Tx, clusterId int64) error {
+	return SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, NodeTaskTypeHTTPPagesPolicyChanged)
 }
 
 // NotifyDNSUpdate 通知DNS更新

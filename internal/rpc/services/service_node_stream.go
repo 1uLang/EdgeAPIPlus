@@ -3,14 +3,14 @@ package services
 import (
 	"context"
 	"fmt"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/logs"
 	"strconv"
 	"sync"
@@ -112,24 +112,24 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 
 	var tx = this.NullTx()
 
-	// 标记为活跃状态
+	// 是否发送恢复通知
 	oldIsActive, err := models.SharedNodeDAO.FindNodeActive(tx, nodeId)
 	if err != nil {
 		return err
 	}
-
 	if !oldIsActive {
 		inactiveNotifiedAt, err := models.SharedNodeDAO.FindNodeInactiveNotifiedAt(tx, nodeId)
 		if err != nil {
 			return err
 		}
-		if inactiveNotifiedAt > 0 {
-			// 设置为活跃
-			err = models.SharedNodeDAO.UpdateNodeActive(tx, nodeId, true)
-			if err != nil {
-				return err
-			}
 
+		// 设置为活跃
+		err = models.SharedNodeDAO.UpdateNodeActive(tx, nodeId, true)
+		if err != nil {
+			return err
+		}
+
+		if inactiveNotifiedAt > 0 {
 			// 发送恢复消息
 			clusterId, err := models.SharedNodeDAO.FindNodeClusterId(tx, nodeId)
 			if err != nil {
@@ -142,12 +142,6 @@ func (this *NodeService) NodeStream(server pb.NodeService_NodeStreamServer) erro
 			var subject = "节点\"" + nodeName + "\"已经恢复在线"
 			var msg = "节点\"" + nodeName + "\"已经恢复在线"
 			err = models.SharedMessageDAO.CreateNodeMessage(tx, nodeconfigs.NodeRoleNode, clusterId, nodeId, models.MessageTypeNodeActive, models.MessageLevelSuccess, subject, msg, nil, false)
-			if err != nil {
-				return err
-			}
-		} else {
-			// 设置为活跃
-			err = models.SharedNodeDAO.UpdateNodeActive(tx, nodeId, true)
 			if err != nil {
 				return err
 			}

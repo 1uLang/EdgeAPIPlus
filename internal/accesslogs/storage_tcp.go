@@ -1,9 +1,11 @@
+//go:build plus
+
 package accesslogs
 
 import (
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/iwind/TeaGo/logs"
 	"net"
 	"sync"
@@ -51,7 +53,7 @@ func (this *TCPStorage) Write(accessLogs []*pb.HTTPAccessLog) error {
 		return err
 	}
 
-	conn := this.conn
+	var conn = this.conn
 	if conn == nil {
 		return errors.New("connection should not be nil")
 	}

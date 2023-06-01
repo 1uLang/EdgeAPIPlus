@@ -2,16 +2,14 @@ package services
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/acme"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/sslconfigs"
+	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
-	timeutil "github.com/iwind/TeaGo/utils/time"
 )
 
 // SSLCertService SSL证书相关服务
@@ -19,12 +17,17 @@ type SSLCertService struct {
 	BaseService
 }
 
-// CreateSSLCert 创建Cert
+// CreateSSLCert 创建证书
 func (this *SSLCertService) CreateSSLCert(ctx context.Context, req *pb.CreateSSLCertRequest) (*pb.CreateSSLCertResponse, error) {
 	// 校验请求
 	adminId, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
+	}
+
+	// 用户ID
+	if adminId > 0 && req.UserId > 0 {
+		userId = req.UserId
 	}
 
 	var tx = this.NullTx()
@@ -42,6 +45,39 @@ func (this *SSLCertService) CreateSSLCert(ctx context.Context, req *pb.CreateSSL
 	}
 
 	return &pb.CreateSSLCertResponse{SslCertId: certId}, nil
+}
+
+// CreateSSLCerts 创建一组证书
+func (this *SSLCertService) CreateSSLCerts(ctx context.Context, req *pb.CreateSSLCertsRequest) (*pb.CreateSSLCertsResponse, error) {
+	// 校验请求
+	adminId, userId, err := this.ValidateAdminAndUser(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if adminId > 0 {
+		if req.UserId > 0 {
+			userId = req.UserId
+		} else {
+			userId = 0
+		}
+	}
+
+	var certIds = []int64{}
+	err = this.RunTx(func(tx *dbs.Tx) error {
+		for _, cert := range req.SSLCerts {
+			certId, err := models.SharedSSLCertDAO.CreateCert(tx, adminId, userId, cert.IsOn, cert.Name, cert.Description, cert.ServerName, cert.IsCA, cert.CertData, cert.KeyData, cert.TimeBeginAt, cert.TimeEndAt, cert.DnsNames, cert.CommonNames)
+			if err != nil {
+				return err
+			}
+			certIds = append(certIds, certId)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &pb.CreateSSLCertsResponse{SslCertIds: certIds}, nil
 }
 
 // UpdateSSLCert 修改Cert
@@ -95,7 +131,7 @@ func (this *SSLCertService) FindEnabledSSLCertConfig(ctx context.Context, req *p
 		}
 	}
 
-	config, err := models.SharedSSLCertDAO.ComposeCertConfig(tx, req.SslCertId, nil)
+	config, err := models.SharedSSLCertDAO.ComposeCertConfig(tx, req.SslCertId, false, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -142,14 +178,20 @@ func (this *SSLCertService) DeleteSSLCert(ctx context.Context, req *pb.DeleteSSL
 // CountSSLCerts 计算匹配的Cert数量
 func (this *SSLCertService) CountSSLCerts(ctx context.Context, req *pb.CountSSLCertRequest) (*pb.RPCCountResponse, error) {
 	// 校验请求
-	_, _, err := this.ValidateAdminAndUser(ctx, true)
+	adminId, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
 
-	count, err := models.SharedSSLCertDAO.CountCerts(tx, req.IsCA, req.IsAvailable, req.IsExpired, int64(req.ExpiringDays), req.Keyword, req.UserId)
+	if adminId > 0 {
+		userId = req.UserId
+	} else if userId <= 0 {
+		return nil, errors.New("invalid user")
+	}
+
+	count, err := models.SharedSSLCertDAO.CountCerts(tx, req.IsCA, req.IsAvailable, req.IsExpired, int64(req.ExpiringDays), req.Keyword, userId, req.Domains)
 	if err != nil {
 		return nil, err
 	}
@@ -160,21 +202,27 @@ func (this *SSLCertService) CountSSLCerts(ctx context.Context, req *pb.CountSSLC
 // ListSSLCerts 列出单页匹配的Cert
 func (this *SSLCertService) ListSSLCerts(ctx context.Context, req *pb.ListSSLCertsRequest) (*pb.ListSSLCertsResponse, error) {
 	// 校验请求
-	_, _, err := this.ValidateAdminAndUser(ctx, true)
+	adminId, userId, err := this.ValidateAdminAndUser(ctx, true)
 	if err != nil {
 		return nil, err
+	}
+
+	if adminId > 0 {
+		userId = req.UserId
+	} else if userId <= 0 {
+		return nil, errors.New("invalid user")
 	}
 
 	var tx = this.NullTx()
 
-	certIds, err := models.SharedSSLCertDAO.ListCertIds(tx, req.IsCA, req.IsAvailable, req.IsExpired, int64(req.ExpiringDays), req.Keyword, req.UserId, req.Offset, req.Size)
+	certIds, err := models.SharedSSLCertDAO.ListCertIds(tx, req.IsCA, req.IsAvailable, req.IsExpired, int64(req.ExpiringDays), req.Keyword, userId, req.Domains, req.Offset, req.Size)
 	if err != nil {
 		return nil, err
 	}
 
-	certConfigs := []*sslconfigs.SSLCertConfig{}
+	var certConfigs = []*sslconfigs.SSLCertConfig{}
 	for _, certId := range certIds {
-		certConfig, err := models.SharedSSLCertDAO.ComposeCertConfig(tx, certId, nil)
+		certConfig, err := models.SharedSSLCertDAO.ComposeCertConfig(tx, certId, false, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -319,133 +367,4 @@ func (this *SSLCertService) ListUpdatedSSLCertOCSP(ctx context.Context, req *pb.
 	return &pb.ListUpdatedSSLCertOCSPResponse{
 		SslCertOCSP: result,
 	}, nil
-}
-
-// ------- api 客户定制化接口
-
-type CreateSSLCertAPIRequest struct {
-	Username    string `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"` //指定用户账号
-	IsOn        bool   `protobuf:"varint,2,opt,name=isOn,proto3" json:"isOn,omitempty"`
-	Name        string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Description string `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
-	ServerName  string `protobuf:"bytes,5,opt,name=serverName,proto3" json:"serverName,omitempty"`
-	IsCA        bool   `protobuf:"varint,6,opt,name=isCA,proto3" json:"isCA,omitempty"`
-	CertData    string `protobuf:"bytes,7,opt,name=certData,proto3" json:"certData,omitempty"`
-	KeyData     string `protobuf:"bytes,8,opt,name=keyData,proto3" json:"keyData,omitempty"`
-}
-
-type FindAllCertRequest struct {
-	Offset int64 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"` //偏移量
-	Size   int64 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`     //显示条数
-}
-
-type FindAllCertResponse struct {
-	Certs []*FindAllCertResponse_Cert `protobuf:"bytes,1,rep,name=certs,proto3" json:"certs,omitempty"`  //证书列表
-	Total int64                       `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"` //总条数
-}
-type FindAllCertResponse_Cert struct {
-	Id           int64    `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`                     //证书id
-	Name         string   `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`                  //证书名称
-	TimeBeginDay string   `protobuf:"bytes,3,opt,name=timeBeginDay,proto3" json:"timeBeginDay,omitempty"`  //证书生效时间
-	TimeEndDay   string   `protobuf:"bytes,4,opt,name=timeEndDay,proto3" json:"timeEndDay,omitempty"`      //证书失效时间
-	DnsNames     []string `protobuf:"bytes,5,rep,name=dnsNames,proto3" json:"dnsNames,omitempty"`          //dns
-	IsCA         bool     `protobuf:"varint,6,opt,name=isCA,proto3" json:"isCA,omitempty"`                 //是否为CA证书
-	CountServers int64    `protobuf:"varint,6,opt,name=countServers,proto3" json:"countServers,omitempty"` //服务引用数
-}
-
-// CreateSSLCert 创建Cert
-func (this *SSLCertService) CreateSSLCertAPI(ctx context.Context, req *CreateSSLCertAPIRequest) (*pb.CreateSSLCertResponse, error) {
-	// 校验请求
-	adminId, err := this.ValidateAdmin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tx := this.NullTx()
-	//通过username找到userId
-	if req.Username == "" {
-		return nil, fmt.Errorf("username不能为空")
-	}
-	adminId, err = models.SharedAdminDAO.FindAdminIdWithUsername(tx, req.Username)
-	if err != nil {
-		return nil, fmt.Errorf("查询用户名%s失败：%s", req.Username, err.Error())
-	}
-	if adminId == 0 {
-		return nil, fmt.Errorf("该用户名%s不存在", req.Username)
-	}
-	certData, err := base64.StdEncoding.DecodeString(req.CertData)
-	if err != nil {
-		return nil, fmt.Errorf("证书校验错误：" + err.Error())
-	}
-	keyData, err := base64.StdEncoding.DecodeString(req.KeyData)
-	if err != nil {
-		return nil, fmt.Errorf("证书或密钥校验错误：" + err.Error())
-	}
-	fmt.Println("cert : ", string(certData))
-	fmt.Println("key : ", string(keyData))
-	// 校验
-	sslConfig := &sslconfigs.SSLCertConfig{
-		IsCA:     req.IsCA,
-		CertData: certData,
-		KeyData:  keyData,
-	}
-	err = sslConfig.Init()
-	if err != nil {
-		if req.IsCA {
-			return nil, fmt.Errorf("证书校验错误：" + err.Error())
-		} else {
-			return nil, fmt.Errorf("证书或密钥校验错误：" + err.Error())
-		}
-	}
-	fmt.Println(sslConfig.TimeBeginAt, sslConfig.TimeEndAt)
-	certId, err := models.SharedSSLCertDAO.CreateCert(tx, adminId, 0, req.IsOn, req.Name, req.Description, req.ServerName,
-		req.IsCA, certData, keyData, sslConfig.TimeBeginAt, sslConfig.TimeEndAt, sslConfig.DNSNames, sslConfig.CommonNames)
-	if err != nil {
-		return nil, err
-	}
-
-	return &pb.CreateSSLCertResponse{SslCertId: certId}, nil
-}
-
-func (this *SSLCertService) FindAllCert(ctx context.Context, req *FindAllCertRequest) (*FindAllCertResponse, error) {
-	// 校验请求
-	_, err := this.ValidateAdmin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tx := this.NullTx()
-
-	result, total, err := models.SharedSSLCertDAO.FindAllCerts(tx, req.Offset, req.Size)
-	if err != nil {
-		return nil, err
-	}
-	resp := &FindAllCertResponse{Total: total}
-	for _, cert := range result {
-		c := &FindAllCertResponse_Cert{Id: int64(cert.Id), Name: cert.Name, IsCA: cert.IsCA}
-		c.DnsNames = []string{}
-		if models.IsNotNull(cert.DnsNames) {
-			err = json.Unmarshal(cert.DnsNames, &c.DnsNames)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		policyIds, err := models.SharedSSLPolicyDAO.FindAllEnabledPolicyIdsWithCertId(tx, int64(cert.Id))
-		if err != nil {
-			return nil, err
-		}
-
-		if len(policyIds) == 0 {
-			c.CountServers = 0
-		} else {
-			c.CountServers, err = models.SharedServerDAO.CountAllEnabledServersWithSSLPolicyIds(tx, policyIds)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		c.TimeBeginDay = timeutil.FormatTime("Y-m-d", int64(cert.TimeBeginAt))
-		c.TimeEndDay = timeutil.FormatTime("Y-m-d", int64(cert.TimeEndAt))
-		resp.Certs = append(resp.Certs, c)
-	}
-	return resp, nil
 }

@@ -3,11 +3,11 @@ package models
 import (
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/configutils"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
 	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -121,7 +121,7 @@ func (this *NodeIPAddressDAO) FindAddressIsHealthy(tx *dbs.Tx, addressId int64) 
 }
 
 // CreateAddress 创建IP地址
-func (this *NodeIPAddressDAO) CreateAddress(tx *dbs.Tx, adminId int64, nodeId int64, role nodeconfigs.NodeRole, name string, ip string, canAccess bool, isUp bool, groupId int64) (addressId int64, err error) {
+func (this *NodeIPAddressDAO) CreateAddress(tx *dbs.Tx, adminId int64, nodeId int64, role nodeconfigs.NodeRole, name string, ip string, canAccess bool, isUp bool, groupId int64, clusterIds []int64) (addressId int64, err error) {
 	if len(role) == 0 {
 		role = nodeconfigs.NodeRoleNode
 	}
@@ -134,6 +134,17 @@ func (this *NodeIPAddressDAO) CreateAddress(tx *dbs.Tx, adminId int64, nodeId in
 	op.CanAccess = canAccess
 	op.IsUp = isUp
 	op.GroupId = groupId
+
+	// 集群
+	if len(clusterIds) == 0 {
+		op.ClusterIds = "[]"
+	} else {
+		clusterIdsJSON, err := json.Marshal(clusterIds)
+		if err != nil {
+			return 0, err
+		}
+		op.ClusterIds = clusterIdsJSON
+	}
 
 	op.State = NodeIPAddressStateEnabled
 	addressId, err = this.SaveInt64(tx, op)
@@ -156,7 +167,7 @@ func (this *NodeIPAddressDAO) CreateAddress(tx *dbs.Tx, adminId int64, nodeId in
 }
 
 // UpdateAddress 修改IP地址
-func (this *NodeIPAddressDAO) UpdateAddress(tx *dbs.Tx, adminId int64, addressId int64, name string, ip string, canAccess bool, isOn bool, isUp bool) (err error) {
+func (this *NodeIPAddressDAO) UpdateAddress(tx *dbs.Tx, adminId int64, addressId int64, name string, ip string, canAccess bool, isOn bool, isUp bool, clusterIds []int64) (err error) {
 	if addressId <= 0 {
 		return errors.New("invalid addressId")
 	}
@@ -168,6 +179,17 @@ func (this *NodeIPAddressDAO) UpdateAddress(tx *dbs.Tx, adminId int64, addressId
 	op.CanAccess = canAccess
 	op.IsOn = isOn
 	op.IsUp = isUp
+
+	// 集群
+	if len(clusterIds) == 0 {
+		op.ClusterIds = "[]"
+	} else {
+		clusterIdsJSON, err := json.Marshal(clusterIds)
+		if err != nil {
+			return err
+		}
+		op.ClusterIds = clusterIdsJSON
+	}
 
 	op.State = NodeIPAddressStateEnabled // 恢复状态
 	err = this.Save(tx, op)
@@ -285,7 +307,7 @@ func (this *NodeIPAddressDAO) FindFirstNodeAccessIPAddressId(tx *dbs.Tx, nodeId 
 		FindInt64Col(0)
 }
 
-// FindNodeAccessAndUpIPAddresses 查找节点所有的可访问的IP地址
+// FindNodeAccessAndUpIPAddresses 查找节点所有的可访问且在线的IP地址
 func (this *NodeIPAddressDAO) FindNodeAccessAndUpIPAddresses(tx *dbs.Tx, nodeId int64, role nodeconfigs.NodeRole) (result []*NodeIPAddress, err error) {
 	if len(role) == 0 {
 		role = nodeconfigs.NodeRoleNode
@@ -297,6 +319,24 @@ func (this *NodeIPAddressDAO) FindNodeAccessAndUpIPAddresses(tx *dbs.Tx, nodeId 
 		Attr("canAccess", true).
 		Attr("isOn", true).
 		Attr("isUp", true).
+		Desc("order").
+		AscPk().
+		Slice(&result).
+		FindAll()
+	return
+}
+
+// FindNodeAccessIPAddresses 查找节点所有的可访问的IP地址，包括在线和离线
+func (this *NodeIPAddressDAO) FindNodeAccessIPAddresses(tx *dbs.Tx, nodeId int64, role nodeconfigs.NodeRole) (result []*NodeIPAddress, err error) {
+	if len(role) == 0 {
+		role = nodeconfigs.NodeRoleNode
+	}
+	_, err = this.Query(tx).
+		Attr("role", role).
+		Attr("nodeId", nodeId).
+		State(NodeIPAddressStateEnabled).
+		Attr("canAccess", true).
+		Attr("isOn", true).
 		Desc("order").
 		AscPk().
 		Slice(&result).
@@ -604,7 +644,7 @@ func (this *NodeIPAddressDAO) NotifyUpdate(tx *dbs.Tx, addressId int64) error {
 	var role = address.(*NodeIPAddress).Role
 	switch role {
 	case nodeconfigs.NodeRoleNode:
-		err = dns.SharedDNSTaskDAO.CreateNodeTask(tx, nodeId, dns.DNSTaskTypeNodeChange)
+		err = dns.SharedDNSTaskDAO.CreateNodeTask(tx, 0, nodeId, dns.DNSTaskTypeNodeChange)
 		if err != nil {
 			return err
 		}

@@ -2,28 +2,20 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/dnsconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 )
 
 // DecodeDNSConfig 解析DNS配置
 func (this *NodeCluster) DecodeDNSConfig() (*dnsconfigs.ClusterDNSConfig, error) {
 	if len(this.Dns) == 0 {
 		// 一定要返回一个默认的值，防止产生nil
-		return &dnsconfigs.ClusterDNSConfig{
-			NodesAutoSync:    false,
-			ServersAutoSync:  false,
-			CNAMEAsDomain:    true,
-			IncludingLnNodes: true,
-		}, nil
+		return dnsconfigs.DefaultClusterDNSConfig(), nil
 	}
-	var dnsConfig = &dnsconfigs.ClusterDNSConfig{
-		CNAMEAsDomain:    true,
-		IncludingLnNodes: true,
-	}
+	var dnsConfig = dnsconfigs.DefaultClusterDNSConfig()
 	err := json.Unmarshal(this.Dns, &dnsConfig)
 	if err != nil {
 		return nil, err

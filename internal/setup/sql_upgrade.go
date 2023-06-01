@@ -2,15 +2,15 @@ package setup
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
-	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/acme"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/stats"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/firewallconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/maps"
@@ -83,7 +83,13 @@ var upgradeFuncs = []*upgradeVersion{
 		"0.4.11", upgradeV0_4_11,
 	},
 	{
-		"v0.5.3", upgradeV0_5_3,
+		"0.5.3", upgradeV0_5_3,
+	},
+	{
+		"0.5.6", upgradeV0_5_6,
+	},
+	{
+		"0.5.8", upgradeV0_5_8,
 	},
 }
 
@@ -657,68 +663,6 @@ func upgradeV0_4_8(db *dbs.DB) error {
 					_, err = db.Exec("UPDATE edgeIPLists SET serverId=? WHERE id=?", serverId, listId)
 					if err != nil {
 						return err
-					}
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// v0.4.9
-func upgradeV0_4_9(db *dbs.DB) error {
-	// 升级用户UI配置
-	{
-		one, err := db.FindOne("SELECT value FROM edgeSysSettings WHERE code=?", systemconfigs.SettingCodeUserUIConfig)
-		if err != nil {
-			return err
-		}
-		if one != nil {
-			var valueJSON = one.GetBytes("value")
-			if len(valueJSON) > 0 {
-				var config = &systemconfigs.UserUIConfig{}
-				err = json.Unmarshal(valueJSON, config)
-				if err == nil {
-					config.ShowTrafficCharts = true
-					config.ShowBandwidthCharts = true
-					config.BandwidthUnit = systemconfigs.BandwidthUnitBit
-					configJSON, err := json.Marshal(config)
-					if err != nil {
-						return errors.New("encode UserUIConfig failed: " + err.Error())
-					} else {
-						_, err := db.Exec("UPDATE edgeSysSettings SET value=? WHERE code=?", configJSON, systemconfigs.SettingCodeUserUIConfig)
-						if err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// 升级管理配置
-	{
-		one, err := db.FindOne("SELECT value FROM edgeSysSettings WHERE code=?", systemconfigs.SettingCodeAdminSecurityConfig)
-		if err != nil {
-			return err
-		}
-		if one != nil {
-			var valueJSON = one.GetBytes("value")
-			if len(valueJSON) > 0 {
-				var config = &systemconfigs.SecurityConfig{}
-				err = json.Unmarshal(valueJSON, config)
-				if err == nil {
-					config.DenySearchEngines = true
-					config.DenySpiders = true
-					configJSON, err := json.Marshal(config)
-					if err != nil {
-						return errors.New("encode SecurityConfig failed: " + err.Error())
-					} else {
-						_, err := db.Exec("UPDATE edgeSysSettings SET value=? WHERE code=?", configJSON, systemconfigs.SettingCodeAdminSecurityConfig)
-						if err != nil {
-							return err
-						}
 					}
 				}
 			}

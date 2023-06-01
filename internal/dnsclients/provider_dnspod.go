@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients/dnspod"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients/dnstypes"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
 	"github.com/iwind/TeaGo/maps"
@@ -30,8 +31,12 @@ var dnsPodHTTPClient = &http.Client{
 }
 
 // DNSPodProvider DNSPod服务商
+// TODO 考虑支持线路ID
+// TODO 支持自定义线路
 type DNSPodProvider struct {
 	BaseProvider
+
+	ProviderId int64
 
 	region   string
 	apiId    string
@@ -50,37 +55,33 @@ func (this *DNSPodProvider) Auth(params maps.Map) error {
 	if len(this.apiToken) == 0 {
 		return errors.New("'token' should not be empty")
 	}
+
 	return nil
 }
 
 // GetDomains 获取所有域名列表
 func (this *DNSPodProvider) GetDomains() (domains []string, err error) {
 	var offset = 0
-	var size = 100
+	var size = 3000
 
 	for {
-		domainsResp, err := this.post("/Domain.List", map[string]string{
+		var resp = new(dnspod.DomainListResponse)
+
+		err := this.doAPI("/Domain.List", map[string]string{
 			"offset": numberutils.FormatInt(offset),
 			"length": numberutils.FormatInt(size),
-		})
+		}, resp)
 		if err != nil {
 			return nil, err
 		}
 		offset += size
 
-		var domainsSlice = domainsResp.GetSlice("domains")
-		if len(domainsSlice) == 0 {
-			break
-		}
-
-		for _, domain := range domainsSlice {
-			domainMap := maps.NewMap(domain)
-			domains = append(domains, domainMap.GetString("name"))
+		for _, domain := range resp.Domains {
+			domains = append(domains, domain.Name)
 		}
 
 		// 检查是否到头
-		var info = domainsResp.GetMap("info")
-		var recordTotal = info.GetInt("all_total")
+		var recordTotal = resp.Info.AllTotal
 		if offset >= recordTotal {
 			break
 		}
@@ -91,62 +92,67 @@ func (this *DNSPodProvider) GetDomains() (domains []string, err error) {
 // GetRecords 获取域名列表
 func (this *DNSPodProvider) GetRecords(domain string) (records []*dnstypes.Record, err error) {
 	var offset = 0
-	var size = 100
+	var size = 3000
 	for {
-		recordsResp, err := this.post("/Record.List", map[string]string{
+		var resp = new(dnspod.RecordListResponse)
+		err := this.doAPI("/Record.List", map[string]string{
 			"domain": domain,
 			"offset": numberutils.FormatInt(offset),
 			"length": numberutils.FormatInt(size),
-		})
+		}, resp)
 		if err != nil {
 			return nil, err
 		}
 		offset += size
 
 		// 记录
-		var recordSlice = recordsResp.GetSlice("records")
-		for _, record := range recordSlice {
-			recordMap := maps.NewMap(record)
+		for _, record := range resp.Records {
 			records = append(records, &dnstypes.Record{
-				Id:    recordMap.GetString("id"),
-				Name:  recordMap.GetString("name"),
-				Type:  recordMap.GetString("type"),
-				Value: recordMap.GetString("value"),
-				Route: recordMap.GetString("line"),
-				TTL:   recordMap.GetInt32("ttl"),
+				Id:    types.String(record.Id),
+				Name:  record.Name,
+				Type:  record.Type,
+				Value: record.Value,
+				Route: record.Line,
+				TTL:   types.Int32(record.TTL),
 			})
 		}
 
 		// 检查是否到头
-		var info = recordsResp.GetMap("info")
-		var recordTotal = info.GetInt("record_total")
+		var recordTotal = types.Int(resp.Info.RecordTotal)
 		if offset >= recordTotal {
 			break
 		}
 	}
+
+	// 写入缓存
+	if this.ProviderId > 0 {
+		sharedDomainRecordsCache.WriteDomainRecords(this.ProviderId, domain, records)
+	}
+
 	return
 }
 
 // GetRoutes 读取线路数据
 func (this *DNSPodProvider) GetRoutes(domain string) (routes []*dnstypes.Route, err error) {
-	infoResp, err := this.post("/Domain.Info", map[string]string{
+	var domainInfoResp = new(dnspod.DomainInfoResponse)
+	err = this.doAPI("/Domain.Info", map[string]string{
 		"domain": domain,
-	})
+	}, domainInfoResp)
 	if err != nil {
 		return nil, err
 	}
-	domainInfo := infoResp.GetMap("domain")
-	grade := domainInfo.GetString("grade")
+	var grade = domainInfoResp.Domain.Grade
 
-	linesResp, err := this.post("/Record.Line", map[string]string{
+	var linesResp = new(dnspod.RecordLineResponse)
+	err = this.doAPI("/Record.Line", map[string]string{
 		"domain":       domain,
 		"domain_grade": grade,
-	})
+	}, linesResp)
 	if err != nil {
 		return nil, err
 	}
 
-	lines := linesResp.GetSlice("lines")
+	var lines = linesResp.Lines
 	if len(lines) == 0 {
 		return nil, nil
 	}
@@ -158,11 +164,66 @@ func (this *DNSPodProvider) GetRoutes(domain string) (routes []*dnstypes.Route, 
 		})
 	}
 
+	// 自定义线路分组
+	var groupsPerPage = 100
+	var customLineGroupListResponse = new(dnspod.CustomLineGroupListResponse)
+	err = this.doAPI("/Custom.Line.Group.List", map[string]string{
+		"domain": domain,
+		"offset": "0",
+		"length": types.String(groupsPerPage),
+	}, customLineGroupListResponse)
+	if err != nil {
+		// 忽略自定义分组错误
+		err = nil
+	} else {
+		if len(customLineGroupListResponse.Data.LineGroups) > 0 {
+			for _, lineGroup := range customLineGroupListResponse.Data.LineGroups {
+				routes = append(routes, &dnstypes.Route{
+					Name: "分组：" + lineGroup.Name,
+					Code: lineGroup.Name,
+				})
+			}
+		}
+
+		if customLineGroupListResponse.Data.Info.Total > customLineGroupListResponse.Data.Info.NowTotal {
+			for page := 1; page <= 100; /** 最多100页 **/ page++ {
+				err = this.doAPI("/Custom.Line.Group.List", map[string]string{
+					"domain": domain,
+					"offset": types.String(page * groupsPerPage),
+					"length": types.String(groupsPerPage),
+				}, customLineGroupListResponse)
+				if err != nil {
+					// 忽略错误
+					err = nil
+				} else {
+					if len(customLineGroupListResponse.Data.LineGroups) == 0 {
+						break
+					}
+
+					for _, lineGroup := range customLineGroupListResponse.Data.LineGroups {
+						routes = append(routes, &dnstypes.Route{
+							Name: "分组：" + lineGroup.Name,
+							Code: lineGroup.Name,
+						})
+					}
+				}
+			}
+		}
+	}
+
 	return routes, nil
 }
 
 // QueryRecord 查询单个记录
 func (this *DNSPodProvider) QueryRecord(domain string, name string, recordType dnstypes.RecordType) (*dnstypes.Record, error) {
+	// 从缓存中读取
+	if this.ProviderId > 0 {
+		record, hasRecords, _ := sharedDomainRecordsCache.QueryDomainRecord(this.ProviderId, domain, name, recordType)
+		if hasRecords { // 有效的搜索
+			return record, nil
+		}
+	}
+
 	records, err := this.GetRecords(domain)
 	if err != nil {
 		return nil, err
@@ -172,7 +233,30 @@ func (this *DNSPodProvider) QueryRecord(domain string, name string, recordType d
 			return record, nil
 		}
 	}
-	return nil, err
+	return nil, nil
+}
+
+// QueryRecords 查询多个记录
+func (this *DNSPodProvider) QueryRecords(domain string, name string, recordType dnstypes.RecordType) ([]*dnstypes.Record, error) {
+	// 从缓存中读取
+	if this.ProviderId > 0 {
+		records, hasRecords, _ := sharedDomainRecordsCache.QueryDomainRecords(this.ProviderId, domain, name, recordType)
+		if hasRecords { // 有效的搜索
+			return records, nil
+		}
+	}
+
+	records, err := this.GetRecords(domain)
+	if err != nil {
+		return nil, err
+	}
+	var result = []*dnstypes.Record{}
+	for _, record := range records {
+		if record.Name == name && record.Type == recordType {
+			result = append(result, record)
+		}
+	}
+	return result, nil
 }
 
 // AddRecord 设置记录
@@ -196,8 +280,19 @@ func (this *DNSPodProvider) AddRecord(domain string, newRecord *dnstypes.Record)
 	if newRecord.TTL > 0 && newRecord.TTL <= DNSPodMaxTTL {
 		args["ttl"] = types.String(newRecord.TTL)
 	}
-	_, err := this.post("/Record.Create", args)
-	return this.WrapError(err, domain, newRecord)
+	var resp = new(dnspod.RecordCreateResponse)
+	err := this.doAPI("/Record.Create", args, resp)
+	if err != nil {
+		return this.WrapError(err, domain, newRecord)
+	}
+	newRecord.Id = types.String(resp.Record.Id)
+
+	// 加入缓存
+	if this.ProviderId > 0 {
+		sharedDomainRecordsCache.AddDomainRecord(this.ProviderId, domain, newRecord)
+	}
+
+	return nil
 }
 
 // UpdateRecord 修改记录
@@ -225,8 +320,20 @@ func (this *DNSPodProvider) UpdateRecord(domain string, record *dnstypes.Record,
 	if newRecord.TTL > 0 && newRecord.TTL <= DNSPodMaxTTL {
 		args["ttl"] = types.String(newRecord.TTL)
 	}
-	_, err := this.post("/Record.Modify", args)
-	return this.WrapError(err, domain, newRecord)
+	var resp = new(dnspod.RecordModifyResponse)
+	err := this.doAPI("/Record.Modify", args, resp)
+	if err != nil {
+		return this.WrapError(err, domain, newRecord)
+	}
+
+	newRecord.Id = record.Id
+
+	// 修改缓存
+	if this.ProviderId > 0 {
+		sharedDomainRecordsCache.UpdateDomainRecord(this.ProviderId, domain, newRecord)
+	}
+
+	return nil
 }
 
 // DeleteRecord 删除记录
@@ -235,16 +342,26 @@ func (this *DNSPodProvider) DeleteRecord(domain string, record *dnstypes.Record)
 		return errors.New("invalid record to delete")
 	}
 
-	_, err := this.post("/Record.Remove", map[string]string{
+	var resp = new(dnspod.RecordRemoveResponse)
+	err := this.doAPI("/Record.Remove", map[string]string{
 		"domain":    domain,
 		"record_id": record.Id,
-	})
+	}, resp)
 
-	return this.WrapError(err, domain, record)
+	if err != nil {
+		return this.WrapError(err, domain, record)
+	}
+
+	// 删除缓存
+	if this.ProviderId > 0 {
+		sharedDomainRecordsCache.DeleteDomainRecord(this.ProviderId, domain, record.Id)
+	}
+
+	return nil
 }
 
 // 发送请求
-func (this *DNSPodProvider) post(path string, params map[string]string) (maps.Map, error) {
+func (this *DNSPodProvider) doAPI(path string, params map[string]string, respPtr dnspod.ResponseInterface) error {
 	var apiHost = "https://dnsapi.cn"
 	var lang = "cn"
 	if this.isInternational() { // 国际版
@@ -263,7 +380,7 @@ func (this *DNSPodProvider) post(path string, params map[string]string) (maps.Ma
 
 	req, err := http.NewRequest(http.MethodPost, apiHost+path, strings.NewReader(query.Encode()))
 	if err != nil {
-		return nil, err
+		return errors.New("create request failed: " + err.Error())
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", "GoEdge-Client/1.0.0 (iwind.liu@gmail.com)")
@@ -271,27 +388,25 @@ func (this *DNSPodProvider) post(path string, params map[string]string) (maps.Ma
 
 	resp, err := dnsPodHTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var m = maps.Map{}
-	err = json.Unmarshal(body, &m)
+	err = json.Unmarshal(body, &respPtr)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var status = m.GetMap("status")
-	var code = status.GetString("code")
-	if code != "1" {
-		return nil, errors.New("API response error: code: " + code + ", message: " + status.GetString("message"))
+	if !respPtr.IsOk() {
+		code, message := respPtr.LastError()
+		return errors.New("API response error: code: " + code + ", message: " + message)
 	}
 
-	return m, nil
+	return nil
 }
 
 // DefaultRoute 默认线路

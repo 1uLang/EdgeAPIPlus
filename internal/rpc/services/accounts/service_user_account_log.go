@@ -5,11 +5,11 @@ package accounts
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/accounts"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // UserAccountLogService 用户账户日志服务
@@ -40,14 +40,14 @@ func (this *UserAccountLogService) ListUserAccountLogs(ctx context.Context, req 
 	}
 
 	var tx = this.NullTx()
-	logs, err := accounts.SharedUserAccountLogDAO.ListAccountLogs(tx, userId, req.UserAccountId, req.Keyword, req.EventType, req.Offset, req.Size)
+	accountLogs, err := accounts.SharedUserAccountLogDAO.ListAccountLogs(tx, userId, req.UserAccountId, req.Keyword, req.EventType, req.Offset, req.Size)
 	if err != nil {
 		return nil, err
 	}
 
 	var pbLogs = []*pb.UserAccountLog{}
 	var cacheMap = utils.NewCacheMap()
-	for _, log := range logs {
+	for _, log := range accountLogs {
 		// 用户
 		var pbUser = &pb.User{Id: int64(log.UserId)}
 		user, err := models.SharedUserDAO.FindEnabledUser(tx, int64(log.UserId), cacheMap)
@@ -65,10 +65,10 @@ func (this *UserAccountLogService) ListUserAccountLogs(ctx context.Context, req 
 			Id:            int64(log.Id),
 			UserId:        int64(log.UserId),
 			UserAccountId: int64(log.AccountId),
-			Delta:         float32(log.Delta),
-			DeltaFrozen:   float32(log.DeltaFrozen),
-			Total:         float32(log.Total),
-			TotalFrozen:   float32(log.TotalFrozen),
+			Delta:         log.Delta,
+			DeltaFrozen:   log.DeltaFrozen,
+			Total:         log.Total,
+			TotalFrozen:   log.TotalFrozen,
 			EventType:     log.EventType,
 			Description:   log.Description,
 			CreatedAt:     int64(log.CreatedAt),

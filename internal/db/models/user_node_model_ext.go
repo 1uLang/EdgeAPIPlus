@@ -2,8 +2,8 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 )
 
 // DecodeHTTP 解析HTTP配置
@@ -36,7 +36,7 @@ func (this *UserNode) DecodeHTTPS(cacheMap *utils.CacheMap) (*serverconfigs.HTTP
 		return nil, err
 	}
 
-	err = config.Init()
+	err = config.Init(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (this *UserNode) DecodeHTTPS(cacheMap *utils.CacheMap) (*serverconfigs.HTTP
 	if config.SSLPolicyRef != nil {
 		policyId := config.SSLPolicyRef.SSLPolicyId
 		if policyId > 0 {
-			sslPolicy, err := SharedSSLPolicyDAO.ComposePolicyConfig(nil, policyId, cacheMap)
+			sslPolicy, err := SharedSSLPolicyDAO.ComposePolicyConfig(nil, policyId, false, nil, cacheMap)
 			if err != nil {
 				return nil, err
 			}
@@ -54,7 +54,7 @@ func (this *UserNode) DecodeHTTPS(cacheMap *utils.CacheMap) (*serverconfigs.HTTP
 		}
 	}
 
-	err = config.Init()
+	err = config.Init(nil)
 	if err != nil {
 		return nil, err
 	}

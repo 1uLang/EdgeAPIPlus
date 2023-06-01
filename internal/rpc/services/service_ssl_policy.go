@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/sslconfigs"
 )
 
 type SSLPolicyService struct {
@@ -88,7 +88,7 @@ func (this *SSLPolicyService) FindEnabledSSLPolicyConfig(ctx context.Context, re
 
 	var tx = this.NullTx()
 
-	config, err := models.SharedSSLPolicyDAO.ComposePolicyConfig(tx, req.SslPolicyId, nil)
+	config, err := models.SharedSSLPolicyDAO.ComposePolicyConfig(tx, req.SslPolicyId, req.IgnoreData, nil, nil)
 	if err != nil {
 		return nil, err
 	}

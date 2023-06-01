@@ -1,17 +1,16 @@
 // Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
 
 //go:build plus
-// +build plus
 
 package accesslogs
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
 	"runtime"
@@ -23,6 +22,10 @@ var lastHTTPAccessLogPolicyUpdatedAt int64
 var httpAccessLogQueue = make(chan []*pb.HTTPAccessLog, 1024)
 
 func init() {
+	if !teaconst.IsMain {
+		return
+	}
+
 	// 多进程读取
 	var threads = runtime.NumCPU() / 2
 	if threads <= 0 {

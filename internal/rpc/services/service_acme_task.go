@@ -2,12 +2,12 @@ package services
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/acme"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	acmemodels "github.com/TeaOSLab/EdgeAPI/internal/db/models/acme"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // ACMETaskService ACME任务相关服务
@@ -232,6 +232,12 @@ func (this *ACMETaskService) CreateACMETask(ctx context.Context, req *pb.CreateA
 		req.AuthType = acme.AuthTypeDNS
 	}
 
+	if adminId > 0 {
+		if req.UserId > 0 {
+			userId = req.UserId
+		}
+	}
+
 	var tx = this.NullTx()
 	taskId, err := acmemodels.SharedACMETaskDAO.CreateACMETask(tx, adminId, userId, req.AuthType, req.AcmeUserId, req.DnsProviderId, req.DnsDomain, req.Domains, req.AutoRenew, req.AuthURL)
 	if err != nil {
@@ -414,6 +420,12 @@ func (this *ACMETaskService) FindEnabledACMETask(ctx context.Context, req *pb.Fi
 		}
 	}
 
+	// 证书
+	var pbCert *pb.SSLCert
+	if task.CertId > 0 {
+		pbCert = &pb.SSLCert{Id: int64(task.CertId)}
+	}
+
 	return &pb.FindEnabledACMETaskResponse{AcmeTask: &pb.ACMETask{
 		Id:          int64(task.Id),
 		IsOn:        task.IsOn,
@@ -425,5 +437,6 @@ func (this *ACMETaskService) FindEnabledACMETask(ctx context.Context, req *pb.Fi
 		AcmeUser:    pbACMEUser,
 		AuthType:    task.AuthType,
 		AuthURL:     task.AuthURL,
+		SslCert:     pbCert,
 	}}, nil
 }

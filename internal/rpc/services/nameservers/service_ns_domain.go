@@ -1,13 +1,11 @@
 // Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
 //go:build plus
-// +build plus
 
 package nameservers
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/dnsconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"encoding/json"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/nameservers"
@@ -16,8 +14,11 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
+	"github.com/iwind/TeaGo/types"
 	"strings"
 	"time"
 )
@@ -70,7 +71,7 @@ func (this *NSDomainService) CreateNSDomain(ctx context.Context, req *pb.CreateN
 		return nil, errors.New("'nsClusterId' required")
 	}
 
-	// 是否已经存在
+	// 是否已经在当前用户账户里存在
 	exists, err := nameservers.SharedNSDomainDAO.ExistUserDomain(tx, req.UserId, req.Name)
 	if err != nil {
 		return nil, err
@@ -79,12 +80,16 @@ func (this *NSDomainService) CreateNSDomain(ctx context.Context, req *pb.CreateN
 		return nil, errors.New("domain '" + req.Name + "' already exists")
 	}
 
-	exists, err = nameservers.SharedNSDomainDAO.ExistVerifiedDomain(tx, req.Name)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		return nil, errors.New("domain '" + req.Name + "' already exists")
+	// 管理员添加时检查是否在别的用户账户里已经存在
+	// 允许用户添加重复的域名，只需要后续进行TXT验证即可
+	if userId == 0 {
+		exists, err = nameservers.SharedNSDomainDAO.ExistVerifiedDomain(tx, req.Name)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, errors.New("domain '" + req.Name + "' already exists")
+		}
 	}
 
 	// 状态
@@ -166,12 +171,15 @@ func (this *NSDomainService) CreateNSDomains(ctx context.Context, req *pb.Create
 				return errors.New("domain '" + name + "' already exists")
 			}
 
-			exists, err = nameservers.SharedNSDomainDAO.ExistVerifiedDomain(tx, name)
-			if err != nil {
-				return err
-			}
-			if exists {
-				return errors.New("domain '" + name + "' already exists")
+			// 管理员添加时验证域名是否已由别的用户添加过
+			if userId == 0 {
+				exists, err = nameservers.SharedNSDomainDAO.ExistVerifiedDomain(tx, name)
+				if err != nil {
+					return err
+				}
+				if exists {
+					return errors.New("domain '" + name + "' already exists")
+				}
 			}
 
 			// 状态
@@ -407,17 +415,19 @@ func (this *NSDomainService) FindNSDomain(ctx context.Context, req *pb.FindNSDom
 
 	return &pb.FindNSDomainResponse{
 		NsDomain: &pb.NSDomain{
-			Id:        int64(domain.Id),
-			Name:      domain.Name,
-			IsOn:      domain.IsOn,
-			TsigJSON:  domain.Tsig,
-			CreatedAt: int64(domain.CreatedAt),
-			Status:    domain.Status,
+			Id:                     int64(domain.Id),
+			Name:                   domain.Name,
+			IsOn:                   domain.IsOn,
+			TsigJSON:               domain.Tsig,
+			RecordsHealthCheckJSON: domain.RecordsHealthCheck,
+			CreatedAt:              int64(domain.CreatedAt),
+			Status:                 domain.Status,
 			NsCluster: &pb.NSCluster{
 				Id:   int64(cluster.Id),
 				IsOn: cluster.IsOn,
 				Name: cluster.Name,
 			},
+			UserId:           int64(domain.UserId),
 			User:             pbUser,
 			NsDomainGroupIds: groupIds,
 			NsDomainGroups:   pbGroups,
@@ -436,6 +446,10 @@ func (this *NSDomainService) FindNSDomainWithName(ctx context.Context, req *pb.F
 	if err != nil {
 		return nil, err
 	}
+	if userId == 0 {
+		userId = req.UserId
+	}
+
 	var isUserRequest = userId > 0
 
 	if len(req.Name) == 0 {
@@ -517,6 +531,35 @@ func (this *NSDomainService) FindNSDomainWithName(ctx context.Context, req *pb.F
 			User:             pbUser,
 			NsDomainGroupIds: groupIds,
 			NsDomainGroups:   pbGroups,
+		},
+	}, nil
+}
+
+// FindVerifiedNSDomainOnCluster 根据域名名称查找集群中的已验证域名
+func (this *NSDomainService) FindVerifiedNSDomainOnCluster(ctx context.Context, req *pb.FindVerifiedNSDomainOnClusterRequest) (*pb.FindVerifiedNSDomainOnClusterResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	domain, err := nameservers.SharedNSDomainDAO.FindVerifiedDomainWithNameOnCluster(tx, req.NsClusterId, req.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	if domain == nil {
+		return &pb.FindVerifiedNSDomainOnClusterResponse{
+			NsDomain: nil,
+		}, nil
+	}
+
+	return &pb.FindVerifiedNSDomainOnClusterResponse{
+		NsDomain: &pb.NSDomain{
+			Id:     int64(domain.Id),
+			Name:   domain.Name,
+			IsOn:   domain.IsOn,
+			Status: domain.Status,
 		},
 	}, nil
 }
@@ -690,6 +733,7 @@ func (this *NSDomainService) ListNSDomainsAfterVersion(ctx context.Context, req 
 			Status:    domain.Status,
 			IsDeleted: domain.State == nameservers.NSDomainStateDisabled || domain.Status != dnsconfigs.NSDomainStatusVerified,
 			Version:   int64(domain.Version),
+			UserId:    types.Int64(domain.UserId),
 			TsigJSON:  domain.Tsig,
 			NsCluster: &pb.NSCluster{Id: int64(domain.ClusterId)},
 			User:      nil,
@@ -796,6 +840,27 @@ func (this *NSDomainService) FindNSDomainVerifyingInfo(ctx context.Context, req 
 		}
 	}
 
+	// 检查域名是否已被别的用户验证
+	domainName, err := nameservers.SharedNSDomainDAO.FindNSDomainName(tx, req.NsDomainId)
+	if err != nil {
+		return nil, err
+	}
+	if len(domainName) == 0 {
+		return nil, errors.New("could not find domain name with id '" + types.String(req.NsDomainId) + "'")
+	}
+
+	verifiedDomain, err := nameservers.SharedNSDomainDAO.FindVerifiedDomainWithName(tx, domainName)
+	if err != nil {
+		return nil, err
+	}
+	if verifiedDomain == nil || int64(verifiedDomain.UserId) == userId {
+		// 如果当前域名没有验证过，或者是自己的验证过的域名，则直接不需要通过TXT再次验证
+		return &pb.FindNSDomainVerifyingInfoResponse{
+			RequireTXT: false,
+		}, nil
+	}
+
+	// 生成TXT
 	domain, err := nameservers.SharedNSDomainDAO.FindDomainVerifyingInfo(tx, req.NsDomainId, true)
 	if err != nil {
 		return nil, err
@@ -810,9 +875,10 @@ func (this *NSDomainService) FindNSDomainVerifyingInfo(ctx context.Context, req 
 	}
 
 	return &pb.FindNSDomainVerifyingInfoResponse{
-		Txt:       domain.VerifyTXT,
-		ExpiresAt: int64(domain.VerifyExpiresAt),
-		Status:    domain.Status,
+		RequireTXT: true,
+		Txt:        domain.VerifyTXT,
+		ExpiresAt:  int64(domain.VerifyExpiresAt),
+		Status:     domain.Status,
 	}, nil
 }
 
@@ -834,13 +900,12 @@ func (this *NSDomainService) VerifyNSDomain(ctx context.Context, req *pb.VerifyN
 
 	// 客户端需要处理的错误代号列表
 	const (
-		ErrorCodeDomainNotFound      = "DomainNotFound"
-		ErrorCodeInvalidStatus       = "InvalidStatus"
-		ErrorCodeInvalidDNSHosts     = "InvalidDNSHosts"
-		ErrorCodeInvalidTXT          = "InvalidTXT"
-		ErrorCodeTXTNotFound         = "TXTNotFound"
-		ErrorCodeTXTExpired          = "TXTExpired"
-		ErrorCodeVerifiedByOtherUser = "VerifiedByOtherUser"
+		ErrorCodeDomainNotFound  = "DomainNotFound"
+		ErrorCodeInvalidStatus   = "InvalidStatus"
+		ErrorCodeInvalidDNSHosts = "InvalidDNSHosts"
+		ErrorCodeInvalidTXT      = "InvalidTXT"
+		ErrorCodeTXTNotFound     = "TXTNotFound"
+		ErrorCodeTXTExpired      = "TXTExpired"
 	)
 
 	// 验证状态
@@ -861,23 +926,26 @@ func (this *NSDomainService) VerifyNSDomain(ctx context.Context, req *pb.VerifyN
 		}, nil
 	}
 
-	if len(domain.VerifyTXT) == 0 || int64(domain.VerifyExpiresAt) < time.Now().Unix() {
-		return &pb.VerifyNSDomainResponse{
-			ErrorCode: ErrorCodeTXTExpired,
-		}, nil
-	}
-
 	// 检查是否已被别的用户所验证
+	var requireTXT = true
+	var oldDomainId int64
 	if userId > 0 {
 		verifiedDomain, err := nameservers.SharedNSDomainDAO.FindVerifiedDomainWithName(tx, domain.Name)
 		if err != nil {
 			return nil, err
 		}
-		if verifiedDomain != nil {
-			return &pb.VerifyNSDomainResponse{
-				ErrorCode: ErrorCodeVerifiedByOtherUser,
-			}, nil
+		if verifiedDomain == nil || int64(verifiedDomain.UserId) == userId {
+			requireTXT = false
 		}
+		if verifiedDomain != nil {
+			oldDomainId = int64(verifiedDomain.Id)
+		}
+	}
+
+	if requireTXT && (len(domain.VerifyTXT) == 0 || int64(domain.VerifyExpiresAt) < time.Now().Unix()) {
+		return &pb.VerifyNSDomainResponse{
+			ErrorCode: ErrorCodeTXTExpired,
+		}, nil
 	}
 
 	// 当前集群的DNS Hosts
@@ -929,26 +997,36 @@ func (this *NSDomainService) VerifyNSDomain(ctx context.Context, req *pb.VerifyN
 	}
 
 	// 验证TXT
-	txtList, err := utils.LookupTXT("yanzheng." + domain.Name)
-	if err != nil {
-		return nil, err
+	if requireTXT {
+		txtList, err := utils.LookupTXT("yanzheng." + domain.Name)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(txtList) == 0 {
+			return &pb.VerifyNSDomainResponse{
+				ErrorCode:    ErrorCodeTXTNotFound,
+				ErrorMessage: "",
+			}, nil
+		}
+
+		if !lists.ContainsString(txtList, domain.VerifyTXT) {
+			return &pb.VerifyNSDomainResponse{
+				ErrorCode:    ErrorCodeInvalidTXT,
+				ErrorMessage: strings.Join(txtList, ", "),
+			}, nil
+		}
 	}
 
-	if len(txtList) == 0 {
-		return &pb.VerifyNSDomainResponse{
-			ErrorCode:    ErrorCodeTXTNotFound,
-			ErrorMessage: "",
-		}, nil
+	// 取消原有老的验证过的同名域名
+	if oldDomainId > 0 {
+		err = nameservers.SharedNSDomainDAO.DisableNSDomain(tx, oldDomainId)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	if !lists.ContainsString(txtList, domain.VerifyTXT) {
-		return &pb.VerifyNSDomainResponse{
-			ErrorCode:    ErrorCodeInvalidTXT,
-			ErrorMessage: strings.Join(txtList, ", "),
-		}, nil
-	}
-
-	// 验证通过
+	// 设置为验证通过
 	err = nameservers.SharedNSDomainDAO.UpdateDomainStatus(tx, req.NsDomainId, dnsconfigs.NSDomainStatusVerified)
 	if err != nil {
 		return nil, err
@@ -957,4 +1035,79 @@ func (this *NSDomainService) VerifyNSDomain(ctx context.Context, req *pb.VerifyN
 	return &pb.VerifyNSDomainResponse{
 		IsOk: true,
 	}, nil
+}
+
+// FindNSDomainRecordsHealthCheck 查询记录健康检查全局设置
+func (this *NSDomainService) FindNSDomainRecordsHealthCheck(ctx context.Context, req *pb.FindNSDomainRecordsHealthCheckRequest) (*pb.FindNSDomainRecordsHealthCheckResponse, error) {
+	// 检查是否为商业用户
+	if !teaconst.IsPlus {
+		return nil, errors.New("non commercial user")
+	}
+
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查权限
+	var tx = this.NullTx()
+	if userId > 0 {
+		err = nameservers.SharedNSDomainDAO.CheckUserDomain(tx, userId, req.NsDomainId)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO 检查套餐
+	}
+
+	config, err := nameservers.SharedNSDomainDAO.FindRecordsHealthCheckConfig(tx, req.NsDomainId)
+	if err != nil {
+		return nil, err
+	}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.FindNSDomainRecordsHealthCheckResponse{NsDomainRecordsHealthCheckJSON: configJSON}, nil
+}
+
+// UpdateNSDomainRecordsHealthCheck 修改记录健康检查全局设置
+func (this *NSDomainService) UpdateNSDomainRecordsHealthCheck(ctx context.Context, req *pb.UpdateNSDomainRecordsHealthCheckRequest) (*pb.RPCSuccess, error) {
+	// 检查是否为商业用户
+	if !teaconst.IsPlus {
+		return nil, errors.New("non commercial user")
+	}
+
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查权限
+	var tx = this.NullTx()
+	if userId > 0 {
+		err = nameservers.SharedNSDomainDAO.CheckUserDomain(tx, userId, req.NsDomainId)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO 检查套餐
+	}
+
+	if len(req.NsDomainRecordsHealthCheckJSON) == 0 {
+		return nil, errors.New("invalid 'nsDomainRecordsHealthCheckJSON'")
+	}
+
+	var config = dnsconfigs.NewNSRecordsHealthCheckConfig()
+	err = json.Unmarshal(req.NsDomainRecordsHealthCheckJSON, config)
+	if err != nil {
+		return nil, errors.New("decode 'nsDomainRecordsHealthCheckJSON' failed: " + err.Error())
+	}
+
+	err = nameservers.SharedNSDomainDAO.UpdateRecordsHealthCheckConfig(tx, req.NsDomainId, config)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
 }

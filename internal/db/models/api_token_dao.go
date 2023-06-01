@@ -1,7 +1,7 @@
 package models
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -77,7 +77,7 @@ func (this *ApiTokenDAO) FindEnabledTokenWithNodeCacheable(tx *dbs.Tx, nodeId st
 		State(ApiTokenStateEnabled).
 		Find()
 	if one != nil {
-		token := one.(*ApiToken)
+		token = one.(*ApiToken)
 		SharedCacheLocker.Lock()
 		apiTokenCacheMap[nodeId] = token
 		SharedCacheLocker.Unlock()

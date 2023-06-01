@@ -1,16 +1,19 @@
 package models
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"fmt"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils/regexputils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/logs"
 	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/rands"
+	"github.com/iwind/TeaGo/types"
 	timeutil "github.com/iwind/TeaGo/utils/time"
 	"regexp"
 	"strings"
@@ -58,19 +61,24 @@ func (this *ServerDailyStatDAO) SaveStats(tx *dbs.Tx, stats []*pb.ServerDailySta
 	var serverUserMap = map[int64]int64{} // serverId => userId
 	var cacheMap = utils.NewCacheMap()
 	for _, stat := range stats {
-		day := timeutil.FormatTime("Ymd", stat.CreatedAt)
-		hour := timeutil.FormatTime("YmdH", stat.CreatedAt)
-		timeFrom := timeutil.FormatTime("His", stat.CreatedAt)
-		timeTo := timeutil.FormatTime("His", stat.CreatedAt+5*60-1) // 5分钟
+		var day = timeutil.FormatTime("Ymd", stat.CreatedAt)
+		var hour = timeutil.FormatTime("YmdH", stat.CreatedAt)
+		var timeFrom = timeutil.FormatTime("His", stat.CreatedAt)
+		var timeTo = timeutil.FormatTime("His", stat.CreatedAt+5*60-1) // 5分钟
 
-		// 所属用户
-		serverUserId, ok := serverUserMap[stat.ServerId]
-		if !ok {
-			userId, err := SharedServerDAO.FindServerUserId(tx, stat.ServerId)
-			if err != nil {
-				return err
+		// 用户ID
+		var serverUserId = stat.UserId
+		if serverUserId == 0 {
+			var ok bool
+			serverUserId, ok = serverUserMap[stat.ServerId]
+			if !ok {
+				userId, err := SharedServerDAO.FindServerUserId(tx, stat.ServerId)
+				if err != nil {
+					return err
+				}
+				serverUserMap[stat.ServerId] = userId
+				serverUserId = userId
 			}
-			serverUserId = userId
 		}
 
 		_, _, err := this.Query(tx).
@@ -83,7 +91,7 @@ func (this *ServerDailyStatDAO) SaveStats(tx *dbs.Tx, stats []*pb.ServerDailySta
 			InsertOrUpdate(maps.Map{
 				"userId":              serverUserId,
 				"serverId":            stat.ServerId,
-				"regionId":            stat.RegionId,
+				"regionId":            stat.NodeRegionId,
 				"bytes":               stat.Bytes,
 				"cachedBytes":         stat.CachedBytes,
 				"countRequests":       stat.CountRequests,
@@ -192,20 +200,46 @@ func (this *ServerDailyStatDAO) SumUserMonthlyPeek(tx *dbs.Tx, userId int64, reg
 
 // SumUserDaily 获取某天流量总和
 // day 格式为YYYYMMDD
-func (this *ServerDailyStatDAO) SumUserDaily(tx *dbs.Tx, userId int64, regionId int64, day string) (int64, error) {
-	query := this.Query(tx)
+func (this *ServerDailyStatDAO) compatSumUserDaily(tx *dbs.Tx, userId int64, regionId int64, day string) (stat *ServerDailyStat, err error) {
+	var query = this.Query(tx)
 	if regionId > 0 {
 		query.Attr("regionId", regionId)
 	}
-	return query.
-		Attr("day", day).
+
+	one, err := query.Attr("day", day).
 		Attr("userId", userId).
+		Result("SUM(bytes) AS bytes", "SUM(cachedBytes) AS cachedBytes", "SUM(attackBytes) AS attackBytes", "SUM(countRequests) AS countRequests", "SUM(countCachedRequests) AS countCachedRequests", "SUM(countAttackRequests) AS countAttackRequests").
+		Find()
+	if err != nil || one == nil {
+		return nil, err
+	}
+	return one.(*ServerDailyStat), nil
+}
+
+// SumUserTrafficBytesBetweenDays 获取用户某个日期段内的流量总和
+func (this *ServerDailyStatDAO) SumUserTrafficBytesBetweenDays(tx *dbs.Tx, userId int64, regionId int64, dayFrom string, dayTo string) (int64, error) {
+	if !regexputils.YYYYMMDD.MatchString(dayFrom) {
+		return 0, errors.New("invalid 'dayFrom':" + dayFrom)
+	}
+	if !regexputils.YYYYMMDD.MatchString(dayTo) {
+		return 0, errors.New("invalid 'dayTo':" + dayTo)
+	}
+
+	var query = this.Query(tx)
+	if regionId > 0 {
+		query.Attr("regionId", regionId)
+	} else if regionId < 0 { // 表示没有分配区域的流量
+		query.Attr("regionId", 0)
+	}
+	return query.
+		Attr("userId", userId).
+		Between("day", dayFrom, dayTo).
 		SumInt64("bytes", 0)
 }
 
 // SumUserMonthly 获取某月流量总和
 // month 格式为YYYYMM
-func (this *ServerDailyStatDAO) SumUserMonthly(tx *dbs.Tx, userId int64, month string) (int64, error) {
+func (this *ServerDailyStatDAO) compatSumUserMonthly(tx *dbs.Tx, userId int64, month string) (int64, error) {
 	return this.Query(tx).
 		Between("day", month+"01", month+"31").
 		Attr("userId", userId).
@@ -294,20 +328,49 @@ func (this *ServerDailyStatDAO) SumHourlyStat(tx *dbs.Tx, serverId int64, hour s
 	return
 }
 
-// SumDailyStat 获取某天内的流量
-// day 格式为YYYYMMDD
-func (this *ServerDailyStatDAO) SumDailyStat(tx *dbs.Tx, serverId int64, day string) (stat *pb.ServerDailyStat, err error) {
+// compatSumDailyStat 获取某天内的流量
+// dayFrom 格式为YYYYMMDD
+// dayTo 格式为YYYYMMDD
+func (this *ServerDailyStatDAO) compatSumDailyStat(tx *dbs.Tx, userId int64, serverId int64, regionId int64, dayFrom string, dayTo string) (stat *pb.ServerDailyStat, err error) {
 	stat = &pb.ServerDailyStat{}
 
-	if !regexp.MustCompile(`^\d{8}$`).MatchString(day) {
-		return nil, errors.New("invalid day '" + day + "'")
+	if userId <= 0 && serverId <= 0 {
+		return
 	}
 
-	one, _, err := this.Query(tx).
-		Result("SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes").
-		Attr("serverId", serverId).
-		Attr("day", day).
-		FindOne()
+	if !regexputils.YYYYMMDD.MatchString(dayFrom) {
+		return nil, errors.New("invalid dayFrom '" + dayFrom + "'")
+	}
+	if !regexputils.YYYYMMDD.MatchString(dayTo) {
+		return nil, errors.New("invalid dayTo '" + dayTo + "'")
+	}
+
+	if dayFrom > dayTo {
+		dayFrom, dayTo = dayTo, dayFrom
+	}
+
+	var query = this.Query(tx).
+		Result("SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes")
+
+	if userId > 0 {
+		query.Attr("userId", userId)
+	}
+
+	if serverId > 0 {
+		query.Attr("serverId", serverId)
+	}
+
+	if regionId > 0 {
+		query.Attr("regionId", regionId)
+	}
+
+	if dayFrom == dayTo {
+		query.Attr("day", dayFrom)
+	} else {
+		query.Between("day", dayFrom, dayTo)
+	}
+
+	one, _, err := query.FindOne()
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +395,7 @@ func (this *ServerDailyStatDAO) SumDailyStat(tx *dbs.Tx, serverId int64, day str
 func (this *ServerDailyStatDAO) SumDailyStatBeforeMinute(tx *dbs.Tx, serverId int64, day string, minute string) (stat *pb.ServerDailyStat, err error) {
 	stat = &pb.ServerDailyStat{}
 
-	if !regexp.MustCompile(`^\d{8}$`).MatchString(day) {
+	if !regexputils.YYYYMMDD.MatchString(day) {
 		return nil, errors.New("invalid day '" + day + "'")
 	}
 
@@ -364,7 +427,7 @@ func (this *ServerDailyStatDAO) SumDailyStatBeforeMinute(tx *dbs.Tx, serverId in
 func (this *ServerDailyStatDAO) SumMonthlyStat(tx *dbs.Tx, serverId int64, month string) (stat *pb.ServerDailyStat, err error) {
 	stat = &pb.ServerDailyStat{}
 
-	if !regexp.MustCompile(`^\d{6}$`).MatchString(month) {
+	if !regexputils.YYYYMM.MatchString(month) {
 		return
 	}
 
@@ -393,7 +456,7 @@ func (this *ServerDailyStatDAO) SumMonthlyStat(tx *dbs.Tx, serverId int64, month
 // SumMonthlyBytes 获取某月内的流量
 // month 格式为YYYYMM
 func (this *ServerDailyStatDAO) SumMonthlyBytes(tx *dbs.Tx, serverId int64, month string) (result int64, err error) {
-	if !regexp.MustCompile(`^\d{6}$`).MatchString(month) {
+	if !regexputils.YYYYMM.MatchString(month) {
 		return
 	}
 
@@ -405,7 +468,7 @@ func (this *ServerDailyStatDAO) SumMonthlyBytes(tx *dbs.Tx, serverId int64, mont
 }
 
 // FindDailyStats 按天统计
-func (this *ServerDailyStatDAO) FindDailyStats(tx *dbs.Tx, serverId int64, dayFrom string, dayTo string) (result []*ServerDailyStat, err error) {
+func (this *ServerDailyStatDAO) compatFindDailyStats(tx *dbs.Tx, serverId int64, dayFrom string, dayTo string) (result []*ServerDailyStat, err error) {
 	ones, err := this.Query(tx).
 		Result("SUM(bytes) AS bytes", "SUM(cachedBytes) AS cachedBytes", "SUM(countRequests) AS countRequests", "SUM(countCachedRequests) AS countCachedRequests", "SUM(countAttackRequests) AS countAttackRequests", "SUM(attackBytes) AS attackBytes", "day").
 		Attr("serverId", serverId).
@@ -418,7 +481,7 @@ func (this *ServerDailyStatDAO) FindDailyStats(tx *dbs.Tx, serverId int64, dayFr
 
 	dayMap := map[string]*ServerDailyStat{} // day => Stat
 	for _, one := range ones {
-		stat := one.(*ServerDailyStat)
+		var stat = one.(*ServerDailyStat)
 		dayMap[stat.Day] = stat
 	}
 	days, err := utils.RangeDays(dayFrom, dayTo)
@@ -439,15 +502,18 @@ func (this *ServerDailyStatDAO) FindDailyStats(tx *dbs.Tx, serverId int64, dayFr
 
 // FindStatsWithDay 按天查找5分钟级统计
 // day YYYYMMDD
+// timeFrom HHII00
+// timeTo HHII59
 func (this *ServerDailyStatDAO) FindStatsWithDay(tx *dbs.Tx, serverId int64, day string, timeFrom string, timeTo string) (result []*ServerDailyStat, err error) {
-	if !regexp.MustCompile(`^\d{8}$`).MatchString(day) {
+	if !regexputils.YYYYMMDD.MatchString(day) {
 		return
 	}
 
 	var query = this.Query(tx).
+		Result("SUM(bytes) AS bytes", "SUM(cachedBytes) AS cachedBytes", "SUM(countRequests) AS countRequests", "SUM(countCachedRequests) AS countCachedRequests", "SUM(countAttackRequests) AS countAttackRequests", "SUM(attackBytes) AS attackBytes", "day", "timeFrom", "MIN(timeTo) AS timeTo").
 		Attr("serverId", serverId).
 		Attr("day", day).
-		DescPk()
+		Group("day").Group("timeFrom", dbs.QueryOrderDesc)
 
 	if len(timeFrom) > 0 {
 		query.Gte("timeFrom", timeFrom)
@@ -459,6 +525,111 @@ func (this *ServerDailyStatDAO) FindStatsWithDay(tx *dbs.Tx, serverId int64, day
 	_, err = query.
 		Slice(&result).
 		FindAll()
+
+	if err != nil {
+		return nil, err
+	}
+
+	return
+}
+
+// FindStatsBetweenDays 查找日期段内的5分钟统计
+func (this *ServerDailyStatDAO) FindStatsBetweenDays(tx *dbs.Tx, userId int64, serverId int64, regionId int64, dayFrom string, dayTo string) (result []*ServerDailyStat, err error) {
+	if !regexputils.YYYYMMDD.MatchString(dayFrom) || !regexputils.YYYYMMDD.MatchString(dayTo) {
+		return
+	}
+
+	if userId <= 0 && serverId <= 0 {
+		return
+	}
+
+	if dayFrom > dayTo {
+		dayFrom, dayTo = dayTo, dayFrom
+	}
+
+	var query = this.Query(tx)
+	if userId > 0 {
+		query.Attr("userId", userId)
+	}
+
+	if serverId > 0 {
+		query.Attr("serverId", serverId)
+	} else {
+		query.Result("SUM(bytes) AS bytes", "SUM(cachedBytes) AS cachedBytes", "SUM(countRequests) AS countRequests", "SUM(countCachedRequests) AS countCachedRequests", "SUM(countAttackRequests) AS countAttackRequests", "SUM(attackBytes) AS attackBytes", "MIN(day) AS day", "MIN(timeFrom) AS timeFrom", "MIN(timeTo) AS timeTo")
+		query.Group("day").Group("timeFrom")
+	}
+
+	if regionId > 0 {
+		query.Attr("regionId", regionId)
+	} else if regionId < 0 { // 表示未分配区域的流量
+		query.Attr("regionId", 0)
+	}
+
+	// 不需要排序
+	query.Between("day", dayFrom, dayTo)
+	_, err = query.
+		Slice(&result).
+		FindAll()
+	if err != nil {
+		return
+	}
+
+	var m = map[string]*ServerDailyStat{} // day @ timeFrom => *ServerDailyStat
+	for _, stat := range result {
+		var key = stat.Day + "@" + stat.TimeFrom
+		mStat, ok := m[key]
+		if ok {
+			mStat.Bytes += stat.Bytes
+			mStat.CachedBytes += stat.CachedBytes
+			mStat.AttackBytes += stat.AttackBytes
+			mStat.CountRequests += stat.CountRequests
+			mStat.CountAttackRequests += stat.CountAttackRequests
+			mStat.CountCachedRequests += stat.CountCachedRequests
+		} else {
+			m[key] = stat
+		}
+	}
+
+	// 填充空白
+	rangeDays, err := utils.RangeDays(dayFrom, dayTo)
+	if err != nil {
+		return nil, err
+	}
+	dayTimes, err := utils.Range24HourTimes(5)
+	if err != nil {
+		return nil, err
+	}
+
+	// 截止到当前时间
+	var currentTime = timeutil.Format("Ymd@Hi00")
+
+	result = nil
+	for _, day := range rangeDays {
+		for _, timeAt /** HHII **/ := range dayTimes {
+			var key = day + "@" + timeAt + "00"
+
+			if key >= currentTime {
+				break
+			}
+
+			stat, ok := m[key]
+			if ok {
+				result = append(result, stat)
+			} else {
+				var hour = types.Int(timeAt[:2])
+				var minute = types.Int(timeAt[2:])
+
+				minute += 4
+
+				result = append(result, &ServerDailyStat{
+					Day:      day,
+					TimeFrom: timeAt + "00",
+					TimeTo:   fmt.Sprintf("%02d%02d59", hour, minute),
+				})
+			}
+		}
+	}
+
 	return
 }
 
@@ -474,7 +645,7 @@ func (this *ServerDailyStatDAO) FindMonthlyStatsWithPlan(tx *dbs.Tx, month strin
 }
 
 // FindHourlyStats 按小时统计
-func (this *ServerDailyStatDAO) FindHourlyStats(tx *dbs.Tx, serverId int64, hourFrom string, hourTo string) (result []*ServerDailyStat, err error) {
+func (this *ServerDailyStatDAO) compatFindHourlyStats(tx *dbs.Tx, serverId int64, hourFrom string, hourTo string) (result []*ServerDailyStat, err error) {
 	ones, err := this.Query(tx).
 		Result("SUM(bytes) AS bytes", "SUM(cachedBytes) AS cachedBytes", "SUM(countRequests) AS countRequests", "SUM(countCachedRequests) AS countCachedRequests", "SUM(countAttackRequests) AS countAttackRequests", "SUM(attackBytes) AS attackBytes", "hour").
 		Attr("serverId", serverId).
@@ -485,9 +656,11 @@ func (this *ServerDailyStatDAO) FindHourlyStats(tx *dbs.Tx, serverId int64, hour
 		return nil, err
 	}
 
-	hourMap := map[string]*ServerDailyStat{} // hour => Stat
+	var hourMap = map[string]*ServerDailyStat{} // hour => Stat
 	for _, one := range ones {
-		stat := one.(*ServerDailyStat)
+		var stat = one.(*ServerDailyStat)
+		stat.Day = stat.Hour[:8]
+		stat.TimeFrom = stat.Hour[8:] + "00"
 		hourMap[stat.Hour] = stat
 	}
 	hours, err := utils.RangeHours(hourFrom, hourTo)
@@ -499,7 +672,11 @@ func (this *ServerDailyStatDAO) FindHourlyStats(tx *dbs.Tx, serverId int64, hour
 		if ok {
 			result = append(result, stat)
 		} else {
-			result = append(result, &ServerDailyStat{Hour: hour})
+			result = append(result, &ServerDailyStat{
+				Hour:     hour,
+				Day:      hour[:8],
+				TimeFrom: hour[8:] + "00",
+			})
 		}
 	}
 
@@ -537,6 +714,26 @@ func (this *ServerDailyStatDAO) FindDistinctServerIds(tx *dbs.Tx, dayFrom string
 	return serverIds, nil
 }
 
+// FindDistinctUserIds 查找所有有流量的用户ID
+func (this *ServerDailyStatDAO) FindDistinctUserIds(tx *dbs.Tx, dayFrom string, dayTo string) (userIds []int64, err error) {
+	dayFrom = strings.ReplaceAll(dayFrom, "-", "")
+	dayTo = strings.ReplaceAll(dayTo, "-", "")
+	ones, _, err := this.Query(tx).
+		Result("DISTINCT(userId) AS userId").
+		Between("day", dayFrom, dayTo).
+		FindOnes()
+	if err != nil {
+		return nil, err
+	}
+	for _, one := range ones {
+		var userId = one.GetInt64("userId")
+		if userId > 0 {
+			userIds = append(userIds, userId)
+		}
+	}
+	return userIds, nil
+}
+
 // UpdateStatFee 设置费用
 func (this *ServerDailyStatDAO) UpdateStatFee(tx *dbs.Tx, statId int64, fee float32) error {
 	return this.Query(tx).
@@ -552,35 +749,4 @@ func (this *ServerDailyStatDAO) Clean(tx *dbs.Tx, days int) error {
 		Lt("day", day).
 		Delete()
 	return err
-}
-
-// SumLastMinutelyStat 获取最近10分组内的流量
-// minute 格式为YYYYMMDDHHMM
-func (this *ServerDailyStatDAO) SumLastMinutelyStat(tx *dbs.Tx, serverId int64) (stat *pb.ServerDailyStat, err error) {
-	stat = &pb.ServerDailyStat{}
-	now := time.Now()
-	end := timeutil.FormatTime("YmdHi", now.Unix())
-	start := timeutil.FormatTime("YmdHi", now.Add(-10*time.Minute).Unix())
-	one, _, err := this.Query(tx).
-		Result("SUM(bytes) AS bytes, SUM(cachedBytes) AS cachedBytes, SUM(countRequests) AS countRequests, SUM(countCachedRequests) AS countCachedRequests, SUM(countAttackRequests) AS countAttackRequests, SUM(attackBytes) AS attackBytes").
-		Attr("serverId", serverId).
-		Attr("day", end[:8]).
-		Gte("timeFrom", start[8:]).
-		Lte("timeTo", end[8:]).
-		FindOne()
-	if err != nil {
-		return nil, err
-	}
-
-	if one == nil {
-		return
-	}
-
-	stat.Bytes = one.GetInt64("bytes")
-	stat.CachedBytes = one.GetInt64("cachedBytes")
-	stat.CountRequests = one.GetInt64("countRequests")
-	stat.CountCachedRequests = one.GetInt64("countCachedRequests")
-	stat.CountAttackRequests = one.GetInt64("countAttackRequests")
-	stat.AttackBytes = one.GetInt64("attackBytes")
-	return
 }

@@ -1,4 +1,5 @@
 // Copyright 2022 Liuxiangchao iwind.liu@gmail.com. All rights reserved. Official site: https://goedge.cn .
+//go:build plus
 
 package nameservers
 
@@ -6,10 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/dnsconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/nameservers"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // NSPlanService DNS套餐服务

@@ -1,0 +1,105 @@
+syntax = "proto3";
+option go_package = "./pb";
+
+package pb;
+
+import "models/model_message_task.proto";
+import "models/rpc_messages.proto";
+
+// 消息发送任务服务
+service MessageTaskService {
+	// 创建消息任务
+	rpc createMessageTask (CreateMessageTaskRequest) returns (CreateMessageTaskResponse);
+
+	// 查找要发送的消息任务
+	rpc findSendingMessageTasks (FindSendingMessageTasksRequest) returns (FindSendingMessageTasksResponse);
+
+	// 修改消息任务状态
+	rpc updateMessageTaskStatus (UpdateMessageTaskStatusRequest) returns (RPCSuccess);
+
+	// 删除消息任务
+	rpc deleteMessageTask (DeleteMessageTaskRequest) returns (RPCSuccess);
+
+	// 读取消息任务状态
+	rpc findEnabledMessageTask (FindEnabledMessageTaskRequest) returns (FindEnabledMessageTaskResponse);
+
+	// 计算某个状态的消息任务数量
+	rpc countMessageTasksWithStatus(CountMessageTasksWithStatusRequest) returns (RPCCountResponse);
+
+	// 根据状态列出某页任务
+	rpc listMessageTasksWithStatus(ListMessageTasksWithStatusRequest) returns (ListMessageTasksWithStatusResponse);
+}
+
+// 创建消息任务
+message CreateMessageTaskRequest {
+	int64 recipientId = 1;
+	int64 instanceId = 2;
+	string user = 3;
+	string subject = 4;
+	string body = 5;
+	bool isPrimary = 6;
+}
+
+message CreateMessageTaskResponse {
+	int64 messageTaskId = 1;
+}
+
+// 查找要发送的消息任务
+message FindSendingMessageTasksRequest {
+	int64 size = 1;
+}
+
+message FindSendingMessageTasksResponse {
+	repeated MessageTask messageTasks = 1;
+}
+
+// 修改消息任务状态
+message UpdateMessageTaskStatusRequest {
+	int64 messageTaskId = 1;
+	int32 status = 2;
+	MessageTaskResult result = 3;
+}
+
+// 删除消息任务
+message DeleteMessageTaskRequest {
+	int64 messageTaskId = 1;
+}
+
+// 读取消息任务状态
+message FindEnabledMessageTaskRequest {
+	int64 messageTaskId = 1;
+}
+
+message FindEnabledMessageTaskResponse {
+	MessageTask messageTask = 1;
+}
+
+// 计算某个状态的消息任务数量
+message CountMessageTasksWithStatusRequest {
+	Status  status = 1;
+
+	enum Status {
+		MessageTaskStatusNone = 0;
+		MessageTaskStatusSending = 1;
+		MessageTaskStatusSuccess = 2;
+		MessageTaskStatusFailed = 3;
+	}
+}
+
+// 根据状态列出某页任务
+message ListMessageTasksWithStatusRequest {
+	Status status = 1;
+	int64 offset = 2;
+	int64 size = 3;
+
+	enum Status {
+		MessageTaskStatusNone = 0;
+		MessageTaskStatusSending = 1;
+		MessageTaskStatusSuccess = 2;
+		MessageTaskStatusFailed = 3;
+	}
+}
+
+message ListMessageTasksWithStatusResponse {
+	repeated MessageTask messageTasks = 1;
+}

@@ -2,8 +2,8 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -234,19 +234,4 @@ func (this *HTTPFirewallRuleSetDAO) NotifyUpdate(tx *dbs.Tx, setId int64) error 
 		return SharedHTTPFirewallRuleGroupDAO.NotifyUpdate(tx, groupId)
 	}
 	return nil
-}
-
-// UpdateRuleSetAction 设置防御动作
-func (this *HTTPFirewallRuleSetDAO) UpdateRuleSetAction(tx *dbs.Tx, ruleSetId int64, actionJSON []byte) error {
-	if ruleSetId <= 0 {
-		return errors.New("invalid ruleSetId")
-	}
-	_, err := this.Query(tx).
-		Pk(ruleSetId).
-		Set("actions", actionJSON).
-		Update()
-	if err != nil {
-		return err
-	}
-	return this.NotifyUpdate(tx, ruleSetId)
 }

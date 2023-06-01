@@ -1,19 +1,21 @@
 // Copyright 2022 Liuxiangchao iwind.liu@gmail.com. All rights reserved. Official site: https://goedge.cn .
 //go:build plus
-// +build plus
 
 package accounts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/userconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/accounts"
+	"github.com/TeaOSLab/EdgeAPI/internal/payments"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/userconfigs"
 	"github.com/iwind/TeaGo/dbs"
+	"net/url"
 )
 
 // UserOrderService 用户订单相关服务
@@ -23,7 +25,7 @@ type UserOrderService struct {
 
 // CreateUserOrder 创建订单
 func (this *UserOrderService) CreateUserOrder(ctx context.Context, req *pb.CreateUserOrderRequest) (*pb.CreateUserOrderResponse, error) {
-	userId, err := this.ValidateUserNode(ctx, true)
+	userId, err := this.ValidateUserNode(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +53,7 @@ func (this *UserOrderService) CreateUserOrder(ctx context.Context, req *pb.Creat
 
 	var orderCode = ""
 	err = this.RunTx(func(tx *dbs.Tx) error {
-		_, code, err := accounts.SharedUserOrderDAO.CreateOrder(tx, 0, userId, req.Type, methodId, req.Amount)
+		_, code, err := accounts.SharedUserOrderDAO.CreateOrder(tx, 0, userId, req.Type, methodId, req.Amount, req.ParamsJSON)
 		if err != nil {
 			return err
 		}
@@ -69,7 +71,7 @@ func (this *UserOrderService) CreateUserOrder(ctx context.Context, req *pb.Creat
 	if order == nil {
 		return nil, errors.New("can not find order with generated code '" + orderCode + "'")
 	}
-	payURL, err := order.PayURL()
+	payURL, err := payments.GeneratePayURL(order, method)
 	if err != nil {
 		return nil, errors.New("generate pay url failed: " + err.Error())
 	}
@@ -126,15 +128,21 @@ func (this *UserOrderService) FindEnabledUserOrder(ctx context.Context, req *pb.
 	var pbMethod *pb.OrderMethod
 	if method != nil {
 		pbMethod = &pb.OrderMethod{
-			Id:   int64(method.Id),
-			Name: method.Name,
-			Code: method.Code,
-			IsOn: method.IsOn,
+			Id:          int64(method.Id),
+			Name:        method.Name,
+			Code:        method.Code,
+			IsOn:        method.IsOn,
+			ParentCode:  method.ParentCode,
+			ClientType:  method.ClientType,
+			QrcodeTitle: method.QrcodeTitle,
 		}
 	}
 
 	// 支付URL
-	payURL, _ := order.PayURL()
+	payURL, err := payments.GeneratePayURL(order, method)
+	if err != nil {
+		return nil, err
+	}
 
 	return &pb.FindEnabledUserOrderResponse{UserOrder: &pb.UserOrder{
 		UserId:        int64(order.UserId),
@@ -302,4 +310,33 @@ func (this *UserOrderService) ListEnabledUserOrders(ctx context.Context, req *pb
 	return &pb.ListEnabledUserOrdersResponse{
 		UserOrders: pbOrders,
 	}, nil
+}
+
+// NotifyUserOrderPayment 订单支付通知
+func (this *UserOrderService) NotifyUserOrderPayment(ctx context.Context, req *pb.NotifyUserOrderPaymentRequest) (*pb.RPCSuccess, error) {
+	userId, err := this.ValidateUserNode(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+
+	var formValues = url.Values{}
+	err = json.Unmarshal(req.FormData, &formValues)
+	if err != nil {
+		return nil, errors.New("decode form values failed: " + err.Error())
+	}
+
+	err = this.RunTx(func(tx *dbs.Tx) error {
+		// 校验检查订单
+		orderId, err := payments.Verify(req.PayMethod, formValues)
+		if err != nil {
+			return err
+		}
+
+		return accounts.SharedUserOrderDAO.FinishOrder(tx, 0, userId, orderId)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
 }

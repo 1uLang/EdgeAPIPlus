@@ -1,13 +1,13 @@
 package models
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/firewallconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -75,13 +75,21 @@ func (this *IPItemDAO) EnableIPItem(tx *dbs.Tx, id int64) error {
 }
 
 // DisableIPItem 禁用条目
-func (this *IPItemDAO) DisableIPItem(tx *dbs.Tx, id int64) error {
+func (this *IPItemDAO) DisableIPItem(tx *dbs.Tx, id int64, sourceUserId int64) error {
 	version, err := SharedIPListDAO.IncreaseVersion(tx)
 	if err != nil {
 		return err
 	}
 
-	_, err = this.Query(tx).
+	var query = this.Query(tx)
+
+	// 检查权限
+	if sourceUserId > 0 {
+		query.Where("(sourceUserId=:sourceUserId OR listId IN (SELECT id FROM " + SharedIPListDAO.Table + "  WHERE userId=:sourceUserId AND state=1))")
+		query.Param("sourceUserId", sourceUserId)
+	}
+
+	_, err = query.
 		Pk(id).
 		Set("state", IPItemStateDisabled).
 		Set("version", version).
@@ -94,7 +102,7 @@ func (this *IPItemDAO) DisableIPItem(tx *dbs.Tx, id int64) error {
 }
 
 // DisableIPItemsWithIP 禁用某个IP相关条目
-func (this *IPItemDAO) DisableIPItemsWithIP(tx *dbs.Tx, ipFrom string, ipTo string, userId int64, listId int64) error {
+func (this *IPItemDAO) DisableIPItemsWithIP(tx *dbs.Tx, ipFrom string, ipTo string, sourceUserId int64, listId int64) error {
 	if len(ipFrom) == 0 {
 		return errors.New("invalid 'ipFrom'")
 	}
@@ -106,14 +114,11 @@ func (this *IPItemDAO) DisableIPItemsWithIP(tx *dbs.Tx, ipFrom string, ipTo stri
 		State(IPItemStateEnabled)
 
 	if listId > 0 {
-		if userId > 0 {
-			err := SharedIPListDAO.CheckUserIPList(tx, userId, listId)
-			if err != nil {
-				return err
-			}
-		}
-
 		query.Attr("listId", listId)
+	}
+
+	if sourceUserId > 0 {
+		query.Attr("sourceUserId", sourceUserId)
 	}
 
 	ones, err := query.FindAll()
@@ -125,14 +130,6 @@ func (this *IPItemDAO) DisableIPItemsWithIP(tx *dbs.Tx, ipFrom string, ipTo stri
 	for _, one := range ones {
 		var item = one.(*IPItem)
 		var itemId = int64(item.Id)
-		var itemListId = int64(item.ListId)
-		if itemListId != listId && userId > 0 {
-			err = SharedIPListDAO.CheckUserIPList(tx, userId, itemListId)
-			if err != nil {
-				// ignore error
-				continue
-			}
-		}
 		itemIds = append(itemIds, itemId)
 	}
 
@@ -213,11 +210,12 @@ func (this *IPItemDAO) DeleteOldItem(tx *dbs.Tx, listId int64, ipFrom string, ip
 		Attr("listId", listId).
 		Attr("ipFrom", ipFrom).
 		Attr("ipTo", ipTo).
-		Set("state", IPItemStateEnabled).
+		Attr("state", IPItemStateEnabled).
 		FindAll()
 	if err != nil {
 		return err
 	}
+
 	for _, one := range ones {
 		var itemId = int64(one.(*IPItem).Id)
 		version, err := SharedIPListDAO.IncreaseVersion(tx)
@@ -253,7 +251,8 @@ func (this *IPItemDAO) CreateIPItem(tx *dbs.Tx,
 	sourceServerId int64,
 	sourceHTTPFirewallPolicyId int64,
 	sourceHTTPFirewallRuleGroupId int64,
-	sourceHTTPFirewallRuleSetId int64) (int64, error) {
+	sourceHTTPFirewallRuleSetId int64,
+	shouldNotify bool) (int64, error) {
 	version, err := SharedIPListDAO.IncreaseVersion(tx)
 	if err != nil {
 		return 0, err
@@ -282,6 +281,15 @@ func (this *IPItemDAO) CreateIPItem(tx *dbs.Tx,
 	op.SourceHTTPFirewallRuleGroupId = sourceHTTPFirewallRuleGroupId
 	op.SourceHTTPFirewallRuleSetId = sourceHTTPFirewallRuleSetId
 
+	// 服务所属用户
+	if sourceServerId > 0 {
+		userId, err := SharedServerDAO.FindServerUserId(tx, sourceServerId)
+		if err != nil {
+			return 0, err
+		}
+		op.SourceUserId = userId
+	}
+
 	var autoAdded = listId == firewallconfigs.GlobalListId || sourceNodeId > 0 || sourceServerId > 0 || sourceHTTPFirewallPolicyId > 0
 	if autoAdded {
 		op.IsRead = 0
@@ -301,9 +309,11 @@ func (this *IPItemDAO) CreateIPItem(tx *dbs.Tx,
 		return itemId, nil
 	}
 
-	err = this.NotifyUpdate(tx, itemId)
-	if err != nil {
-		return 0, err
+	if shouldNotify {
+		err = this.NotifyUpdate(tx, itemId)
+		if err != nil {
+			return 0, err
+		}
 	}
 	return itemId, nil
 }
@@ -353,10 +363,15 @@ func (this *IPItemDAO) UpdateIPItem(tx *dbs.Tx, itemId int64, ipFrom string, ipT
 }
 
 // CountIPItemsWithListId 计算IP数量
-func (this *IPItemDAO) CountIPItemsWithListId(tx *dbs.Tx, listId int64, ipFrom string, ipTo string, keyword string, eventLevel string) (int64, error) {
+func (this *IPItemDAO) CountIPItemsWithListId(tx *dbs.Tx, listId int64, sourceUserId int64, keyword string, ipFrom string, ipTo string, eventLevel string) (int64, error) {
 	var query = this.Query(tx).
 		State(IPItemStateEnabled).
 		Attr("listId", listId)
+	if sourceUserId > 0 {
+		if listId <= 0 || listId == firewallconfigs.GlobalListId {
+			query.Attr("sourceUserId", sourceUserId)
+		}
+	}
 	if len(keyword) > 0 {
 		query.Where("(ipFrom LIKE :keyword OR ipTo LIKE :keyword)").
 			Param("keyword", dbutils.QuoteLike(keyword))
@@ -374,10 +389,15 @@ func (this *IPItemDAO) CountIPItemsWithListId(tx *dbs.Tx, listId int64, ipFrom s
 }
 
 // ListIPItemsWithListId 查找IP列表
-func (this *IPItemDAO) ListIPItemsWithListId(tx *dbs.Tx, listId int64, keyword string, ipFrom string, ipTo string, eventLevel string, offset int64, size int64) (result []*IPItem, err error) {
+func (this *IPItemDAO) ListIPItemsWithListId(tx *dbs.Tx, listId int64, sourceUserId int64, keyword string, ipFrom string, ipTo string, eventLevel string, offset int64, size int64) (result []*IPItem, err error) {
 	var query = this.Query(tx).
 		State(IPItemStateEnabled).
 		Attr("listId", listId)
+	if sourceUserId > 0 {
+		if listId <= 0 || listId == firewallconfigs.GlobalListId {
+			query.Attr("sourceUserId", sourceUserId)
+		}
+	}
 	if len(keyword) > 0 {
 		query.Where("(ipFrom LIKE :keyword OR ipTo LIKE :keyword)").
 			Param("keyword", dbutils.QuoteLike(keyword))
@@ -403,10 +423,10 @@ func (this *IPItemDAO) ListIPItemsWithListId(tx *dbs.Tx, listId int64, keyword s
 // ListIPItemsAfterVersion 根据版本号查找IP列表
 func (this *IPItemDAO) ListIPItemsAfterVersion(tx *dbs.Tx, version int64, size int64) (result []*IPItem, err error) {
 	_, err = this.Query(tx).
+		UseIndex("version").
 		// 这里不要设置状态参数，因为我们要知道哪些是删除的
 		Gt("version", version).
 		Asc("version").
-		Asc("id").
 		Limit(size).
 		Slice(&result).
 		FindAll()
@@ -466,8 +486,20 @@ func (this *IPItemDAO) ExistsEnabledItem(tx *dbs.Tx, itemId int64) (bool, error)
 }
 
 // CountAllEnabledIPItems 计算数量
-func (this *IPItemDAO) CountAllEnabledIPItems(tx *dbs.Tx, ip string, listId int64, unread bool, eventLevel string, listType string) (int64, error) {
+func (this *IPItemDAO) CountAllEnabledIPItems(tx *dbs.Tx, sourceUserId int64, keyword string, ip string, listId int64, unread bool, eventLevel string, listType string) (int64, error) {
 	var query = this.Query(tx)
+	if sourceUserId > 0 {
+		if listId <= 0 {
+			query.Where("((listId=" + types.String(firewallconfigs.GlobalListId) + " AND sourceUserId=:sourceUserId) OR listId IN (SELECT id FROM " + SharedIPListDAO.Table + " WHERE userId=:sourceUserId AND state=1))")
+			query.Param("sourceUserId", sourceUserId)
+		} else if listId == firewallconfigs.GlobalListId {
+			query.Attr("sourceUserId", sourceUserId)
+			query.UseIndex("sourceUserId")
+		}
+	}
+	if len(keyword) > 0 {
+		query.Like("ipFrom", dbutils.QuoteLike(keyword))
+	}
 	if len(ip) > 0 {
 		query.Attr("ipFrom", ip)
 	}
@@ -496,8 +528,20 @@ func (this *IPItemDAO) CountAllEnabledIPItems(tx *dbs.Tx, ip string, listId int6
 }
 
 // ListAllEnabledIPItems 搜索所有IP
-func (this *IPItemDAO) ListAllEnabledIPItems(tx *dbs.Tx, ip string, listId int64, unread bool, eventLevel string, listType string, offset int64, size int64) (result []*IPItem, err error) {
+func (this *IPItemDAO) ListAllEnabledIPItems(tx *dbs.Tx, sourceUserId int64, keyword string, ip string, listId int64, unread bool, eventLevel string, listType string, offset int64, size int64) (result []*IPItem, err error) {
 	var query = this.Query(tx)
+	if sourceUserId > 0 {
+		if listId <= 0 {
+			query.Where("((listId=" + types.String(firewallconfigs.GlobalListId) + " AND sourceUserId=:sourceUserId) OR listId IN (SELECT id FROM " + SharedIPListDAO.Table + " WHERE userId=:sourceUserId AND state=1))")
+			query.Param("sourceUserId", sourceUserId)
+		} else if listId == firewallconfigs.GlobalListId {
+			query.Attr("sourceUserId", sourceUserId)
+			query.UseIndex("sourceUserId")
+		}
+	}
+	if len(keyword) > 0 {
+		query.Like("ipFrom", dbutils.QuoteLike(keyword))
+	}
 	if len(ip) > 0 {
 		query.Attr("ipFrom", ip)
 	}
@@ -530,11 +574,17 @@ func (this *IPItemDAO) ListAllEnabledIPItems(tx *dbs.Tx, ip string, listId int64
 }
 
 // UpdateItemsRead 设置所有未已读
-func (this *IPItemDAO) UpdateItemsRead(tx *dbs.Tx) error {
-	return this.Query(tx).
+func (this *IPItemDAO) UpdateItemsRead(tx *dbs.Tx, sourceUserId int64) error {
+	var query = this.Query(tx).
 		Attr("isRead", 0).
-		Set("isRead", 1).
-		UpdateQuickly()
+		Set("isRead", 1)
+
+	if sourceUserId > 0 {
+		query.Attr("sourceUserId", sourceUserId)
+		query.UseIndex("sourceUserId")
+	}
+
+	return query.UpdateQuickly()
 }
 
 // CleanExpiredIPItems 清除过期数据
@@ -608,7 +658,7 @@ func (this *IPItemDAO) NotifyUpdate(tx *dbs.Tx, itemId int64) error {
 				return err
 			}
 			for _, clusterId := range clusterIds {
-				err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, NodeTaskTypeIPItemChanged)
+				err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, NodeTaskTypeIPItemChanged)
 				if err != nil {
 					return err
 				}
@@ -616,7 +666,7 @@ func (this *IPItemDAO) NotifyUpdate(tx *dbs.Tx, itemId int64) error {
 		} else {
 			clusterIds, err := SharedNodeClusterDAO.FindAllEnabledNodeClusterIds(tx)
 			for _, clusterId := range clusterIds {
-				err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, NodeTaskTypeIPItemChanged)
+				err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, NodeTaskTypeIPItemChanged)
 				if err != nil {
 					return err
 				}
@@ -668,7 +718,7 @@ func (this *IPItemDAO) NotifyUpdate(tx *dbs.Tx, itemId int64) error {
 
 	if len(resultClusterIds) > 0 {
 		for _, clusterId := range resultClusterIds {
-			err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, NodeTaskTypeIPItemChanged)
+			err = SharedNodeTaskDAO.CreateClusterTask(tx, nodeconfigs.NodeRoleNode, clusterId, 0, 0, NodeTaskTypeIPItemChanged)
 			if err != nil {
 				return err
 			}

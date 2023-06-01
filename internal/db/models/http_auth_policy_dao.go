@@ -2,9 +2,9 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -94,6 +94,27 @@ func (this *HTTPAuthPolicyDAO) UpdateHTTPAuthPolicy(tx *dbs.Tx, policyId int64, 
 		return err
 	}
 	return this.NotifyUpdate(tx, policyId)
+}
+
+// CloneAuthPolicy 复制策略
+func (this *HTTPAuthPolicyDAO) CloneAuthPolicy(tx *dbs.Tx, fromPolicyId int64) (int64, error) {
+	policyOne, err := this.Query(tx).
+		Pk(fromPolicyId).
+		Find()
+	if err != nil || policyOne == nil {
+		return 0, err
+	}
+	var policy = policyOne.(*HTTPAuthPolicy)
+
+	var op = NewHTTPAuthPolicyOperator()
+	op.IsOn = policy.IsOn
+	op.Name = policy.Name
+	op.Type = policy.Type
+	if len(policy.Params) > 0 {
+		op.Params = policy.Params
+	}
+	op.State = policy.State
+	return this.SaveInt64(tx, op)
 }
 
 // ComposePolicyConfig 组合配置

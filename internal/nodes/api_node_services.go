@@ -3,8 +3,10 @@
 package nodes
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
+	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services/clients"
+	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services/users"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"google.golang.org/grpc"
 	"reflect"
 	"strings"
@@ -12,6 +14,11 @@ import (
 
 // 注册服务
 func (this *APINode) registerServices(server *grpc.Server) {
+	{
+		var instance = this.serviceInstance(&services.PingService{}).(*services.PingService)
+		pb.RegisterPingServiceServer(server, instance)
+		this.rest(instance)
+	}
 	{
 		var instance = this.serviceInstance(&services.APITokenService{}).(*services.APITokenService)
 		pb.RegisterAPITokenServiceServer(server, instance)
@@ -133,6 +140,11 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		this.rest(instance)
 	}
 	{
+		var instance = this.serviceInstance(&services.GMCertService{}).(*services.GMCertService)
+		pb.RegisterGMCertServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
 		var instance = this.serviceInstance(&services.SSLCertService{}).(*services.SSLCertService)
 		pb.RegisterSSLCertServiceServer(server, instance)
 		this.rest(instance)
@@ -193,11 +205,6 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		this.rest(instance)
 	}
 	{
-		var instance = this.serviceInstance(&services.MessageMediaService{}).(*services.MessageMediaService)
-		pb.RegisterMessageMediaServiceServer(server, instance)
-		this.rest(instance)
-	}
-	{
 		var instance = this.serviceInstance(&services.MessageRecipientGroupService{}).(*services.MessageRecipientGroupService)
 		pb.RegisterMessageRecipientGroupServiceServer(server, instance)
 		this.rest(instance)
@@ -225,11 +232,6 @@ func (this *APINode) registerServices(server *grpc.Server) {
 	{
 		var instance = this.serviceInstance(&services.NodeRegionService{}).(*services.NodeRegionService)
 		pb.RegisterNodeRegionServiceServer(server, instance)
-		this.rest(instance)
-	}
-	{
-		var instance = this.serviceInstance(&services.NodePriceItemService{}).(*services.NodePriceItemService)
-		pb.RegisterNodePriceItemServiceServer(server, instance)
 		this.rest(instance)
 	}
 	{
@@ -343,7 +345,7 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		this.rest(instance)
 	}
 	{
-		var instance = this.serviceInstance(&services.UserService{}).(*services.UserService)
+		var instance = this.serviceInstance(&users.UserService{}).(*users.UserService)
 		pb.RegisterUserServiceServer(server, instance)
 		this.rest(instance)
 	}
@@ -358,23 +360,13 @@ func (this *APINode) registerServices(server *grpc.Server) {
 		this.rest(instance)
 	}
 	{
-		var instance = this.serviceInstance(&services.UserBillService{}).(*services.UserBillService)
-		pb.RegisterUserBillServiceServer(server, instance)
-		this.rest(instance)
-	}
-	{
-		var instance = this.serviceInstance(&services.ServerBillService{}).(*services.ServerBillService)
-		pb.RegisterServerBillServiceServer(server, instance)
-		this.rest(instance)
-	}
-	{
-		var instance = this.serviceInstance(&services.UserNodeService{}).(*services.UserNodeService)
-		pb.RegisterUserNodeServiceServer(server, instance)
-		this.rest(instance)
-	}
-	{
 		var instance = this.serviceInstance(&services.LoginService{}).(*services.LoginService)
 		pb.RegisterLoginServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		var instance = this.serviceInstance(&services.LoginSessionService{}).(*services.LoginSessionService)
+		pb.RegisterLoginSessionServiceServer(server, instance)
 		this.rest(instance)
 	}
 	{
@@ -420,6 +412,26 @@ func (this *APINode) registerServices(server *grpc.Server) {
 	{
 		var instance = this.serviceInstance(&services.ServerRegionProviderMonthlyStatService{}).(*services.ServerRegionProviderMonthlyStatService)
 		pb.RegisterServerRegionProviderMonthlyStatServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		var instance = this.serviceInstance(&clients.FormalClientSystemService{}).(*clients.FormalClientSystemService)
+		pb.RegisterFormalClientSystemServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		var instance = this.serviceInstance(&clients.FormalClientBrowserService{}).(*clients.FormalClientBrowserService)
+		pb.RegisterFormalClientBrowserServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		var instance = this.serviceInstance(&clients.ClientAgentIPService{}).(*clients.ClientAgentIPService)
+		pb.RegisterClientAgentIPServiceServer(server, instance)
+		this.rest(instance)
+	}
+	{
+		var instance = this.serviceInstance(&clients.ClientAgentService{}).(*clients.ClientAgentService)
+		pb.RegisterClientAgentServiceServer(server, instance)
 		this.rest(instance)
 	}
 	{
@@ -549,6 +561,12 @@ func (this *APINode) registerServices(server *grpc.Server) {
 	{
 		var instance = this.serviceInstance(&services.ServerBandwidthStatService{}).(*services.ServerBandwidthStatService)
 		pb.RegisterServerBandwidthStatServiceServer(server, instance)
+		this.rest(instance)
+	}
+
+	{
+		var instance = this.serviceInstance(&services.UpdatingServerListService{}).(*services.UpdatingServerListService)
+		pb.RegisterUpdatingServerListServiceServer(server, instance)
 		this.rest(instance)
 	}
 

@@ -15,6 +15,7 @@ type NodeCluster struct {
 	Order                uint32   `field:"order"`                // 排序
 	CreatedAt            uint64   `field:"createdAt"`            // 创建时间
 	GrantId              uint32   `field:"grantId"`              // 默认认证方式
+	SshParams            dbs.JSON `field:"sshParams"`            // SSH默认参数
 	State                uint8    `field:"state"`                // 状态
 	AutoRegister         uint8    `field:"autoRegister"`         // 是否开启自动注册
 	UniqueId             string   `field:"uniqueId"`             // 唯一ID
@@ -39,6 +40,9 @@ type NodeCluster struct {
 	GlobalServerConfig   dbs.JSON `field:"globalServerConfig"`   // 全局服务配置
 	AutoRemoteStart      bool     `field:"autoRemoteStart"`      // 自动远程启动
 	AutoInstallNftables  bool     `field:"autoInstallNftables"`  // 自动安装nftables
+	IsAD                 bool     `field:"isAD"`                 // 是否为高防集群
+	HttpPages            dbs.JSON `field:"httpPages"`            // 自定义页面设置
+	Cc                   dbs.JSON `field:"cc"`                   // CC设置
 }
 
 type NodeClusterOperator struct {
@@ -53,6 +57,7 @@ type NodeClusterOperator struct {
 	Order                any // 排序
 	CreatedAt            any // 创建时间
 	GrantId              any // 默认认证方式
+	SshParams            any // SSH默认参数
 	State                any // 状态
 	AutoRegister         any // 是否开启自动注册
 	UniqueId             any // 唯一ID
@@ -77,6 +82,9 @@ type NodeClusterOperator struct {
 	GlobalServerConfig   any // 全局服务配置
 	AutoRemoteStart      any // 自动远程启动
 	AutoInstallNftables  any // 自动安装nftables
+	IsAD                 any // 是否为高防集群
+	HttpPages            any // 自定义页面设置
+	Cc                   any // CC设置
 }
 
 func NewNodeClusterOperator() *NodeClusterOperator {

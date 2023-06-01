@@ -3,8 +3,9 @@ package models
 import (
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -77,7 +78,7 @@ func (this *SSLPolicyDAO) FindEnabledSSLPolicy(tx *dbs.Tx, id int64) (*SSLPolicy
 }
 
 // ComposePolicyConfig 组合配置
-func (this *SSLPolicyDAO) ComposePolicyConfig(tx *dbs.Tx, policyId int64, cacheMap *utils.CacheMap) (*sslconfigs.SSLPolicy, error) {
+func (this *SSLPolicyDAO) ComposePolicyConfig(tx *dbs.Tx, policyId int64, ignoreData bool, dataMap *shared.DataMap, cacheMap *utils.CacheMap) (*sslconfigs.SSLPolicy, error) {
 	if cacheMap == nil {
 		cacheMap = utils.NewCacheMap()
 	}
@@ -95,7 +96,7 @@ func (this *SSLPolicyDAO) ComposePolicyConfig(tx *dbs.Tx, policyId int64, cacheM
 	if policy == nil {
 		return nil, nil
 	}
-	config := &sslconfigs.SSLPolicy{}
+	var config = &sslconfigs.SSLPolicy{}
 	config.Id = int64(policy.Id)
 	config.IsOn = policy.IsOn
 	config.ClientAuthType = int(policy.ClientAuthType)
@@ -104,36 +105,47 @@ func (this *SSLPolicyDAO) ComposePolicyConfig(tx *dbs.Tx, policyId int64, cacheM
 
 	// certs
 	if IsNotNull(policy.Certs) {
-		refs := []*sslconfigs.SSLCertRef{}
+		var refs = []*sslconfigs.SSLCertRef{}
 		err = json.Unmarshal(policy.Certs, &refs)
 		if err != nil {
 			return nil, err
 		}
 		if len(refs) > 0 {
 			for _, ref := range refs {
-				certConfig, err := SharedSSLCertDAO.ComposeCertConfig(tx, ref.CertId, cacheMap)
-				if err != nil {
-					return nil, err
-				}
-				if certConfig == nil {
-					continue
+				if ref.CertId > 0 {
+					certConfig, err := SharedSSLCertDAO.ComposeCertConfig(tx, ref.CertId, ignoreData, dataMap, cacheMap)
+					if err != nil {
+						return nil, err
+					}
+					if certConfig == nil {
+						continue
+					}
+					config.Certs = append(config.Certs, certConfig)
+				} else if ref.GmCertId > 0 {
+					certConfig, err := SharedGMCertDAO.ComposeCertConfig(tx, ref.GmCertId, ignoreData, dataMap, cacheMap)
+					if err != nil {
+						return nil, err
+					}
+					if certConfig == nil {
+						continue
+					}
+					config.GmCerts = append(config.GmCerts, certConfig)
 				}
 				config.CertRefs = append(config.CertRefs, ref)
-				config.Certs = append(config.Certs, certConfig)
 			}
 		}
 	}
 
 	// client CA certs
 	if IsNotNull(policy.ClientCACerts) {
-		refs := []*sslconfigs.SSLCertRef{}
+		var refs = []*sslconfigs.SSLCertRef{}
 		err = json.Unmarshal(policy.ClientCACerts, &refs)
 		if err != nil {
 			return nil, err
 		}
 		if len(refs) > 0 {
 			for _, ref := range refs {
-				certConfig, err := SharedSSLCertDAO.ComposeCertConfig(tx, ref.CertId, cacheMap)
+				certConfig, err := SharedSSLCertDAO.ComposeCertConfig(tx, ref.CertId, ignoreData, dataMap, cacheMap)
 				if err != nil {
 					return nil, err
 				}
@@ -159,7 +171,7 @@ func (this *SSLPolicyDAO) ComposePolicyConfig(tx *dbs.Tx, policyId int64, cacheM
 
 	// hsts
 	if IsNotNull(policy.Hsts) {
-		hstsConfig := &sslconfigs.HSTSConfig{}
+		var hstsConfig = &sslconfigs.HSTSConfig{}
 		err = json.Unmarshal(policy.Hsts, hstsConfig)
 		if err != nil {
 			return nil, err
@@ -188,6 +200,27 @@ func (this *SSLPolicyDAO) FindAllEnabledPolicyIdsWithCertId(tx *dbs.Tx, certId i
 		ResultPk().
 		Where("JSON_CONTAINS(certs, :certJSON)").
 		Param("certJSON", maps.Map{"certId": certId}.AsJSON()).
+		FindAll()
+	if err != nil {
+		return nil, err
+	}
+	for _, one := range ones {
+		policyIds = append(policyIds, int64(one.(*SSLPolicy).Id))
+	}
+	return policyIds, nil
+}
+
+// FindAllEnabledPolicyIdsWithGmCertId 查询使用单个国密证书的所有策略ID
+func (this *SSLPolicyDAO) FindAllEnabledPolicyIdsWithGmCertId(tx *dbs.Tx, certId int64) (policyIds []int64, err error) {
+	if certId <= 0 {
+		return
+	}
+
+	ones, err := this.Query(tx).
+		State(SSLPolicyStateEnabled).
+		ResultPk().
+		Where("JSON_CONTAINS(certs, :certJSON)").
+		Param("certJSON", maps.Map{"gmCertId": certId}.AsJSON()).
 		FindAll()
 	if err != nil {
 		return nil, err
@@ -304,6 +337,18 @@ func (this *SSLPolicyDAO) CheckUserPolicy(tx *dbs.Tx, userId int64, policyId int
 		}
 	}
 	return nil
+}
+
+// UpdatePolicyUser 修改策略所属用户
+func (this *SSLPolicyDAO) UpdatePolicyUser(tx *dbs.Tx, policyId int64, userId int64) error {
+	if policyId <= 0 || userId <= 0 {
+		return nil
+	}
+
+	return this.Query(tx).
+		Pk(policyId).
+		Set("userId", userId).
+		UpdateQuickly()
 }
 
 // NotifyUpdate 通知更新

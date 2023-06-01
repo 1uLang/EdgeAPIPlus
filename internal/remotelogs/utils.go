@@ -1,28 +1,31 @@
 package remotelogs
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/configs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
+	"github.com/TeaOSLab/EdgeAPI/internal/goman"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/cespare/xxhash"
 	"github.com/iwind/TeaGo/logs"
+	"github.com/iwind/TeaGo/types"
 	"time"
 )
 
-var logChan = make(chan *pb.NodeLog, 1024)
+var logChan = make(chan *pb.NodeLog, 64) // 队列数量不需要太长，因为日志通常仅仅为调试用
 var sharedDAO DAOInterface
 
 func init() {
 	// 定期上传日志
-	ticker := time.NewTicker(60 * time.Second)
-	go func() {
+	var ticker = time.NewTicker(60 * time.Second)
+	goman.New(func() {
 		for range ticker.C {
 			err := uploadLogs()
 			if err != nil {
 				logs.Println("[LOG]" + err.Error())
 			}
 		}
-	}()
+	})
 }
 
 // Println 打印普通信息
@@ -105,13 +108,33 @@ func uploadLogs() error {
 		return nil
 	}
 
+	const hashSize = 10
+	var hashList = []uint64{}
+
 Loop:
 	for {
 		select {
 		case log := <-logChan:
-			err := sharedDAO.CreateLog(nil, nodeconfigs.NodeRoleAPI, log.NodeId, log.ServerId, log.OriginId, log.Level, log.Tag, log.Description, log.CreatedAt, "", nil)
-			if err != nil {
-				return err
+			// 是否已存在
+			var hash = xxhash.Sum64String(types.String(log.NodeId) + "_" + log.Description)
+			var found = false
+			for _, h := range hashList {
+				if h == hash {
+					found = true
+					break
+				}
+			}
+
+			// 加入
+			if !found {
+				hashList = append(hashList, hash)
+				if len(hashList) > hashSize {
+					hashList = hashList[1:]
+				}
+				err := sharedDAO.CreateLog(nil, nodeconfigs.NodeRoleAPI, log.NodeId, log.ServerId, log.OriginId, log.Level, log.Tag, log.Description, log.CreatedAt, "", nil)
+				if err != nil {
+					return err
+				}
 			}
 		default:
 			break Loop

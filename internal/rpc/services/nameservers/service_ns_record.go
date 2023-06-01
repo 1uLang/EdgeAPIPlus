@@ -7,11 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/nameservers"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
 	"regexp"
@@ -45,7 +46,15 @@ func (this *NSRecordService) CreateNSRecord(ctx context.Context, req *pb.CreateN
 		}
 	}
 
-	recordId, err := nameservers.SharedNSRecordDAO.CreateRecord(tx, req.NsDomainId, req.Description, req.Name, req.Type, req.Value, req.Ttl, req.NsRouteCodes)
+	// 检查线路代号
+	if len(req.NsRouteCodes) > 0 {
+		err = nameservers.SharedNSRouteDAO.CheckRouteCodes(tx, req.NsRouteCodes, userId)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	recordId, err := nameservers.SharedNSRecordDAO.CreateRecord(tx, req.NsDomainId, req.Description, req.Name, req.Type, req.Value, req.MxPriority, req.SrvPriority, req.SrvWeight, req.SrvPort, req.CaaFlag, req.CaaTag, req.Ttl, req.NsRouteCodes, req.Weight)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +85,15 @@ func (this *NSRecordService) CreateNSRecords(ctx context.Context, req *pb.Create
 	var recordIds = []int64{}
 	err = this.RunTx(func(tx *dbs.Tx) error {
 		for _, name := range req.Names {
-			recordId, err := nameservers.SharedNSRecordDAO.CreateRecord(tx, req.NsDomainId, req.Description, name, req.Type, req.Value, req.Ttl, req.NsRouteCodes)
+			// 检查线路代号
+			if len(req.NsRouteCodes) > 0 {
+				err = nameservers.SharedNSRouteDAO.CheckRouteCodes(tx, req.NsRouteCodes, userId)
+				if err != nil {
+					return err
+				}
+			}
+
+			recordId, err := nameservers.SharedNSRecordDAO.CreateRecord(tx, req.NsDomainId, req.Description, name, req.Type, req.Value, req.MxPriority, req.SrvPriority, req.SrvWeight, req.SrvPort, req.CaaFlag, req.CaaTag, req.Ttl, req.NsRouteCodes, req.Weight)
 			if err != nil {
 				return err
 			}
@@ -111,15 +128,25 @@ func (this *NSRecordService) CreateNSRecordsWithDomainNames(ctx context.Context,
 		return this.Success()
 	}
 
-	type record struct {
-		Name       string   `json:"name"`
-		Type       string   `json:"type"`
-		Value      string   `json:"value"`
+	type recordItem struct {
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		Value      string `json:"value"`
+		MxPriority int32  `json:"mxPriority"`
+
+		SRVPriority int32 `json:"srvPriority"`
+		SRVWeight   int32 `json:"srvWeight"`
+		SRVPort     int32 `json:"srvPort"`
+
+		CAAFlag int32  `json:"caaFlag"`
+		CAATag  string `json:"caaTag"`
+
 		RouteCodes []string `json:"routeCodes"`
 		TTL        int32    `json:"ttl"`
+		Weight     int32    `json:"weight"`
 	}
 
-	var records = []*record{}
+	var records = []*recordItem{}
 	err = json.Unmarshal(req.RecordsJSON, &records)
 	if err != nil {
 		return nil, err
@@ -161,7 +188,15 @@ func (this *NSRecordService) CreateNSRecordsWithDomainNames(ctx context.Context,
 					}
 				}
 
-				_, err = nameservers.SharedNSRecordDAO.CreateRecord(tx, domainId, "批量创建", record.Name, strings.ToUpper(record.Type), record.Value, record.TTL, record.RouteCodes)
+				// 检查线路代号
+				if len(record.RouteCodes) > 0 {
+					err = nameservers.SharedNSRouteDAO.CheckRouteCodes(tx, record.RouteCodes, userId)
+					if err != nil {
+						return err
+					}
+				}
+
+				_, err = nameservers.SharedNSRecordDAO.CreateRecord(tx, domainId, "批量创建", record.Name, strings.ToUpper(record.Type), record.Value, record.MxPriority, record.SRVPriority, record.SRVWeight, record.SRVPort, record.CAAFlag, record.CAATag, record.TTL, record.RouteCodes, record.Weight)
 				if err != nil {
 					return err
 				}
@@ -340,7 +375,7 @@ func (this *NSRecordService) ImportNSRecords(ctx context.Context, req *pb.Import
 				record.Ttl = 600
 			}
 
-			_, err = nameservers.SharedNSRecordDAO.CreateRecord(tx, domainId, "批量导入", record.Name, record.Type, record.Value, record.Ttl, nil)
+			_, err = nameservers.SharedNSRecordDAO.CreateRecord(tx, domainId, "批量导入", record.Name, record.Type, record.Value, record.MxPriority, record.SrvPriority, record.SrvWeight, record.SrvPort, record.CaaFlag, record.CaaTag, record.Ttl, nil, record.Weight)
 			if err != nil {
 				return err
 			}
@@ -376,7 +411,7 @@ func (this *NSRecordService) UpdateNSRecord(ctx context.Context, req *pb.UpdateN
 		}
 	}
 
-	err = nameservers.SharedNSRecordDAO.UpdateRecord(tx, req.NsRecordId, req.Description, req.Name, req.Type, req.Value, req.Ttl, req.NsRouteCodes, req.IsOn)
+	err = nameservers.SharedNSRecordDAO.UpdateRecord(tx, req.NsRecordId, req.Description, req.Name, req.Type, req.Value, req.MxPriority, req.SrvPriority, req.SrvWeight, req.SrvPort, req.CaaFlag, req.CaaTag, req.Ttl, req.NsRouteCodes, req.Weight, req.IsOn)
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +522,7 @@ func (this *NSRecordService) ListNSRecords(ctx context.Context, req *pb.ListNSRe
 		}
 	}
 
-	records, err := nameservers.SharedNSRecordDAO.ListEnabledRecords(tx, req.NsDomainId, req.Type, req.Keyword, req.NsRouteCode, req.NameAsc, req.NameDesc, req.TypeAsc, req.TypeDesc, req.TtlAsc, req.TtlDesc, req.Offset, req.Size)
+	records, err := nameservers.SharedNSRecordDAO.ListEnabledRecords(tx, req.NsDomainId, req.Type, req.Keyword, req.NsRouteCode, req.NameAsc, req.NameDesc, req.TypeAsc, req.TypeDesc, req.TtlAsc, req.TtlDesc, req.UpAsc, req.UpDesc, req.Offset, req.Size)
 	if err != nil {
 		return nil, err
 	}
@@ -513,17 +548,20 @@ func (this *NSRecordService) ListNSRecords(ctx context.Context, req *pb.ListNSRe
 		}
 
 		pbRecords = append(pbRecords, &pb.NSRecord{
-			Id:          int64(record.Id),
-			Description: record.Description,
-			Name:        record.Name,
-			Type:        record.Type,
-			Value:       record.Value,
-			Ttl:         types.Int32(record.Ttl),
-			Weight:      types.Int32(record.Weight),
-			CreatedAt:   int64(record.CreatedAt),
-			IsOn:        record.IsOn,
-			NsDomain:    nil,
-			NsRoutes:    pbRoutes,
+			Id:              int64(record.Id),
+			Description:     record.Description,
+			Name:            record.Name,
+			Type:            record.Type,
+			Value:           record.Value,
+			MxPriority:      int32(record.MxPriority),
+			Ttl:             types.Int32(record.Ttl),
+			Weight:          types.Int32(record.Weight),
+			CreatedAt:       int64(record.CreatedAt),
+			IsOn:            record.IsOn,
+			NsDomain:        nil,
+			NsRoutes:        pbRoutes,
+			HealthCheckJSON: record.HealthCheck,
+			IsUp:            record.IsUp,
 		})
 	}
 	return &pb.ListNSRecordsResponse{NsRecords: pbRecords}, nil
@@ -593,17 +631,25 @@ func (this *NSRecordService) FindNSRecord(ctx context.Context, req *pb.FindNSRec
 	// TODO 读取其他线路
 
 	return &pb.FindNSRecordResponse{NsRecord: &pb.NSRecord{
-		Id:          int64(record.Id),
-		Description: record.Description,
-		Name:        record.Name,
-		Type:        record.Type,
-		Value:       record.Value,
-		Ttl:         types.Int32(record.Ttl),
-		Weight:      types.Int32(record.Weight),
-		CreatedAt:   int64(record.CreatedAt),
-		IsOn:        record.IsOn,
-		NsDomain:    pbDomain,
-		NsRoutes:    pbRoutes,
+		Id:              int64(record.Id),
+		Description:     record.Description,
+		Name:            record.Name,
+		Type:            record.Type,
+		Value:           record.Value,
+		MxPriority:      types.Int32(record.MxPriority),
+		SrvPort:         types.Int32(record.SrvPort),
+		SrvPriority:     types.Int32(record.SrvPriority),
+		SrvWeight:       types.Int32(record.SrvWeight),
+		CaaFlag:         types.Int32(record.CaaFlag),
+		CaaTag:          record.CaaTag,
+		Ttl:             types.Int32(record.Ttl),
+		Weight:          types.Int32(record.Weight),
+		CreatedAt:       int64(record.CreatedAt),
+		IsOn:            record.IsOn,
+		NsDomain:        pbDomain,
+		NsRoutes:        pbRoutes,
+		HealthCheckJSON: record.HealthCheck,
+		IsUp:            record.IsUp,
 	}}, nil
 }
 
@@ -664,17 +710,104 @@ func (this *NSRecordService) FindNSRecordWithNameAndType(ctx context.Context, re
 
 	return &pb.FindNSRecordWithNameAndTypeResponse{
 		NsRecord: &pb.NSRecord{
-			Id:          int64(record.Id),
-			Description: record.Description,
-			Name:        record.Name,
-			Type:        record.Type,
-			Value:       record.Value,
-			Ttl:         types.Int32(record.Ttl),
-			Weight:      types.Int32(record.Weight),
-			CreatedAt:   int64(record.CreatedAt),
-			IsOn:        record.IsOn,
-			NsRoutes:    pbRoutes,
+			Id:              int64(record.Id),
+			Description:     record.Description,
+			Name:            record.Name,
+			Type:            record.Type,
+			Value:           record.Value,
+			MxPriority:      types.Int32(record.MxPriority),
+			SrvPriority:     types.Int32(record.SrvPriority),
+			SrvWeight:       types.Int32(record.SrvWeight),
+			SrvPort:         types.Int32(record.SrvPort),
+			CaaFlag:         types.Int32(record.CaaFlag),
+			CaaTag:          record.CaaTag,
+			Ttl:             types.Int32(record.Ttl),
+			Weight:          types.Int32(record.Weight),
+			CreatedAt:       int64(record.CreatedAt),
+			IsOn:            record.IsOn,
+			NsRoutes:        pbRoutes,
+			HealthCheckJSON: record.HealthCheck,
+			IsUp:            record.IsUp,
 		},
+	}, nil
+}
+
+// FindNSRecordsWithNameAndType 使用名称和类型查询多个记录信息
+func (this *NSRecordService) FindNSRecordsWithNameAndType(ctx context.Context, req *pb.FindNSRecordsWithNameAndTypeRequest) (*pb.FindNSRecordsWithNameAndTypeResponse, error) {
+	// 检查是否为商业用户
+	if !teaconst.IsPlus {
+		return nil, errors.New("non commercial user")
+	}
+
+	if req.NsDomainId <= 0 {
+		return &pb.FindNSRecordsWithNameAndTypeResponse{
+			NsRecords: nil,
+		}, nil
+	}
+
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查权限
+	var tx = this.NullTx()
+	if userId > 0 {
+		err = nameservers.SharedNSDomainDAO.CheckUserDomain(tx, userId, req.NsDomainId)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	records, err := nameservers.SharedNSRecordDAO.FindEnabledRecordsWithName(tx, req.NsDomainId, req.Name, req.Type)
+	if err != nil {
+		return nil, err
+	}
+
+	var pbRecords = []*pb.NSRecord{}
+
+	for _, record := range records {
+		// 线路
+		var pbRoutes = []*pb.NSRoute{}
+		for _, routeCode := range record.DecodeRouteIds() {
+			route, err := nameservers.SharedNSRouteDAO.FindEnabledRouteWithCode(tx, routeCode)
+			if err != nil {
+				return nil, err
+			}
+			if route == nil {
+				continue
+			}
+			pbRoutes = append(pbRoutes, &pb.NSRoute{
+				Id:   int64(route.Id),
+				Name: route.Name,
+				Code: route.Code,
+			})
+		}
+
+		pbRecords = append(pbRecords, &pb.NSRecord{
+			Id:              int64(record.Id),
+			Description:     record.Description,
+			Name:            record.Name,
+			Type:            record.Type,
+			Value:           record.Value,
+			MxPriority:      int32(record.MxPriority),
+			SrvPriority:     types.Int32(record.SrvPriority),
+			SrvWeight:       types.Int32(record.SrvWeight),
+			SrvPort:         types.Int32(record.SrvPort),
+			CaaFlag:         types.Int32(record.CaaFlag),
+			CaaTag:          record.CaaTag,
+			Ttl:             types.Int32(record.Ttl),
+			Weight:          types.Int32(record.Weight),
+			CreatedAt:       int64(record.CreatedAt),
+			IsOn:            record.IsOn,
+			NsRoutes:        pbRoutes,
+			HealthCheckJSON: record.HealthCheck,
+			IsUp:            record.IsUp,
+		})
+	}
+
+	return &pb.FindNSRecordsWithNameAndTypeResponse{
+		NsRecords: pbRecords,
 	}, nil
 }
 
@@ -727,19 +860,134 @@ func (this *NSRecordService) ListNSRecordsAfterVersion(ctx context.Context, req 
 		// TODO 读取其他线路
 
 		pbRecords = append(pbRecords, &pb.NSRecord{
-			Id:          int64(record.Id),
-			Description: "",
-			Name:        record.Name,
-			Type:        record.Type,
-			Value:       record.Value,
-			Ttl:         types.Int32(record.Ttl),
-			Weight:      types.Int32(record.Weight),
-			IsDeleted:   record.State == nameservers.NSRecordStateDisabled,
-			IsOn:        record.IsOn,
-			Version:     int64(record.Version),
-			NsDomain:    &pb.NSDomain{Id: int64(record.DomainId)},
-			NsRoutes:    pbRoutes,
+			Id:              int64(record.Id),
+			Description:     "",
+			Name:            record.Name,
+			Type:            record.Type,
+			Value:           record.Value,
+			MxPriority:      int32(record.MxPriority),
+			SrvPriority:     types.Int32(record.SrvPriority),
+			SrvWeight:       types.Int32(record.SrvWeight),
+			SrvPort:         types.Int32(record.SrvPort),
+			CaaFlag:         types.Int32(record.CaaFlag),
+			CaaTag:          record.CaaTag,
+			Ttl:             types.Int32(record.Ttl),
+			Weight:          types.Int32(record.Weight),
+			IsDeleted:       record.State == nameservers.NSRecordStateDisabled,
+			IsOn:            record.IsOn && record.IsUp,
+			Version:         int64(record.Version),
+			NsDomain:        &pb.NSDomain{Id: int64(record.DomainId)},
+			NsRoutes:        pbRoutes,
+			HealthCheckJSON: record.HealthCheck,
+			IsUp:            record.IsUp,
 		})
 	}
 	return &pb.ListNSRecordsAfterVersionResponse{NsRecords: pbRecords}, nil
+}
+
+// FindNSRecordHealthCheck 查询记录健康检查设置
+func (this *NSRecordService) FindNSRecordHealthCheck(ctx context.Context, req *pb.FindNSRecordHealthCheckRequest) (*pb.FindNSRecordHealthCheckResponse, error) {
+	// 检查是否为商业用户
+	if !teaconst.IsPlus {
+		return nil, errors.New("non commercial user")
+	}
+
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查权限
+	var tx = this.NullTx()
+	if userId > 0 {
+		err = nameservers.SharedNSRecordDAO.CheckUserRecord(tx, userId, req.NsRecordId)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO 检查套餐
+	}
+
+	config, err := nameservers.SharedNSRecordDAO.FindRecordHealthCheckConfig(tx, req.NsRecordId)
+	if err != nil {
+		return nil, err
+	}
+
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.FindNSRecordHealthCheckResponse{NsRecordHealthCheckJSON: configJSON}, nil
+}
+
+// UpdateNSRecordHealthCheck 修改记录健康检查设置
+func (this *NSRecordService) UpdateNSRecordHealthCheck(ctx context.Context, req *pb.UpdateNSRecordHealthCheckRequest) (*pb.RPCSuccess, error) {
+	// 检查是否为商业用户
+	if !teaconst.IsPlus {
+		return nil, errors.New("non commercial user")
+	}
+
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查权限
+	var tx = this.NullTx()
+	if userId > 0 {
+		err = nameservers.SharedNSRecordDAO.CheckUserRecord(tx, userId, req.NsRecordId)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO 检查套餐
+	}
+
+	if len(req.NsRecordHealthCheckJSON) == 0 {
+		return nil, errors.New("invalid 'nsRecordHealthCheckJSON'")
+	}
+	var healthCheckConfig = dnsconfigs.NewNSRecordHealthCheckConfig()
+	err = json.Unmarshal(req.NsRecordHealthCheckJSON, healthCheckConfig)
+	if err != nil {
+		return nil, errors.New("decode 'nsRecordHealthCheckJSON' failed: " + err.Error())
+	}
+
+	err = nameservers.SharedNSRecordDAO.UpdateRecordHealthCheckConfig(tx, req.NsRecordId, healthCheckConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
+}
+
+// UpdateNSRecordIsUp 手动修改记录在线状态
+func (this *NSRecordService) UpdateNSRecordIsUp(ctx context.Context, req *pb.UpdateNSRecordIsUpRequest) (*pb.RPCSuccess, error) {
+	// 检查是否为商业用户
+	if !teaconst.IsPlus {
+		return nil, errors.New("non commercial user")
+	}
+
+	_, userId, err := this.ValidateAdminAndUser(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查权限
+	var tx = this.NullTx()
+	if userId > 0 {
+		err = nameservers.SharedNSRecordDAO.CheckUserRecord(tx, userId, req.NsRecordId)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO 检查套餐
+	}
+
+	err = nameservers.SharedNSRecordDAO.UpdateRecordIsUp(tx, req.NsRecordId, req.IsUp, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
 }

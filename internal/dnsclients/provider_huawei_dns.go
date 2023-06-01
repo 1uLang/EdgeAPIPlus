@@ -17,13 +17,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const HuaweiDNSEndpoint = "https://dns.cn-north-1.myhuaweicloud.com/"
+// HuaweiDNSDefaultEndpoint 默认Endpoint
+// 所有Endpoints：https://developer.huaweicloud.com/endpoint?DNS
+const HuaweiDNSDefaultEndpoint = "https://dns.cn-north-4.myhuaweicloud.com/"
 
 var huaweiDNSHTTPClient = &http.Client{
 	Timeout: 10 * time.Second,
@@ -39,8 +42,14 @@ var huaweiDNSHTTPClient = &http.Client{
 type HuaweiDNSProvider struct {
 	BaseProvider
 
+	ProviderId int64
+
 	accessKeyId     string
 	accessKeySecret string
+	endpoint        string
+
+	endpointRegionReg *regexp.Regexp
+	endpointDomainReg *regexp.Regexp
 }
 
 // Auth 认证
@@ -53,6 +62,12 @@ func (this *HuaweiDNSProvider) Auth(params maps.Map) error {
 	if len(this.accessKeySecret) == 0 {
 		return errors.New("'accessKeySecret' should not be empty")
 	}
+	this.endpoint = params.GetString("endpoint")
+
+	// endpoint相关正则
+	this.endpointRegionReg = regexp.MustCompile(`^[\w-]+$`)
+	this.endpointDomainReg = regexp.MustCompile(`^([\w-]+\.)+[\w-]+$`)
+
 	return nil
 }
 
@@ -1326,6 +1341,41 @@ func (this *HuaweiDNSProvider) QueryRecord(domain string, name string, recordTyp
 	}, nil
 }
 
+// QueryRecords 查询多个记录
+func (this *HuaweiDNSProvider) QueryRecords(domain string, name string, recordType dnstypes.RecordType) ([]*dnstypes.Record, error) {
+	var resp = new(huaweidns.RecordSetsResponse)
+	err := this.doAPI(http.MethodGet, "/v2.1/recordsets", map[string]string{
+		"name": name + "." + domain + ".",
+		"type": recordType,
+	}, maps.Map{}, resp)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.RecordSets) == 0 {
+		return nil, nil
+	}
+
+	var result = []*dnstypes.Record{}
+	for _, recordSet := range resp.RecordSets {
+		if len(recordSet.Records) == 0 {
+			continue
+		}
+
+		for _, record := range recordSet.Records {
+			result = append(result, &dnstypes.Record{
+				Id:    recordSet.Id + "@" + record,
+				Name:  name,
+				Type:  recordType,
+				Value: record,
+				Route: recordSet.Line,
+				TTL:   types.Int32(recordSet.Ttl),
+			})
+		}
+	}
+	return result, nil
+}
+
 // AddRecord 设置记录
 func (this *HuaweiDNSProvider) AddRecord(domain string, newRecord *dnstypes.Record) error {
 	zoneId, err := this.findZoneIdWithDomain(domain)
@@ -1432,13 +1482,38 @@ func (this *HuaweiDNSProvider) DefaultRoute() string {
 }
 
 func (this *HuaweiDNSProvider) doAPI(method string, apiPath string, args map[string]string, bodyMap maps.Map, respPtr interface{}) error {
-	apiURL := HuaweiDNSEndpoint + strings.TrimLeft(apiPath, "/")
-	u, err := url.Parse(HuaweiDNSEndpoint)
+	var endpoint = HuaweiDNSDefaultEndpoint
+	if len(this.endpoint) > 0 {
+		// 是否直接为区域
+		if this.endpointRegionReg.MatchString(this.endpoint) {
+			switch this.endpoint {
+			case "All", "all":
+				endpoint = "https://dns.myhuaweicloud.com/"
+			default:
+				endpoint = "https://dns." + this.endpoint + ".myhuaweicloud.com/"
+			}
+		} else if this.endpointDomainReg.MatchString(this.endpoint) { // 是否直接为域名
+			endpoint = "https://" + this.endpoint + "/"
+		} else {
+			// 是否为URL
+			_, err := url.Parse(this.endpoint)
+			if err != nil {
+				return errors.New("invalid endpoint '" + this.endpoint + "'")
+			}
+			endpoint = this.endpoint
+			if !strings.HasSuffix(endpoint, "/") {
+				endpoint += "/"
+			}
+		}
+	}
+
+	var apiURL = endpoint + strings.TrimLeft(apiPath, "/")
+	u, err := url.Parse(endpoint)
 	if err != nil {
 		return err
 	}
-	apiHost := u.Host
-	argStrings := []string{}
+	var apiHost = u.Host
+	var argStrings = []string{}
 	if len(args) > 0 {
 		apiURL += "?"
 		for k, v := range args {
@@ -1464,28 +1539,28 @@ func (this *HuaweiDNSProvider) doAPI(method string, apiPath string, args map[str
 		return err
 	}
 
-	contentType := "application/json"
-	host := apiHost
-	datetime := time.Now().UTC().Format("20060102T150405Z")
+	var contentType = "application/json"
+	var host = apiHost
+	var datetime = time.Now().UTC().Format("20060102T150405Z")
 	if !strings.HasSuffix(apiPath, "/") {
 		apiPath += "/"
 	}
-	canonicalRequest := method + "\n" + apiPath + "\n" + strings.Join(argStrings, "&") + "\ncontent-type:" + contentType + "\nhost:" + host + "\nx-sdk-date:" + datetime + "\n" + "\ncontent-type;host;x-sdk-date"
+	var canonicalRequest = method + "\n" + apiPath + "\n" + strings.Join(argStrings, "&") + "\ncontent-type:" + contentType + "\nhost:" + host + "\nx-sdk-date:" + datetime + "\n" + "\ncontent-type;host;x-sdk-date"
 
-	h := sha256.New()
+	var h = sha256.New()
 	_, err = h.Write(bodyData)
 	if err != nil {
 		return err
 	}
 	canonicalRequest += "\n" + fmt.Sprintf("%x", h.Sum(nil))
 
-	h2 := sha256.New()
+	var h2 = sha256.New()
 	_, err = h2.Write([]byte(canonicalRequest))
 	if err != nil {
 		return err
 	}
-	source := "SDK-HMAC-SHA256\n" + datetime + "\n" + fmt.Sprintf("%x", h2.Sum(nil))
-	h3 := hmac.New(sha256.New, []byte(this.accessKeySecret))
+	var source = "SDK-HMAC-SHA256\n" + datetime + "\n" + fmt.Sprintf("%x", h2.Sum(nil))
+	var h3 = hmac.New(sha256.New, []byte(this.accessKeySecret))
 	h3.Write([]byte(source))
 	signString := fmt.Sprintf("%x", h3.Sum(nil))
 	req.Header.Set("Host", host)

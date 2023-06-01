@@ -12,12 +12,15 @@ import (
 type DNSTaskType = string
 
 const (
-	DNSTaskTypeClusterChange       DNSTaskType = "clusterChange"
+	DNSTaskTypeClusterChange       DNSTaskType = "clusterChange"       // 集群节点、服务发生变化
+	DNSTaskTypeClusterNodesChange  DNSTaskType = "clusterNodesChange"  // 集群中节点发生变化
 	DNSTaskTypeClusterRemoveDomain DNSTaskType = "clusterRemoveDomain" // 从集群中移除域名
 	DNSTaskTypeNodeChange          DNSTaskType = "nodeChange"
 	DNSTaskTypeServerChange        DNSTaskType = "serverChange"
 	DNSTaskTypeDomainChange        DNSTaskType = "domainChange"
 )
+
+var DNSTasksNotifier = make(chan bool, 2)
 
 type DNSTaskDAO dbs.DAO
 
@@ -64,7 +67,17 @@ func (this *DNSTaskDAO) CreateDNSTask(tx *dbs.Tx, clusterId int64, serverId int6
 		"error":     "",
 		"version":   time.Now().UnixNano(),
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 通知更新
+	select {
+	case DNSTasksNotifier <- true:
+	default:
+	}
+
+	return nil
 }
 
 // CreateClusterTask 生成集群变更任务
@@ -78,8 +91,8 @@ func (this *DNSTaskDAO) CreateClusterRemoveTask(tx *dbs.Tx, clusterId int64, dom
 }
 
 // CreateNodeTask 生成节点任务
-func (this *DNSTaskDAO) CreateNodeTask(tx *dbs.Tx, nodeId int64, taskType DNSTaskType) error {
-	return this.CreateDNSTask(tx, 0, 0, nodeId, 0, "", taskType)
+func (this *DNSTaskDAO) CreateNodeTask(tx *dbs.Tx, clusterId int64, nodeId int64, taskType DNSTaskType) error {
+	return this.CreateDNSTask(tx, clusterId, 0, nodeId, 0, "", taskType)
 }
 
 // CreateServerTask 生成服务任务
@@ -156,10 +169,24 @@ func (this *DNSTaskDAO) UpdateDNSTaskError(tx *dbs.Tx, taskId int64, err string)
 }
 
 // UpdateDNSTaskDone 设置任务完成
-func (this *DNSTaskDAO) UpdateDNSTaskDone(tx *dbs.Tx, taskId int64) error {
+func (this *DNSTaskDAO) UpdateDNSTaskDone(tx *dbs.Tx, taskId int64, taskVersion int64) error {
 	if taskId <= 0 {
 		return errors.New("invalid taskId")
 	}
+
+	currentVersion, err := this.Query(tx).
+		Pk(taskId).
+		Result("version").
+		FindInt64Col(0)
+	if err != nil {
+		return err
+	}
+
+	// 如果版本号发生变化，则说明有新的要执行的任务
+	if taskVersion > 0 && currentVersion > 0 && currentVersion != taskVersion {
+		return nil
+	}
+
 	var op = NewDNSTaskOperator()
 	op.Id = taskId
 	op.IsDone = true

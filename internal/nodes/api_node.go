@@ -5,8 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/iplibrary"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/configs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
@@ -17,6 +15,8 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc"
 	"github.com/TeaOSLab/EdgeAPI/internal/setup"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/iplibrary"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
@@ -125,18 +125,21 @@ func (this *APINode) Start() {
 	err = this.setupDB()
 	if err != nil {
 		logs.Println("[API_NODE]setup database '" + err.Error() + "'")
+
 		// 不阻断执行
 	}
 
 	// 数据库通知启动
+	this.setProgress("DATABASE", "正在建立数据库模型")
 	logs.Println("[API_NODE]notify ready ...")
 	dbs.NotifyReady()
 
 	// 设置时区
+	this.setProgress("TIMEZONE", "正在设置时区")
 	this.setupTimeZone()
 
 	// 读取配置
-	this.setProgress("DATABASE", "加载API配置")
+	this.setProgress("DATABASE", "正在加载API配置")
 	logs.Println("[API_NODE]reading api config ...")
 	config, err := configs.SharedAPIConfig()
 	if err != nil {
@@ -265,8 +268,8 @@ func (this *APINode) InstallSystemService() error {
 func (this *APINode) listenRPC(listener net.Listener, tlsConfig *tls.Config) error {
 	var rpcServer *grpc.Server
 	var options = []grpc.ServerOption{
-		grpc.MaxRecvMsgSize(128 * 1024 * 1024),
-		grpc.MaxSendMsgSize(128 * 1024 * 1024),
+		grpc.MaxRecvMsgSize(512 << 20),
+		grpc.MaxSendMsgSize(512 << 20),
 		grpc.UnaryInterceptor(this.unaryInterceptor),
 	}
 
@@ -303,13 +306,27 @@ func (this *APINode) checkDB() error {
 		logs.Println("[API_NODE]" + errString)
 		this.addStartIssue("db", errString, this.dbIssueSuggestion(errString))
 
+		// 决定是否尝试启动本地的MySQL
+		if strings.Contains(err.Error(), "connection refused") {
+			config, _ := db.Config()
+			if config != nil && (strings.Contains(config.Dsn, "tcp(127.0.0.1:") || strings.Contains(config.Dsn, "tcp(localhost:")) && os.Getgid() == 0 /** ROOT 用户 **/ {
+				var mysqldSafeFile = "/usr/local/mysql/bin/mysqld_safe"
+				_, err = os.Stat(mysqldSafeFile)
+				if err == nil {
+					logs.Println("[API_NODE]try to start local mysql server from '" + mysqldSafeFile + "' ...")
+					var mysqlCmd = exec.Command(mysqldSafeFile)
+					_ = mysqlCmd.Start()
+				}
+			}
+		}
+
 		// 多次尝试
 		var maxTries = 600
 		if Tea.IsTesting() {
 			maxTries = 600
 		}
 		for i := 0; i <= maxTries; i++ {
-			_, err := db.Exec("SELECT 1")
+			_, err = db.Exec("SELECT 1")
 			if err != nil {
 				if i == maxTries-1 {
 					return err
@@ -381,6 +398,19 @@ func (this *APINode) setupDB() error {
 	db, err := dbs.Default()
 	if err != nil {
 		return err
+	}
+
+	// 检查是否为root用户
+	config, _ := db.Config()
+	if config == nil {
+		return nil
+	}
+	dsnConfig, err := mysql.ParseDSN(config.Dsn)
+	if err != nil || dsnConfig == nil {
+		return err
+	}
+	if dsnConfig.User != "root" {
+		return nil
 	}
 
 	// 设置Innodb事务提交模式
@@ -725,6 +755,41 @@ func (this *APINode) listenSock() error {
 						"code": teaconst.InstanceCode,
 					},
 				})
+			case "lookupToken":
+				var role = maps.NewMap(cmd.Params).GetString("role")
+				switch role {
+				case "admin", "user", "api":
+					tokens, err := models.SharedApiTokenDAO.FindAllEnabledAPITokens(nil, role)
+					if err != nil {
+						_ = cmd.Reply(&gosock.Command{
+							Params: map[string]any{
+								"isOk": false,
+								"err":  err.Error(),
+							},
+						})
+					} else {
+						var tokenMaps = []maps.Map{}
+						for _, token := range tokens {
+							tokenMaps = append(tokenMaps, maps.Map{
+								"nodeId": token.NodeId,
+								"secret": token.Secret,
+							})
+						}
+						_ = cmd.Reply(&gosock.Command{
+							Params: map[string]any{
+								"isOk":   true,
+								"tokens": tokenMaps,
+							},
+						})
+					}
+				default:
+					_ = cmd.Reply(&gosock.Command{
+						Params: map[string]any{
+							"isOk": false,
+							"err":  "unsupported role '" + role + "'",
+						},
+					})
+				}
 			}
 		})
 

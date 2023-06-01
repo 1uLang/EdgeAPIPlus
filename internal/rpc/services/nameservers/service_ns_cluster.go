@@ -1,6 +1,5 @@
 // Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
 //go:build plus
-// +build plus
 
 package nameservers
 
@@ -8,14 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/dnsconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/ddosconfigs"
 	"github.com/iwind/TeaGo/dbs"
 )
 
@@ -89,7 +88,7 @@ func (this *NSClusterService) UpdateNSCluster(ctx context.Context, req *pb.Updat
 		return nil, errors.New("invalid email format '" + req.Email + "'")
 	}
 
-	err = models.SharedNSClusterDAO.UpdateCluster(tx, req.NsClusterId, req.Name, req.Email, req.Hosts, req.IsOn, req.TimeZone, req.AutoRemoteStart)
+	err = models.SharedNSClusterDAO.UpdateCluster(tx, req.NsClusterId, req.Name, req.Email, req.Hosts, req.IsOn, req.TimeZone, req.AutoRemoteStart, req.DetectAgents, req.CheckingPorts)
 	if err != nil {
 		return nil, err
 	}
@@ -175,21 +174,25 @@ func (this *NSClusterService) FindNSCluster(ctx context.Context, req *pb.FindNSC
 	if cluster == nil {
 		return &pb.FindNSClusterResponse{NsCluster: nil}, nil
 	}
-	return &pb.FindNSClusterResponse{NsCluster: &pb.NSCluster{
-		Id:              int64(cluster.Id),
-		IsOn:            cluster.IsOn,
-		Name:            cluster.Name,
-		Email:           cluster.Email,
-		Hosts:           cluster.DecodeHosts(),
-		InstallDir:      cluster.InstallDir,
-		TcpJSON:         cluster.Tcp,
-		TlsJSON:         cluster.Tls,
-		UdpJSON:         cluster.Udp,
-		TimeZone:        cluster.TimeZone,
-		AutoRemoteStart: cluster.AutoRemoteStart,
-		AnswerJSON:      cluster.Answer,
-		SoaJSON:         cluster.Soa,
-	}}, nil
+	return &pb.FindNSClusterResponse{
+		NsCluster: &pb.NSCluster{
+			Id:              int64(cluster.Id),
+			IsOn:            cluster.IsOn,
+			Name:            cluster.Name,
+			Email:           cluster.Email,
+			Hosts:           cluster.DecodeHosts(),
+			InstallDir:      cluster.InstallDir,
+			TcpJSON:         cluster.Tcp,
+			TlsJSON:         cluster.Tls,
+			UdpJSON:         cluster.Udp,
+			TimeZone:        cluster.TimeZone,
+			AutoRemoteStart: cluster.AutoRemoteStart,
+			AnswerJSON:      cluster.Answer,
+			SoaJSON:         cluster.Soa,
+			DetectAgents:    cluster.DetectAgents,
+			CheckingPorts:   cluster.CheckingPorts,
+		},
+	}, nil
 }
 
 // CountAllNSClusters 计算所有可用集群的数量

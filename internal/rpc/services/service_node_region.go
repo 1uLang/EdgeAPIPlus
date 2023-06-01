@@ -2,8 +2,8 @@ package services
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // NodeRegionService 节点区域相关服务
@@ -61,7 +61,7 @@ func (this *NodeRegionService) DeleteNodeRegion(ctx context.Context, req *pb.Del
 
 // FindAllEnabledNodeRegions 查找所有区域
 func (this *NodeRegionService) FindAllEnabledNodeRegions(ctx context.Context, req *pb.FindAllEnabledNodeRegionsRequest) (*pb.FindAllEnabledNodeRegionsResponse, error) {
-	_, err := this.ValidateAdmin(ctx)
+	_, _, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -87,18 +87,18 @@ func (this *NodeRegionService) FindAllEnabledNodeRegions(ctx context.Context, re
 
 // FindAllAvailableNodeRegions 查找所有启用的区域
 func (this *NodeRegionService) FindAllAvailableNodeRegions(ctx context.Context, req *pb.FindAllAvailableNodeRegionsRequest) (*pb.FindAllAvailableNodeRegionsResponse, error) {
-	_, err := this.ValidateAdmin(ctx)
+	_, _, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
 
-	regions, err := models.SharedNodeRegionDAO.FindAllEnabledAndOnRegions(tx)
+	regions, err := models.SharedNodeRegionDAO.FindAllAvailableRegions(tx)
 	if err != nil {
 		return nil, err
 	}
-	result := []*pb.NodeRegion{}
+	var result = []*pb.NodeRegion{}
 	for _, region := range regions {
 		result = append(result, &pb.NodeRegion{
 			Id:          int64(region.Id),
@@ -129,7 +129,7 @@ func (this *NodeRegionService) UpdateNodeRegionOrders(ctx context.Context, req *
 
 // FindEnabledNodeRegion 查找单个区域信息
 func (this *NodeRegionService) FindEnabledNodeRegion(ctx context.Context, req *pb.FindEnabledNodeRegionRequest) (*pb.FindEnabledNodeRegionResponse, error) {
-	_, err := this.ValidateAdmin(ctx)
+	_, _, err := this.ValidateAdminAndUser(ctx, false)
 	if err != nil {
 		return nil, err
 	}

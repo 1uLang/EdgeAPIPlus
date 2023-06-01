@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/TeaOSLab/EdgeAPI/internal/apps"
+	"github.com/TeaOSLab/EdgeAPI/internal/configs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/nodes"
 	"github.com/TeaOSLab/EdgeAPI/internal/setup"
@@ -16,6 +17,7 @@ import (
 	"github.com/iwind/gosock/pkg/gosock"
 	"log"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -25,11 +27,16 @@ func main() {
 	var app = apps.NewAppCmd()
 	app.Version(teaconst.Version)
 	app.Product(teaconst.ProductName)
-	app.Usage(teaconst.ProcessName + " [start|stop|restart|setup|upgrade|service|daemon|issues]")
+	app.Usage(teaconst.ProcessName + " [-h|-v|start|stop|restart|setup|upgrade|service|daemon|issues]")
+
+	// 短版本号
+	app.On("-V", func() {
+		_, _ = os.Stdout.WriteString(teaconst.Version)
+	})
 	app.On("setup", func() {
 		var setupCmd = setup.NewSetupFromCmd()
 		err := setupCmd.Run()
-		result := maps.Map{}
+		var result = maps.Map{}
 		if err != nil {
 			result["isOk"] = false
 			result["error"] = err.Error()
@@ -67,6 +74,14 @@ func main() {
 		err := nodes.NewAPINode().InstallSystemService()
 		if err != nil {
 			fmt.Println("[ERROR]install failed: " + err.Error())
+			return
+		}
+		fmt.Println("done")
+	})
+	app.On("reset", func() {
+		err := configs.ResetAPIConfig()
+		if err != nil {
+			fmt.Println("[ERROR]reset failed: " + err.Error())
 			return
 		}
 		fmt.Println("done")
@@ -171,6 +186,38 @@ func main() {
 				fmt.Println("[ERROR]marshal result failed: " + err.Error())
 			} else {
 				fmt.Println(string(replyJSON))
+			}
+		}
+	})
+	app.On("token", func() {
+		var role = ""
+		if len(os.Args) <= 2 {
+			fmt.Println("require --role parameter")
+			return
+		}
+
+		var set = flag.NewFlagSet("", flag.ExitOnError)
+		set.StringVar(&role, "role", "", "edge-api token --role=[admin|user|api]")
+		_ = set.Parse(os.Args[2:])
+
+		var sock = gosock.NewTmpSock(teaconst.ProcessName)
+		reply, err := sock.Send(&gosock.Command{Code: "lookupToken", Params: map[string]any{
+			"role": role,
+		}})
+		if err != nil {
+			fmt.Println("[ERROR]" + err.Error())
+		} else {
+			var resultMap = maps.NewMap(reply.Params)
+			if resultMap.GetBool("isOk") {
+				var tokens = resultMap.GetSlice("tokens")
+				fmt.Printf("%-35s | %-35s\n", "nodeId", "secret")
+				fmt.Println(strings.Repeat("-", 70))
+				for _, tokenMap := range tokens {
+					var m = maps.NewMap(tokenMap)
+					fmt.Printf("%-35s | %-35s\n", m.GetString("nodeId"), m.GetString("secret"))
+				}
+			} else {
+				fmt.Println("[ERROR]" + resultMap.GetString("err"))
 			}
 		}
 	})

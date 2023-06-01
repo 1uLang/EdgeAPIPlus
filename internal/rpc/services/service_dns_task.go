@@ -3,9 +3,9 @@ package services
 import (
 	"context"
 	"fmt"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // DNSTaskService DNS同步相关任务
@@ -62,7 +62,7 @@ func (this *DNSTaskService) FindAllDoingDNSTasks(ctx context.Context, req *pb.Fi
 		}
 
 		switch task.Type {
-		case dns.DNSTaskTypeClusterChange, dns.DNSTaskTypeClusterRemoveDomain:
+		case dns.DNSTaskTypeClusterChange, dns.DNSTaskTypeClusterNodesChange, dns.DNSTaskTypeClusterRemoveDomain:
 			clusterName, err := models.SharedNodeClusterDAO.FindNodeClusterName(tx, int64(task.ClusterId))
 			if err != nil {
 				return nil, err

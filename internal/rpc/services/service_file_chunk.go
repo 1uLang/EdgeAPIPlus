@@ -2,9 +2,9 @@ package services
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // FileChunkService 文件片段相关服务
@@ -40,7 +40,7 @@ func (this *FileChunkService) CreateFileChunk(ctx context.Context, req *pb.Creat
 // FindAllFileChunkIds 获取的一个文件的所有片段IDs
 func (this *FileChunkService) FindAllFileChunkIds(ctx context.Context, req *pb.FindAllFileChunkIdsRequest) (*pb.FindAllFileChunkIdsResponse, error) {
 	// 校验请求
-	_, _, err := this.ValidateNodeId(ctx, rpcutils.UserTypeNode, rpcutils.UserTypeDNS, rpcutils.UserTypeAdmin, rpcutils.UserTypeUser, rpcutils.UserTypeAPI)
+	_, _, err := this.ValidateNodeId(ctx, rpcutils.UserTypeNode, rpcutils.UserTypeDNS, rpcutils.UserTypeAdmin, rpcutils.UserTypeUser)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (this *FileChunkService) FindAllFileChunkIds(ctx context.Context, req *pb.F
 // DownloadFileChunk 下载文件片段
 func (this *FileChunkService) DownloadFileChunk(ctx context.Context, req *pb.DownloadFileChunkRequest) (*pb.DownloadFileChunkResponse, error) {
 	// 校验请求
-	_, _, err := this.ValidateNodeId(ctx, rpcutils.UserTypeNode, rpcutils.UserTypeDNS, rpcutils.UserTypeAdmin, rpcutils.UserTypeUser, rpcutils.UserTypeAPI)
+	_, _, err := this.ValidateNodeId(ctx, rpcutils.UserTypeNode, rpcutils.UserTypeDNS, rpcutils.UserTypeAdmin, rpcutils.UserTypeUser)
 	if err != nil {
 		return nil, err
 	}

@@ -4,9 +4,11 @@
 package nodes
 
 import (
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/shirou/gopsutil/v3/load"
 	"github.com/shirou/gopsutil/v3/mem"
+	"runtime"
+	"runtime/debug"
 )
 
 // 更新内存
@@ -23,6 +25,18 @@ func (this *NodeStatusExecutor) updateMem(status *nodeconfigs.NodeStatus) {
 	}
 
 	status.MemoryTotal = stat.Total
+
+	// 内存严重不足时自动释放内存
+	if stat.Total > 0 {
+		var minFreeMemory = stat.Total / 8
+		if minFreeMemory > 1<<30 {
+			minFreeMemory = 1 << 30
+		}
+		if stat.Available > 0 && stat.Available < minFreeMemory {
+			runtime.GC()
+			debug.FreeOSMemory()
+		}
+	}
 }
 
 // 更新负载

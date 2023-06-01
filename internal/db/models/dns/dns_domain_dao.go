@@ -251,17 +251,17 @@ func (this *DNSDomainDAO) ExistDomainRecord(tx *dbs.Tx, domainId int64, recordNa
 	recordType = strings.ToUpper(recordType)
 
 	query := maps.Map{
-		"name": strings.ToLower(recordName),
+		"name": recordName,
 		"type": recordType,
 	}
 	if len(recordRoute) > 0 {
 		query["route"] = recordRoute
 	}
 	if len(recordValue) > 0 {
-		query["value"] = strings.ToLower(recordValue)
+		query["value"] = recordValue
 
 		// CNAME兼容点（.）符号
-		if recordType == "CNAME" && !strings.HasSuffix(strings.ToLower(recordValue), ".") {
+		if recordType == "CNAME" && !strings.HasSuffix(recordValue, ".") {
 			b, err := this.ExistDomainRecord(tx, domainId, recordName, recordType, recordRoute, recordValue+".")
 			if err != nil {
 				return false, err

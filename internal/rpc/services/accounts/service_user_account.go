@@ -1,16 +1,15 @@
 // Copyright 2021 Liuxiangchao iwind.liu@gmail.com. All rights reserved.
 //go:build plus
-// +build plus
 
 package accounts
 
 import (
 	"context"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/accounts"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/maps"
 )
@@ -66,8 +65,8 @@ func (this *UserAccountService) ListUserAccounts(ctx context.Context, req *pb.Li
 		pbAccounts = append(pbAccounts, &pb.UserAccount{
 			Id:          int64(account.Id),
 			UserId:      int64(account.UserId),
-			Total:       float32(account.Total),
-			TotalFrozen: float32(account.TotalFrozen),
+			Total:       account.Total,
+			TotalFrozen: account.TotalFrozen,
 			User:        pbUser,
 		})
 	}
@@ -112,8 +111,8 @@ func (this *UserAccountService) FindEnabledUserAccountWithUserId(ctx context.Con
 		UserAccount: &pb.UserAccount{
 			Id:          int64(account.Id),
 			UserId:      int64(account.UserId),
-			Total:       float32(account.Total),
-			TotalFrozen: float32(account.TotalFrozen),
+			Total:       account.Total,
+			TotalFrozen: account.TotalFrozen,
 			User:        pbUser,
 		},
 	}, nil
@@ -161,8 +160,8 @@ func (this *UserAccountService) FindEnabledUserAccount(ctx context.Context, req 
 		UserAccount: &pb.UserAccount{
 			Id:          int64(account.Id),
 			UserId:      int64(account.UserId),
-			Total:       float32(account.Total),
-			TotalFrozen: float32(account.TotalFrozen),
+			Total:       account.Total,
+			TotalFrozen: account.TotalFrozen,
 			User:        pbUser,
 		},
 	}, nil

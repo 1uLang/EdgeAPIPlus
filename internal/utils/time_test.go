@@ -62,6 +62,25 @@ func TestRangeMinutes(t *testing.T) {
 	}
 }
 
+func TestRangeTimes(t *testing.T) {
+	for _, r := range [][2]string{
+		{"0000", "2359"},
+		{"0000", "0230"},
+		{"0300", "0230"},
+		{"1021", "1131"},
+	} {
+		result, err := utils.RangeTimes(r[0], r[1], 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Log(r, "=>", result, len(result))
+	}
+}
+
+func TestRange24HourTimes(t *testing.T) {
+	t.Log(utils.Range24HourTimes(5))
+}
+
 func TestGroupMinuteRanges(t *testing.T) {
 	{
 		var minutes = utils.GroupMinuteRanges(utils.RangeMinutes(time.Now(), 5, 5))
@@ -76,5 +95,29 @@ func TestGroupMinuteRanges(t *testing.T) {
 		now = now.Add(-time.Duration(minute-7) * time.Minute) // 后一天的 00:07 开始往前计算
 		var minutes = utils.GroupMinuteRanges(utils.RangeMinutes(now, 5, 5))
 		t.Log(minutes)
+	}
+}
+
+func TestLastDayInMonth(t *testing.T) {
+	t.Log(utils.LastDayInMonth("202209"))
+	t.Log(utils.LastDayInMonth("202210"))
+	t.Log(utils.LastDayInMonth("202202"))
+}
+
+func TestFixMonthMaxDay(t *testing.T) {
+	for _, day := range []string{
+		"20220930",
+		"20220929",
+		"20220931",
+		"20220932",
+		"20220222",
+		"20220228",
+		"20220229",
+	} {
+		afterDay, err := utils.FixMonthMaxDay(day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Log(day, "=>", afterDay)
 	}
 }

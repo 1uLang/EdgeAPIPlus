@@ -3,7 +3,6 @@ package acme
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	acmeutils "github.com/TeaOSLab/EdgeAPI/internal/acme"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
@@ -13,6 +12,7 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	"github.com/go-acme/lego/v4/registration"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
@@ -356,7 +356,7 @@ func (this *ACMETaskDAO) runTaskWithoutLog(tx *dbs.Tx, taskId int64) (isOk bool,
 			errMsg = "找不到DNS服务商账号"
 			return
 		}
-		providerInterface := dnsclients.FindProvider(dnsProvider.Type)
+		providerInterface := dnsclients.FindProvider(dnsProvider.Type, int64(dnsProvider.Id))
 		if providerInterface == nil {
 			errMsg = "暂不支持此类型的DNS服务商 '" + dnsProvider.Type + "'"
 			return
@@ -434,7 +434,7 @@ func (this *ACMETaskDAO) runTaskWithoutLog(tx *dbs.Tx, taskId int64) (isOk bool,
 		CertData: certData,
 		KeyData:  keyData,
 	}
-	err = sslConfig.Init()
+	err = sslConfig.Init(nil)
 	if err != nil {
 		errMsg = "证书生成成功，但是分析证书信息时发生错误：" + err.Error()
 		return

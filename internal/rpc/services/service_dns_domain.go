@@ -3,8 +3,6 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns/dnsutils"
@@ -14,11 +12,13 @@ import (
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/maps"
 	"net"
-	"strings"
 )
 
 // DNSDomainService DNS域名相关服务
@@ -58,7 +58,7 @@ func (this *DNSDomainService) CreateDNSDomain(ctx context.Context, req *pb.Creat
 	goman.New(func() {
 		domainName := req.Name
 
-		providerInterface := dnsclients.FindProvider(provider.Type)
+		providerInterface := dnsclients.FindProvider(provider.Type, int64(provider.Id))
 		if providerInterface == nil {
 			return
 		}
@@ -351,7 +351,7 @@ func (this *DNSDomainService) ExistAvailableDomains(ctx context.Context, req *pb
 
 // 转换域名信息
 func (this *DNSDomainService) convertDomainToPB(tx *dbs.Tx, domain *dns.DNSDomain) (*pb.DNSDomain, error) {
-	domainId := int64(domain.Id)
+	var domainId = int64(domain.Id)
 
 	defaultRoute, err := dnsutils.FindDefaultDomainRoute(tx, domain)
 	if err != nil {
@@ -383,7 +383,6 @@ func (this *DNSDomainService) convertDomainToPB(tx *dbs.Tx, domain *dns.DNSDomai
 	countAllNodes1 := int64(0)
 	countAllServers1 := int64(0)
 	for _, cluster := range clusters {
-
 		_, nodeRecords, serverRecords, countAllNodes, countAllServers, nodesChanged2, serversChanged2, err := this.findClusterDNSChanges(cluster, records, domain.Name, defaultRoute)
 		if err != nil {
 			return nil, err
@@ -437,25 +436,25 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 	var clusterId = int64(cluster.Id)
 	var clusterDnsName = cluster.DnsName
 	var clusterDomain = clusterDnsName + "." + domainName
-	var dnsConfig, _ = cluster.DecodeDNSConfig()
+	dnsConfig, err := cluster.DecodeDNSConfig()
+	if err != nil {
+		return nil, nil, nil, 0, 0, false, false, err
+	}
+	if dnsConfig == nil {
+		dnsConfig = dnsconfigs.DefaultClusterDNSConfig()
+	}
 
 	var tx = this.NullTx()
 
 	// 自动设置的cname记录
-	var cnameRecords = []string{}
 	var ttl int32
-	if len(cluster.Dns) > 0 {
-		dnsConfig, _ := cluster.DecodeDNSConfig()
-		if dnsConfig != nil {
-			cnameRecords = dnsConfig.CNAMERecords
-			if dnsConfig.TTL > 0 {
-				ttl = dnsConfig.TTL
-			}
-		}
+	var cnameRecords = dnsConfig.CNAMERecords
+	if dnsConfig.TTL > 0 {
+		ttl = dnsConfig.TTL
 	}
 
 	// 节点域名
-	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesDNSWithClusterId(tx, clusterId, true, dnsConfig != nil && dnsConfig.IncludingLnNodes)
+	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesDNSWithClusterId(tx, clusterId, true, dnsConfig != nil && dnsConfig.IncludingLnNodes, true)
 	if err != nil {
 		return nil, nil, nil, 0, 0, false, false, err
 	}
@@ -463,7 +462,7 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 	var nodeRecords = []*dnstypes.Record{}                // 之所以用数组再存一遍，是因为dnsName可能会重复
 	var nodeRecordMapping = map[string]*dnstypes.Record{} // value_route => *Record
 	for _, record := range records {
-		if (record.Type == dnstypes.RecordTypeA || record.Type == dnstypes.RecordTypeAAAA) && record.Name == strings.ToLower(clusterDnsName) {
+		if (record.Type == dnstypes.RecordTypeA || record.Type == dnstypes.RecordTypeAAAA) && record.Name == clusterDnsName {
 			nodeRecords = append(nodeRecords, record)
 			nodeRecordMapping[record.Value+"_"+record.Route] = record
 		}
@@ -471,14 +470,16 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 
 	// 新增的节点域名
 	var nodeKeys = []string{}
+	var addingNodeRecordKeysMap = map[string]bool{} // clusterDnsName_type_ip_route
 	for _, node := range nodes {
-		ipAddresses, err := models.SharedNodeIPAddressDAO.FindNodeAccessAndUpIPAddresses(tx, int64(node.Id), nodeconfigs.NodeRoleNode)
+		shouldSkip, shouldOverwrite, ipAddressesStrings, err := models.SharedNodeDAO.CheckNodeIPAddresses(tx, node)
 		if err != nil {
 			return nil, nil, nil, 0, 0, false, false, err
 		}
-		if len(ipAddresses) == 0 {
+		if shouldSkip {
 			continue
 		}
+
 		routeCodes, err := node.DNSRouteCodesForDomainId(int64(cluster.DnsDomainId))
 		if err != nil {
 			return nil, nil, nil, 0, 0, false, false, err
@@ -491,23 +492,55 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 				continue
 			}
 		}
-		for _, route := range routeCodes {
+
+		if !shouldOverwrite {
+			ipAddresses, err := models.SharedNodeIPAddressDAO.FindNodeAccessAndUpIPAddresses(tx, int64(node.Id), nodeconfigs.NodeRoleNode)
+			if err != nil {
+				return nil, nil, nil, 0, 0, false, false, err
+			}
+			if len(ipAddresses) == 0 {
+				continue
+			}
+
 			for _, ipAddress := range ipAddresses {
-				ip := ipAddress.DNSIP()
+				// 检查专属节点
+				if !ipAddress.IsValidInCluster(clusterId) {
+					continue
+				}
+
+				var ip = ipAddress.DNSIP()
 				if len(ip) == 0 {
 					continue
 				}
 				if net.ParseIP(ip) == nil {
 					continue
 				}
-				key := ip + "_" + route
+
+				ipAddressesStrings = append(ipAddressesStrings, ip)
+			}
+		}
+		if len(ipAddressesStrings) == 0 {
+			continue
+		}
+
+		for _, route := range routeCodes {
+			for _, ip := range ipAddressesStrings {
+				var key = ip + "_" + route
 				nodeKeys = append(nodeKeys, key)
 				record, ok := nodeRecordMapping[key]
 				if !ok {
-					recordType := dnstypes.RecordTypeA
+					var recordType = dnstypes.RecordTypeA
 					if utils.IsIPv6(ip) {
 						recordType = dnstypes.RecordTypeAAAA
 					}
+
+					// 避免添加重复的记录
+					var fullKey = clusterDnsName + "_" + recordType + "_" + ip + "_" + route
+					if addingNodeRecordKeysMap[fullKey] {
+						continue
+					}
+					addingNodeRecordKeysMap[fullKey] = true
+
 					result = append(result, maps.Map{
 						"action": "create",
 						"record": &dnstypes.Record{
@@ -548,7 +581,7 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 	var serverRecords = []*dnstypes.Record{}             // 之所以用数组再存一遍，是因为dnsName可能会重复
 	var serverRecordsMap = map[string]*dnstypes.Record{} // dnsName => *Record
 	for _, record := range records {
-		if record.Type == dnstypes.RecordTypeCNAME && record.Value == strings.ToLower(clusterDomain)+"." {
+		if record.Type == dnstypes.RecordTypeCNAME && record.Value == clusterDomain+"." {
 			serverRecords = append(serverRecords, record)
 			serverRecordsMap[record.Name] = record
 		}
@@ -557,7 +590,7 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 	// 新增的域名
 	var serverDNSNames = []string{}
 	for _, server := range servers {
-		dnsName := strings.ToLower(server.DnsName)
+		var dnsName = server.DnsName
 		if len(dnsName) == 0 {
 			return nil, nil, nil, 0, 0, false, false, errors.New("server '" + numberutils.FormatInt64(int64(server.Id)) + "' 'dnsName' should not empty")
 		}
@@ -583,6 +616,11 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 
 	// 自动设置的CNAME
 	for _, cnameRecord := range cnameRecords {
+		// 如果记录已存在，则跳过
+		if lists.ContainsString(serverDNSNames, cnameRecord) {
+			continue
+		}
+
 		serverDNSNames = append(serverDNSNames, cnameRecord)
 		record, ok := serverRecordsMap[cnameRecord]
 		if !ok {
@@ -613,6 +651,7 @@ func (this *DNSDomainService) findClusterDNSChanges(cluster *models.NodeCluster,
 			})
 		}
 	}
+
 	return
 }
 
@@ -669,7 +708,7 @@ func (this *DNSDomainService) syncClusterDNS(req *pb.SyncDNSDomainDataRequest) (
 	if provider == nil {
 		return &pb.SyncDNSDomainDataResponse{IsOk: false, Error: "域名没有设置服务商"}, nil
 	}
-	apiParams := maps.Map{}
+	var apiParams = maps.Map{}
 	if models.IsNotNull(provider.ApiParams) {
 		err = json.Unmarshal(provider.ApiParams, &apiParams)
 		if err != nil {
@@ -678,7 +717,7 @@ func (this *DNSDomainService) syncClusterDNS(req *pb.SyncDNSDomainDataRequest) (
 	}
 
 	// 开始同步
-	var manager = dnsclients.FindProvider(provider.Type)
+	var manager = dnsclients.FindProvider(provider.Type, int64(provider.Id))
 	if manager == nil {
 		return &pb.SyncDNSDomainDataResponse{IsOk: false, Error: "目前不支持'" + provider.Type + "'"}, nil
 	}
@@ -816,7 +855,7 @@ func (this *DNSDomainService) SyncDNSDomainsFromProvider(ctx context.Context, re
 		return nil, err
 	}
 
-	dnsProvider := dnsclients.FindProvider(provider.Type)
+	dnsProvider := dnsclients.FindProvider(provider.Type, int64(provider.Id))
 	if dnsProvider == nil {
 		return nil, errors.New("provider type '" + provider.Type + "' is not supported yet")
 	}

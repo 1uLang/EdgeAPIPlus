@@ -1,0 +1,82 @@
+syntax = "proto3";
+option go_package = "./pb";
+
+package pb;
+
+import "models/model_origin.proto";
+import "models/model_network_address.proto";
+import "models/rpc_messages.proto";
+
+// 源站管理服务
+service OriginService {
+	// 创建源站
+	rpc createOrigin (CreateOriginRequest) returns (CreateOriginResponse);
+
+	// 修改源站
+	rpc updateOrigin (UpdateOriginRequest) returns (RPCSuccess);
+
+	// 查找单个源站信息
+	rpc findEnabledOrigin (FindEnabledOriginRequest) returns (FindEnabledOriginResponse);
+
+	// 查找源站配置
+	rpc findEnabledOriginConfig (FindEnabledOriginConfigRequest) returns (FindEnabledOriginConfigResponse);
+}
+
+// 创建源站
+message CreateOriginRequest {
+	string name = 1;
+	NetworkAddress addr = 2;
+	string description = 3;
+	int32 weight = 4;
+	bool isOn = 5;
+	bytes connTimeoutJSON = 6;
+	bytes readTimeoutJSON = 7;
+	bytes idleTimeoutJSON = 8;
+	int32 maxConns = 9;
+	int32 maxIdleConns = 10;
+	repeated string domains = 11;
+	bytes certRefJSON = 12;
+	string host = 13;
+	bool followPort = 14;
+}
+
+message CreateOriginResponse {
+	int64 originId = 1;
+}
+
+// 修改源站
+message UpdateOriginRequest {
+	int64 originId = 1;
+	string name = 2;
+	NetworkAddress addr = 3;
+	string description = 4;
+	int32 weight = 5;
+	bool isOn = 6;
+	bytes connTimeoutJSON = 7;
+	bytes readTimeoutJSON = 8;
+	bytes idleTimeoutJSON = 9;
+	int32 maxConns = 10;
+	int32 maxIdleConns = 11;
+	repeated string domains = 12;
+	bytes certRefJSON = 13;
+	string host = 14;
+	bool followPort = 15;
+}
+
+// 查找单个源站信息
+message FindEnabledOriginRequest {
+	int64 originId = 1;
+}
+
+message FindEnabledOriginResponse {
+	Origin Origin = 1;
+}
+
+// 查找源站配置
+message FindEnabledOriginConfigRequest {
+	int64 originId = 1;
+}
+
+message FindEnabledOriginConfigResponse {
+	bytes originJSON = 1;
+}

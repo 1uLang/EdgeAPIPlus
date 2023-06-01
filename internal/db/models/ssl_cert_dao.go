@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/sslconfigs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/types"
 	timeutil "github.com/iwind/TeaGo/utils/time"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -200,11 +203,12 @@ func (this *SSLCertDAO) UpdateCert(tx *dbs.Tx,
 }
 
 // ComposeCertConfig 组合配置
-func (this *SSLCertDAO) ComposeCertConfig(tx *dbs.Tx, certId int64, cacheMap *utils.CacheMap) (*sslconfigs.SSLCertConfig, error) {
+// ignoreData 是否忽略证书数据，避免因为数据过大影响传输
+func (this *SSLCertDAO) ComposeCertConfig(tx *dbs.Tx, certId int64, ignoreData bool, dataMap *shared.DataMap, cacheMap *utils.CacheMap) (*sslconfigs.SSLCertConfig, error) {
 	if cacheMap == nil {
 		cacheMap = utils.NewCacheMap()
 	}
-	var cacheKey = this.Table + ":config:" + types.String(certId)
+	var cacheKey = this.Table + ":ComposeCertConfig:" + types.String(certId)
 	var cache, _ = cacheMap.Get(cacheKey)
 	if cache != nil {
 		return cache.(*sslconfigs.SSLCertConfig), nil
@@ -218,28 +222,45 @@ func (this *SSLCertDAO) ComposeCertConfig(tx *dbs.Tx, certId int64, cacheMap *ut
 		return nil, nil
 	}
 
-	config := &sslconfigs.SSLCertConfig{}
+	var config = &sslconfigs.SSLCertConfig{}
 	config.Id = int64(cert.Id)
 	config.IsOn = cert.IsOn
 	config.IsCA = cert.IsCA
 	config.IsACME = cert.IsACME
 	config.Name = cert.Name
 	config.Description = cert.Description
-	config.CertData = cert.CertData
-	config.KeyData = cert.KeyData
+	if !ignoreData {
+		if dataMap != nil {
+			if len(cert.CertData) > 0 {
+				config.CertData = dataMap.Put(cert.CertData)
+			}
+			if len(cert.KeyData) > 0 {
+				config.KeyData = dataMap.Put(cert.KeyData)
+			}
+		} else {
+			config.CertData = cert.CertData
+			config.KeyData = cert.KeyData
+		}
+	}
 	config.ServerName = cert.ServerName
 	config.TimeBeginAt = int64(cert.TimeBeginAt)
 	config.TimeEndAt = int64(cert.TimeEndAt)
 
 	// OCSP
 	if int64(cert.OcspExpiresAt) > time.Now().Unix() {
-		config.OCSP = cert.Ocsp
+		if dataMap != nil {
+			if len(cert.Ocsp) > 0 {
+				config.OCSP = dataMap.Put(cert.Ocsp)
+			}
+		} else {
+			config.OCSP = cert.Ocsp
+		}
 		config.OCSPExpiresAt = int64(cert.OcspExpiresAt)
 	}
 	config.OCSPError = cert.OcspError
 
 	if IsNotNull(cert.DnsNames) {
-		dnsNames := []string{}
+		var dnsNames = []string{}
 		err := json.Unmarshal(cert.DnsNames, &dnsNames)
 		if err != nil {
 			return nil, err
@@ -248,7 +269,7 @@ func (this *SSLCertDAO) ComposeCertConfig(tx *dbs.Tx, certId int64, cacheMap *ut
 	}
 
 	if cert.CommonNames.IsNotNull() {
-		commonNames := []string{}
+		var commonNames = []string{}
 		err := json.Unmarshal(cert.CommonNames, &commonNames)
 		if err != nil {
 			return nil, err
@@ -264,8 +285,8 @@ func (this *SSLCertDAO) ComposeCertConfig(tx *dbs.Tx, certId int64, cacheMap *ut
 }
 
 // CountCerts 计算符合条件的证书数量
-func (this *SSLCertDAO) CountCerts(tx *dbs.Tx, isCA bool, isAvailable bool, isExpired bool, expiringDays int64, keyword string, userId int64) (int64, error) {
-	query := this.Query(tx).
+func (this *SSLCertDAO) CountCerts(tx *dbs.Tx, isCA bool, isAvailable bool, isExpired bool, expiringDays int64, keyword string, userId int64, domains []string) (int64, error) {
+	var query = this.Query(tx).
 		State(SSLCertStateEnabled)
 	if isCA {
 		query.Attr("isCA", true)
@@ -290,12 +311,19 @@ func (this *SSLCertDAO) CountCerts(tx *dbs.Tx, isCA bool, isAvailable bool, isEx
 		// 只查询管理员上传的
 		query.Attr("userId", 0)
 	}
+
+	// 域名
+	err := this.buildDomainSearchingQuery(query, domains)
+	if err != nil {
+		return 0, err
+	}
+
 	return query.Count()
 }
 
 // ListCertIds 列出符合条件的证书
-func (this *SSLCertDAO) ListCertIds(tx *dbs.Tx, isCA bool, isAvailable bool, isExpired bool, expiringDays int64, keyword string, userId int64, offset int64, size int64) (certIds []int64, err error) {
-	query := this.Query(tx).
+func (this *SSLCertDAO) ListCertIds(tx *dbs.Tx, isCA bool, isAvailable bool, isExpired bool, expiringDays int64, keyword string, userId int64, domains []string, offset int64, size int64) (certIds []int64, err error) {
+	var query = this.Query(tx).
 		State(SSLCertStateEnabled)
 	if isCA {
 		query.Attr("isCA", true)
@@ -319,6 +347,12 @@ func (this *SSLCertDAO) ListCertIds(tx *dbs.Tx, isCA bool, isAvailable bool, isE
 	} else {
 		// 只查询管理员上传的
 		query.Attr("userId", 0)
+	}
+
+	// 域名
+	err = this.buildDomainSearchingQuery(query, domains)
+	if err != nil {
+		return nil, err
 	}
 
 	ones, err := query.
@@ -331,7 +365,7 @@ func (this *SSLCertDAO) ListCertIds(tx *dbs.Tx, isCA bool, isAvailable bool, isE
 		return nil, err
 	}
 
-	result := []int64{}
+	var result = []int64{}
 	for _, one := range ones {
 		result = append(result, int64(one.(*SSLCert).Id))
 	}
@@ -361,6 +395,7 @@ func (this *SSLCertDAO) FindAllExpiringCerts(tx *dbs.Tx, days int) (result []*SS
 	var deltaSeconds = int64(days * 86400)
 	_, err = this.Query(tx).
 		State(SSLCertStateEnabled).
+		Attr("isOn", true).
 		Where("FROM_UNIXTIME(timeEndAt, '%Y-%m-%d')=:day AND FROM_UNIXTIME(notifiedAt, '%Y-%m-%d')!=:today").
 		Param("day", timeutil.FormatTime("Y-m-d", time.Now().Unix()+deltaSeconds)).
 		Param("today", timeutil.Format("Y-m-d")).
@@ -397,6 +432,17 @@ func (this *SSLCertDAO) CheckUserCert(tx *dbs.Tx, certId int64, userId int64) er
 		return errors.New("not found")
 	}
 	return nil
+}
+
+// UpdateCertUser 修改证书所属用户
+func (this *SSLCertDAO) UpdateCertUser(tx *dbs.Tx, certId int64, userId int64) error {
+	if certId <= 0 || userId <= 0 {
+		return nil
+	}
+	return this.Query(tx).
+		Pk(certId).
+		Set("userId", userId).
+		UpdateQuickly()
 }
 
 // ListCertsToUpdateOCSP 查找需要更新OCSP的证书
@@ -600,6 +646,7 @@ func (this *SSLCertDAO) NotifyUpdate(tx *dbs.Tx, certId int64) error {
 		return nil
 	}
 
+	// 通知服务更新
 	serverIds, err := SharedServerDAO.FindAllEnabledServerIdsWithSSLPolicyIds(tx, policyIds)
 	if err != nil {
 		return err
@@ -613,28 +660,78 @@ func (this *SSLCertDAO) NotifyUpdate(tx *dbs.Tx, certId int64) error {
 			return err
 		}
 	}
+
+	// TODO 通知用户节点、API节点、管理系统（将来实现选择）更新
+
 	return nil
 }
 
-// FindAllCerts 查找证书
-func (this *SSLCertDAO) FindAllCerts(tx *dbs.Tx, offset, size int64) (result []*SSLCert, total int64, err error) {
+// 构造通过域名搜索证书的查询对象
+func (this *SSLCertDAO) buildDomainSearchingQuery(query *dbs.Query, domains []string) error {
+	if len(domains) == 0 {
+		return nil
+	}
 
-	total, err = this.Query(tx).
-		State(SSLCertStateEnabled).
-		Result("id", "timeBeginAt", "timeEndAt", "name", "dnsNames", "isCA").Count()
-	if err != nil {
-		return
+	// 不要查询太多
+	const maxDomains = 10_000
+	if len(domains) > maxDomains {
+		domains = domains[:maxDomains]
 	}
-	if size == 0 {
-		size = total
+
+	// 加入通配符
+	var searchingDomains = []string{}
+	var domainMap = map[string]bool{}
+	for _, domain := range domains {
+		domainMap[domain] = true
 	}
-	_, err = this.Query(tx).
-		State(SSLCertStateEnabled).
-		Result("id", "timeBeginAt", "timeEndAt", "name", "dnsNames", "isCA").
-		Offset(offset).
-		Limit(size).
-		Slice(&result).
-		AscPk().
-		FindAll()
-	return
+	var reg = regexp.MustCompile(`^[\w*.-]+$`) // 为了下面的SQL语句安全先不支持其他字符
+	for domain := range domainMap {
+		if !reg.MatchString(domain) {
+			continue
+		}
+		searchingDomains = append(searchingDomains, domain)
+
+		if strings.Count(domain, ".") >= 2 && !strings.HasPrefix(domain, "*.") {
+			var wildcardDomain = "*" + domain[strings.Index(domain, "."):]
+			if !domainMap[wildcardDomain] {
+				domainMap[wildcardDomain] = true
+				searchingDomains = append(searchingDomains, wildcardDomain)
+			}
+		}
+	}
+
+	// 检测 JSON_OVERLAPS() 函数是否可用
+	var canJSONOverlaps = false
+	_, funcErr := this.Instance.FindCol(0, "SELECT JSON_OVERLAPS('[1]', '[1]')")
+	canJSONOverlaps = funcErr == nil
+	if canJSONOverlaps {
+		domainsJSON, err := json.Marshal(searchingDomains)
+		if err != nil {
+			return err
+		}
+
+		query.
+			Where("JSON_OVERLAPS(dnsNames, JSON_UNQUOTE(:domainsJSON))").
+			Param("domainsJSON", string(domainsJSON))
+		return nil
+	}
+
+	// 不支持JSON_OVERLAPS()的情形
+	query.Reuse(false)
+
+	// TODO 需要判断是否超出max_allowed_packet
+	var sqlPieces = []string{}
+	for _, domain := range searchingDomains {
+		domainJSON, err := json.Marshal(domain)
+		if err != nil {
+			return err
+		}
+
+		sqlPieces = append(sqlPieces, "JSON_CONTAINS(dnsNames, '"+string(domainJSON)+"')")
+	}
+	if len(sqlPieces) > 0 {
+		query.Where("(" + strings.Join(sqlPieces, " OR ") + ")")
+	}
+
+	return nil
 }

@@ -2,8 +2,8 @@ package installers
 
 import (
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/configutils"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
 	"github.com/iwind/TeaGo/Tea"
 	stringutil "github.com/iwind/TeaGo/utils/string"
 	"golang.org/x/crypto/ssh"
@@ -125,14 +125,14 @@ func (this *BaseInstaller) LookupLatestInstaller(filePrefix string) (string, err
 		return "", err
 	}
 
-	lastVersion := ""
-	result := ""
+	var lastVersion = ""
+	var result = ""
 	for _, match := range matches {
-		baseName := filepath.Base(match)
+		var baseName = filepath.Base(match)
 		if !pattern.MatchString(baseName) {
 			continue
 		}
-		m := pattern.FindStringSubmatch(baseName)
+		var m = pattern.FindStringSubmatch(baseName)
 		if len(m) < 2 {
 			continue
 		}
@@ -147,17 +147,10 @@ func (this *BaseInstaller) LookupLatestInstaller(filePrefix string) (string, err
 
 // InstallHelper 上传安装助手
 func (this *BaseInstaller) InstallHelper(targetDir string, role nodeconfigs.NodeRole) (env *Env, err error) {
-	uname, _, err := this.client.Exec("uname -a")
-	if err != nil {
-		return env, err
-	}
+	var uname = this.uname()
 
-	if len(uname) == 0 {
-		return nil, errors.New("unable to execute 'uname -a' on this system")
-	}
-
-	osName := ""
-	archName := ""
+	var osName = ""
+	var archName = ""
 	if strings.Contains(uname, "Darwin") {
 		osName = "darwin"
 	} else if strings.Contains(uname, "Linux") {
@@ -181,22 +174,56 @@ func (this *BaseInstaller) InstallHelper(targetDir string, role nodeconfigs.Node
 		archName = "386"
 	}
 
-	exeName := "edge-installer-helper-" + osName + "-" + archName
+	var exeName = "edge-installer-helper-" + osName + "-" + archName
 	switch role {
 	case nodeconfigs.NodeRoleDNS:
 		exeName = "edge-installer-dns-helper-" + osName + "-" + archName
 	}
-	exePath := Tea.Root + "/installers/" + exeName
+	var exePath = Tea.Root + "/installers/" + exeName
 
-	err = this.client.Copy(exePath, targetDir+"/"+exeName, 0777)
-	if err != nil {
-		return env, errors.New("copy '" + exeName + "' to '" + targetDir + "' failed: " + err.Error())
+	var realHelperPath = ""
+
+	var firstCopyErr error
+	for _, path := range []string{
+		targetDir + "/" + exeName,
+		this.client.UserHome() + "/" + exeName,
+		"/tmp/" + exeName,
+	} {
+		err = this.client.Copy(exePath, path, 0777)
+		if err != nil {
+			if firstCopyErr == nil {
+				firstCopyErr = err
+			}
+		} else {
+			err = nil
+			firstCopyErr = nil
+			realHelperPath = path
+			break
+		}
+	}
+	if firstCopyErr != nil {
+		return env, errors.New("copy '" + exeName + "' to '" + targetDir + "' failed: " + firstCopyErr.Error())
 	}
 
 	env = &Env{
 		OS:         osName,
 		Arch:       archName,
-		HelperName: exeName,
+		HelperPath: realHelperPath,
 	}
 	return env, nil
+}
+
+func (this *BaseInstaller) uname() (uname string) {
+	var unameRetries = 3
+
+	for i := 0; i < unameRetries; i++ {
+		for _, unameExe := range []string{"uname", "/bin/uname", "/usr/bin/uname"} {
+			uname, _, _ = this.client.Exec(unameExe + " -a")
+			if len(uname) > 0 {
+				return
+			}
+		}
+	}
+
+	return "x86_64 GNU/Linux"
 }

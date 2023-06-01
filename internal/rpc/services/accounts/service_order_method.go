@@ -1,12 +1,15 @@
 // Copyright 2022 Liuxiangchao iwind.liu@gmail.com. All rights reserved. Official site: https://goedge.cn .
+//go:build plus
 
 package accounts
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
+	"errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/accounts"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/userconfigs"
 )
 
 // OrderMethodService 订单支付方式相关服务
@@ -23,9 +26,24 @@ func (this *OrderMethodService) CreateOrderMethod(ctx context.Context, req *pb.C
 
 	var tx = this.NullTx()
 
-	// TODO 检查代号是否相同
+	// 检查代号是否相同
+	exists, err := accounts.SharedOrderMethodDAO.ExistOrderMethodWithCode(tx, req.Code, 0)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.New("pay method code already exists")
+	}
 
-	methodId, err := accounts.SharedOrderMethodDAO.CreateMethod(tx, req.Name, req.Code, req.Url, req.Description)
+	var params any
+	if len(req.ParentCode) > 0 {
+		params, err = userconfigs.DecodePayMethodParams(req.ParentCode, req.ParamsJSON)
+		if err != nil {
+			return nil, errors.New("invalid params: " + err.Error())
+		}
+	}
+
+	methodId, err := accounts.SharedOrderMethodDAO.CreateMethod(tx, req.Name, req.Code, req.Url, req.Description, req.ParentCode, params, req.ClientType, req.QrcodeTitle)
 	if err != nil {
 		return nil, err
 	}
@@ -44,9 +62,32 @@ func (this *OrderMethodService) UpdateOrderMethod(ctx context.Context, req *pb.U
 
 	var tx = this.NullTx()
 
-	// TODO 检查代号是否相同
+	// 检查代号是否相同
+	exists, err := accounts.SharedOrderMethodDAO.ExistOrderMethodWithCode(tx, req.Code, req.OrderMethodId)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.New("pay method code already exists")
+	}
 
-	err = accounts.SharedOrderMethodDAO.UpdateMethod(tx, req.OrderMethodId, req.Name, req.Code, req.Url, req.Description, req.IsOn)
+	method, err := accounts.SharedOrderMethodDAO.FindEnabledBasicOrderMethod(tx, req.OrderMethodId)
+	if err != nil {
+		return nil, err
+	}
+	if method == nil {
+		return nil, errors.New("could not find method")
+	}
+
+	var params any
+	if len(method.ParentCode) > 0 {
+		params, err = userconfigs.DecodePayMethodParams(method.ParentCode, req.ParamsJSON)
+		if err != nil {
+			return nil, errors.New("invalid params: " + err.Error())
+		}
+	}
+
+	err = accounts.SharedOrderMethodDAO.UpdateMethod(tx, req.OrderMethodId, req.Name, req.Code, req.Url, req.Description, params, req.ClientType, req.QrcodeTitle, req.IsOn)
 	if err != nil {
 		return nil, err
 	}
@@ -96,6 +137,10 @@ func (this *OrderMethodService) FindEnabledOrderMethod(ctx context.Context, req 
 			Url:         method.Url,
 			Secret:      method.Secret,
 			IsOn:        method.IsOn,
+			ParentCode:  method.ParentCode,
+			Params:      method.Params, // 注意参数不能通过接口泄露给平台用户
+			ClientType:  method.ClientType,
+			QrcodeTitle: method.QrcodeTitle,
 		},
 	}, nil
 }
@@ -128,10 +173,13 @@ func (this *OrderMethodService) FindEnabledOrderMethodWithCode(ctx context.Conte
 			Id:          int64(method.Id),
 			Name:        method.Name,
 			Code:        method.Code,
+			ParentCode:  method.ParentCode,
 			Description: method.Description,
 			Url:         method.Url,
 			Secret:      method.Secret,
 			IsOn:        method.IsOn,
+			ClientType:  method.ClientType,
+			QrcodeTitle: method.QrcodeTitle,
 		},
 	}, nil
 }
@@ -163,6 +211,8 @@ func (this *OrderMethodService) FindAllEnabledOrderMethods(ctx context.Context, 
 			Url:         method.Url,
 			Secret:      method.Secret,
 			IsOn:        method.IsOn,
+			ParentCode:  method.ParentCode, // 不要返回params，以防止泄露
+			ClientType:  method.ClientType,
 		})
 	}
 	return &pb.FindAllEnabledOrderMethodsResponse{
@@ -197,6 +247,8 @@ func (this *OrderMethodService) FindAllAvailableOrderMethods(ctx context.Context
 			Url:         method.Url,
 			Secret:      method.Secret,
 			IsOn:        method.IsOn,
+			ParentCode:  method.ParentCode, // 不返回params，防止泄露
+			ClientType:  method.ClientType,
 		})
 	}
 	return &pb.FindAllAvailableOrderMethodsResponse{

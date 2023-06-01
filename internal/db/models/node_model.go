@@ -38,8 +38,17 @@ type Node struct {
 	DnsRoutes              dbs.JSON `field:"dnsRoutes"`              // DNS线路设置
 	MaxCacheDiskCapacity   dbs.JSON `field:"maxCacheDiskCapacity"`   // 硬盘缓存容量
 	MaxCacheMemoryCapacity dbs.JSON `field:"maxCacheMemoryCapacity"` // 内存缓存容量
-	CacheDiskDir           string   `field:"cacheDiskDir"`           // 缓存目录
+	CacheDiskDir           string   `field:"cacheDiskDir"`           // 主缓存目录
+	CacheDiskSubDirs       dbs.JSON `field:"cacheDiskSubDirs"`       // 其他缓存目录
 	DnsResolver            dbs.JSON `field:"dnsResolver"`            // DNS解析器
+	EnableIPLists          bool     `field:"enableIPLists"`          // 启用IP名单
+	ApiNodeAddrs           dbs.JSON `field:"apiNodeAddrs"`           // API节点地址
+	OfflineDay             string   `field:"offlineDay"`             // 下线日期YYYYMMDD
+	OfflineIsNotified      bool     `field:"offlineIsNotified"`      // 下线是否已通知
+	IsBackupForCluster     bool     `field:"isBackupForCluster"`     // 是否为集群备用节点
+	IsBackupForGroup       bool     `field:"isBackupForGroup"`       // 是否为分组备用节点
+	BackupIPs              dbs.JSON `field:"backupIPs"`              // 备用IP
+	ActionStatus           dbs.JSON `field:"actionStatus"`           // 当前动作配置
 }
 
 type NodeOperator struct {
@@ -77,8 +86,17 @@ type NodeOperator struct {
 	DnsRoutes              any // DNS线路设置
 	MaxCacheDiskCapacity   any // 硬盘缓存容量
 	MaxCacheMemoryCapacity any // 内存缓存容量
-	CacheDiskDir           any // 缓存目录
+	CacheDiskDir           any // 主缓存目录
+	CacheDiskSubDirs       any // 其他缓存目录
 	DnsResolver            any // DNS解析器
+	EnableIPLists          any // 启用IP名单
+	ApiNodeAddrs           any // API节点地址
+	OfflineDay             any // 下线日期YYYYMMDD
+	OfflineIsNotified      any // 下线是否已通知
+	IsBackupForCluster     any // 是否为集群备用节点
+	IsBackupForGroup       any // 是否为分组备用节点
+	BackupIPs              any // 备用IP
+	ActionStatus           any // 当前动作配置
 }
 
 func NewNodeOperator() *NodeOperator {

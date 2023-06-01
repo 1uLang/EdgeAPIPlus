@@ -12,9 +12,6 @@ var sharedAPIConfig *APIConfig = nil
 
 // APIConfig API节点配置
 type APIConfig struct {
-	RPC struct {
-		Endpoints []string `yaml:"endpoints"`
-	} `yaml:"rpc"`
 	NodeId string `yaml:"nodeId" json:"nodeId"`
 	Secret string `yaml:"secret" json:"secret"`
 
@@ -134,4 +131,48 @@ func (this *APIConfig) WriteFile(path string) error {
 	}
 
 	return os.WriteFile(path, data, 0666)
+}
+
+// ResetAPIConfig 重置配置
+func ResetAPIConfig() error {
+	for _, filename := range []string{"api.yaml", "db.yaml"} {
+		// 重置 configs/api.yaml
+		{
+			var configFile = Tea.ConfigFile(filename)
+			stat, err := os.Stat(configFile)
+			if err == nil && !stat.IsDir() {
+				err = os.Remove(configFile)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		// 重置 ~/.edge-api/api.yaml
+		homeDir, homeErr := os.UserHomeDir()
+		if homeErr == nil {
+			var configFile = homeDir + "/." + teaconst.ProcessName + "/" + filename
+			stat, err := os.Stat(configFile)
+			if err == nil && !stat.IsDir() {
+				err = os.Remove(configFile)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		// 重置 /etc/edge-api/api.yaml
+		{
+			var configFile = "/etc/" + teaconst.ProcessName + "/" + filename
+			stat, err := os.Stat(configFile)
+			if err == nil && !stat.IsDir() {
+				err = os.Remove(configFile)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
 }

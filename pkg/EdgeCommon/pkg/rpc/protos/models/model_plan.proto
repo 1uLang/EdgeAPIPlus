@@ -1,0 +1,19 @@
+syntax = "proto3";
+option go_package = "./pb";
+
+package pb;
+
+message Plan {
+	int64 id = 1;
+	bool isOn = 2;
+	string name = 3;
+	int64 clusterId = 4;
+	bytes trafficLimitJSON = 5;
+	bytes featuresJSON = 6;
+	string priceType = 7;
+	bytes trafficPriceJSON = 8;
+	bytes bandwidthPriceJSON = 12;
+	double monthlyPrice = 9;
+	double seasonallyPrice = 10;
+	double yearlyPrice = 11;
+}

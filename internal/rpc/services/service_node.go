@@ -4,12 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/configutils"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/ddosconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs/shared"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/dns"
 	"github.com/TeaOSLab/EdgeAPI/internal/dnsclients/dnstypes"
@@ -20,6 +14,12 @@ import (
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils/numberutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/ddosconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs/shared"
 	"github.com/andybalholm/brotli"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
@@ -44,11 +44,6 @@ var nodeVersionCacheLocker = &sync.Mutex{}
 // NodeService 边缘节点相关服务
 type NodeService struct {
 	BaseService
-}
-
-func (this *NodeService) mustEmbedUnimplementedNodeServiceServer() {
-	//TODO implement me
-	panic("implement me")
 }
 
 // CreateNode 创建节点
@@ -230,6 +225,10 @@ func (this *NodeService) ListEnabledNodesMatch(ctx context.Context, req *pb.List
 		order = "loadAsc"
 	} else if req.LoadDesc {
 		order = "loadDesc"
+	} else if req.ConnectionsAsc {
+		order = "connectionsAsc"
+	} else if req.ConnectionsDesc {
+		order = "connectionsDesc"
 	}
 
 	nodes, err := models.SharedNodeDAO.ListEnabledNodesMatch(tx, req.NodeClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword, req.NodeGroupId, req.NodeRegionId, req.Level, true, order, req.Offset, req.Size)
@@ -385,6 +384,9 @@ func (this *NodeService) ListEnabledNodesMatch(ctx context.Context, req *pb.List
 			NodeRegion:            pbRegion,
 			DnsRoutes:             pbRoutes,
 			Level:                 int32(node.Level),
+			OfflineDay:            node.OfflineDay,
+			IsBackupForCluster:    node.IsBackupForCluster,
+			IsBackupForGroup:      node.IsBackupForGroup,
 		})
 	}
 
@@ -481,7 +483,7 @@ func (this *NodeService) UpdateNode(ctx context.Context, req *pb.UpdateNodeReque
 
 	var tx = this.NullTx()
 
-	err = models.SharedNodeDAO.UpdateNode(tx, req.NodeId, req.Name, req.NodeClusterId, req.SecondaryNodeClusterIds, req.NodeGroupId, req.NodeRegionId, req.IsOn, int(req.Level), req.LnAddrs)
+	err = models.SharedNodeDAO.UpdateNode(tx, req.NodeId, req.Name, req.NodeClusterId, req.SecondaryNodeClusterIds, req.NodeGroupId, req.NodeRegionId, req.IsOn, int(req.Level), req.LnAddrs, req.EnableIPLists)
 	if err != nil {
 		return nil, err
 	}
@@ -551,7 +553,7 @@ func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnable
 	if err != nil {
 		return nil, err
 	}
-	installStatusResult := &pb.NodeInstallStatus{}
+	var installStatusResult = &pb.NodeInstallStatus{}
 	if installStatus != nil {
 		installStatusResult = &pb.NodeInstallStatus{
 			IsRunning:  installStatus.IsRunning,
@@ -678,9 +680,15 @@ func (this *NodeService) FindEnabledNode(ctx context.Context, req *pb.FindEnable
 		MaxCacheDiskCapacity:   pbMaxCacheDiskCapacity,
 		MaxCacheMemoryCapacity: pbMaxCacheMemoryCapacity,
 		CacheDiskDir:           node.CacheDiskDir,
+		CacheDiskSubDirsJSON:   node.CacheDiskSubDirs,
 		Level:                  int32(node.Level),
 		LnAddrs:                node.DecodeLnAddrs(),
 		DnsRoutes:              pbRoutes,
+		EnableIPLists:          node.EnableIPLists,
+		ApiNodeAddrsJSON:       node.ApiNodeAddrs,
+		OfflineDay:             node.OfflineDay,
+		IsBackupForCluster:     node.IsBackupForCluster,
+		IsBackupForGroup:       node.IsBackupForGroup,
 	}}, nil
 }
 
@@ -742,33 +750,65 @@ func (this *NodeService) FindCurrentNodeConfig(ctx context.Context, req *pb.Find
 		return nil, err
 	}
 	var cacheMap = this.findClusterCacheMap(clusterId, req.NodeTaskVersion)
-	nodeConfig, err := models.SharedNodeDAO.ComposeNodeConfig(tx, nodeId, cacheMap)
-	if err != nil {
-		return nil, err
-	}
+	var dataMap *shared.DataMap
+	if req.UseDataMap {
+		// 是否有共用的
+		if cacheMap != nil {
+			cachedDataMap, ok := cacheMap.Get("DataMap")
+			if ok {
+				dataMap = cachedDataMap.(*shared.DataMap)
+			}
+		}
 
-	data, err := json.Marshal(nodeConfig)
+		if dataMap == nil {
+			dataMap = shared.NewDataMap()
+		}
+	} else {
+		// 如果没有使用DataMap，但是获取的缓存是有DataMap的，需要重新获取
+		_, ok := cacheMap.Get("DataMap")
+		if ok {
+			cacheMap = nil
+		}
+	}
+	nodeConfig, err := models.SharedNodeDAO.ComposeNodeConfig(tx, nodeId, dataMap, cacheMap)
 	if err != nil {
 		return nil, err
 	}
 
 	// 压缩
+	var data []byte
 	var isCompressed = false
+	var buffer = &bytes.Buffer{}
+	var writer io.Writer = buffer
+	var brotliWriter *brotli.Writer
 	if req.Compress {
-		var buf = &bytes.Buffer{}
-		writer := brotli.NewWriterLevel(buf, 5)
-		_, err = writer.Write(data)
-		if err != nil {
-			_ = writer.Close()
+		brotliWriter = brotli.NewWriterLevel(writer, 5)
+		writer = brotliWriter
+	}
+
+	var encoder = json.NewEncoder(writer)
+	err = encoder.Encode(nodeConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	if brotliWriter != nil {
+		err = brotliWriter.Close()
+		if err == nil {
+			data = buffer.Bytes()
+			isCompressed = true
 		} else {
-			err = writer.Close()
-			if err == nil {
-				isCompressed = true
-				data = buf.Bytes()
-				buf.Reset()
+			// 如果失败，则使用最直接方法重新编码
+			data, err = json.Marshal(nodeConfig)
+			if err != nil {
+				return nil, err
 			}
 		}
+	} else {
+		data = buffer.Bytes()
 	}
+
+	buffer.Reset()
 
 	return &pb.FindCurrentNodeConfigResponse{
 		IsChanged:    true,
@@ -810,6 +850,7 @@ func (this *NodeService) UpdateNodeStatus(ctx context.Context, req *pb.UpdateNod
 	if err != nil {
 		return nil, err
 	}
+
 	return this.Success()
 }
 
@@ -1319,7 +1360,7 @@ func (this *NodeService) FindAllEnabledNodesDNSWithNodeClusterId(ctx context.Con
 		return nil, err
 	}
 
-	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesDNSWithClusterId(tx, req.NodeClusterId, true, dnsConfig != nil && dnsConfig.IncludingLnNodes)
+	nodes, err := models.SharedNodeDAO.FindAllEnabledNodesDNSWithClusterId(tx, req.NodeClusterId, true, dnsConfig != nil && dnsConfig.IncludingLnNodes, req.IsInstalled)
 	if err != nil {
 		return nil, err
 	}
@@ -1349,7 +1390,12 @@ func (this *NodeService) FindAllEnabledNodesDNSWithNodeClusterId(ctx context.Con
 		}
 
 		for _, ipAddress := range ipAddresses {
-			ip := ipAddress.DNSIP()
+			// 检查专属节点
+			if !ipAddress.IsValidInCluster(req.NodeClusterId) {
+				continue
+			}
+
+			var ip = ipAddress.DNSIP()
 			if len(ip) == 0 {
 				continue
 			}
@@ -1357,11 +1403,15 @@ func (this *NodeService) FindAllEnabledNodesDNSWithNodeClusterId(ctx context.Con
 				continue
 			}
 			result = append(result, &pb.NodeDNSInfo{
-				Id:            int64(node.Id),
-				Name:          node.Name,
-				IpAddr:        ip,
-				Routes:        pbRoutes,
-				NodeClusterId: req.NodeClusterId,
+				Id:                 int64(node.Id),
+				Name:               node.Name,
+				IpAddr:             ip,
+				NodeIPAddressId:    int64(ipAddress.Id),
+				Routes:             pbRoutes,
+				NodeClusterId:      req.NodeClusterId,
+				IsBackupForCluster: node.IsBackupForCluster,
+				IsBackupForGroup:   node.IsBackupForGroup,
+				IsOffline:          node.CheckIsOffline(),
 			})
 		}
 	}
@@ -1387,9 +1437,24 @@ func (this *NodeService) FindEnabledNodeDNS(ctx context.Context, req *pb.FindEna
 		return &pb.FindEnabledNodeDNSResponse{Node: nil}, nil
 	}
 
-	ipAddr, _, err := models.SharedNodeIPAddressDAO.FindFirstNodeAccessIPAddress(tx, int64(node.Id), true, nodeconfigs.NodeRoleNode)
-	if err != nil {
-		return nil, err
+	// 查询节点IP地址
+	var ipAddr string
+	var ipAddrId int64 = 0
+	if req.NodeIPAddrId > 0 {
+		address, err := models.SharedNodeIPAddressDAO.FindEnabledAddress(tx, req.NodeIPAddrId)
+		if err != nil {
+			return nil, err
+		}
+		if address != nil {
+			ipAddr = address.Ip
+			ipAddrId = int64(address.Id)
+		}
+	}
+	if ipAddrId == 0 {
+		ipAddr, ipAddrId, err = models.SharedNodeIPAddressDAO.FindFirstNodeAccessIPAddress(tx, int64(node.Id), true, nodeconfigs.NodeRoleNode)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var clusterId = int64(node.ClusterId)
@@ -1405,13 +1470,13 @@ func (this *NodeService) FindEnabledNodeDNS(ctx context.Context, req *pb.FindEna
 		return &pb.FindEnabledNodeDNSResponse{Node: nil}, nil
 	}
 
-	dnsDomainId := int64(clusterDNS.DnsDomainId)
+	var dnsDomainId = int64(clusterDNS.DnsDomainId)
 	dnsDomainName, err := dns.SharedDNSDomainDAO.FindDNSDomainName(tx, dnsDomainId)
 	if err != nil {
 		return nil, err
 	}
 
-	pbRoutes := []*pb.DNSRoute{}
+	var pbRoutes = []*pb.DNSRoute{}
 	if dnsDomainId > 0 {
 		routeCodes, err := node.DNSRouteCodesForDomainId(dnsDomainId)
 		if err != nil {
@@ -1435,11 +1500,15 @@ func (this *NodeService) FindEnabledNodeDNS(ctx context.Context, req *pb.FindEna
 			Id:                 int64(node.Id),
 			Name:               node.Name,
 			IpAddr:             ipAddr,
+			NodeIPAddressId:    ipAddrId,
 			Routes:             pbRoutes,
 			NodeClusterId:      clusterId,
 			NodeClusterDNSName: clusterDNS.DnsName,
 			DnsDomainId:        dnsDomainId,
 			DnsDomainName:      dnsDomainName,
+			IsBackupForCluster: node.IsBackupForCluster,
+			IsBackupForGroup:   node.IsBackupForGroup,
+			IsOffline:          node.CheckIsOffline(),
 		},
 	}, nil
 }
@@ -1463,7 +1532,7 @@ func (this *NodeService) UpdateNodeDNS(ctx context.Context, req *pb.UpdateNodeDN
 		return nil, errors.New("node not found")
 	}
 
-	routeCodeMap := node.DNSRouteCodes()
+	var routeCodeMap = node.DNSRouteCodes()
 	if req.DnsDomainId > 0 {
 		if len(req.Routes) > 0 {
 			var m = map[int64][]string{} // domainId => codes
@@ -1508,19 +1577,26 @@ func (this *NodeService) UpdateNodeDNS(ctx context.Context, req *pb.UpdateNodeDN
 
 	// 修改IP
 	if len(req.IpAddr) > 0 {
-		ipAddrId, err := models.SharedNodeIPAddressDAO.FindFirstNodeAccessIPAddressId(tx, req.NodeId, true, nodeconfigs.NodeRoleNode)
-		if err != nil {
-			return nil, err
-		}
-		if ipAddrId > 0 {
-			err = models.SharedNodeIPAddressDAO.UpdateAddressIP(tx, ipAddrId, req.IpAddr)
+		if req.NodeIPAddressId > 0 { // 指定了IP地址ID
+			err = models.SharedNodeIPAddressDAO.UpdateAddressIP(tx, req.NodeIPAddressId, req.IpAddr)
 			if err != nil {
 				return nil, err
 			}
-		} else {
-			_, err = models.SharedNodeIPAddressDAO.CreateAddress(tx, adminId, req.NodeId, nodeconfigs.NodeRoleNode, "DNS IP", req.IpAddr, true, true, 0)
+		} else { // 没有指定IP地址ID
+			ipAddrId, err := models.SharedNodeIPAddressDAO.FindFirstNodeAccessIPAddressId(tx, req.NodeId, true, nodeconfigs.NodeRoleNode)
 			if err != nil {
 				return nil, err
+			}
+			if ipAddrId > 0 {
+				err = models.SharedNodeIPAddressDAO.UpdateAddressIP(tx, ipAddrId, req.IpAddr)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				_, err = models.SharedNodeIPAddressDAO.CreateAddress(tx, adminId, req.NodeId, nodeconfigs.NodeRoleNode, "DNS IP", req.IpAddr, true, true, 0, nil)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -1688,7 +1764,16 @@ func (this *NodeService) UpdateNodeCache(ctx context.Context, req *pb.UpdateNode
 		}
 	}
 
-	err = models.SharedNodeDAO.UpdateNodeCache(tx, req.NodeId, maxCacheDiskCapacityJSON, maxCacheMemoryCapacityJSON, req.CacheDiskDir)
+	// cache sub dirs
+	var cacheSubDirs = []*serverconfigs.CacheDir{}
+	if len(req.CacheDiskSubDirsJSON) > 0 {
+		err = json.Unmarshal(req.CacheDiskSubDirsJSON, &cacheSubDirs)
+		if err != nil {
+			return nil, errors.New("decode 'cacheDiskSubDirsJSON' failed: " + err.Error())
+		}
+	}
+
+	err = models.SharedNodeDAO.UpdateNodeCache(tx, req.NodeId, maxCacheDiskCapacityJSON, maxCacheMemoryCapacityJSON, req.CacheDiskDir, cacheSubDirs)
 	if err != nil {
 		return nil, err
 	}
@@ -2011,97 +2096,164 @@ func (this *NodeService) FindEnabledNodeConfigInfo(ctx context.Context, req *pb.
 		if dnsResolverConfig != nil {
 			result.HasSystemSettings = dnsResolverConfig.Type != nodeconfigs.DNSResolverTypeDefault
 		}
+
+		if !result.HasSystemSettings {
+			// api node addresses
+			var apiNodeAddrs = node.DecodeAPINodeAddrs()
+			if len(apiNodeAddrs) > 0 {
+				result.HasSystemSettings = true
+			}
+		}
 	}
 
 	// ddos protection
 	result.HasDDoSProtection = node.HasDDoSProtection()
 
+	// schedule
+	result.HasScheduleSettings = node.HasScheduleSettings()
+
+	// pages
+
 	return result, nil
 }
 
-// ------- api 客户定制化接口
-
-type nodeInfo struct {
-	Id       uint32  `json:"id"`
-	Name     string  `json:"name"`
-	CPUUsage float64 `json:"cpu_usage"`
-	MemUsage float64 `json:"mem_usage"`
-	Status   string  `json:"status"`
-}
-type ListNodesResponse struct {
-	Nodes []*nodeInfo `json:"nodes"`
-	Total int64       `json:"total"`
-}
-
-// ListNodes 列出单页的节点
-func (this *NodeService) ListNodes(ctx context.Context, req *pb.ListEnabledNodesMatchRequest) (*ListNodesResponse, error) {
+// CountAllNodeRegionInfo 查找节点区域信息数量
+func (this *NodeService) CountAllNodeRegionInfo(ctx context.Context, req *pb.CountAllNodeRegionInfoRequest) (*pb.RPCCountResponse, error) {
 	_, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var tx = this.NullTx()
-
-	countResp, err := models.SharedNodeDAO.CountAllEnabledNodesMatch(tx, req.NodeClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword, 0, 0, 0, false)
+	count, err := models.SharedNodeDAO.CountAllNodeRegionInfo(tx, req.NodeRegionId)
 	if err != nil {
 		return nil, err
 	}
-	resp := &ListNodesResponse{Total: countResp, Nodes: []*nodeInfo{}}
-	nodes, err := models.SharedNodeDAO.ListEnabledNodesMatch(tx, req.NodeClusterId, configutils.ToBoolState(req.InstallState), configutils.ToBoolState(req.ActiveState), req.Keyword,
-		0, 0, 0, false, "", req.Offset, req.Size)
-	for _, node := range nodes {
-		n := nodeInfo{Id: node.Id}
-		// 状态
-		isSynced := false
-		status := &nodeconfigs.NodeStatus{}
-		if len(node.Status) > 0 {
-			err = json.Unmarshal(node.Status, &status)
-			if err != nil {
-				return nil, err
-			}
-			status.IsActive = status.IsActive && time.Now().Unix()-status.UpdatedAt <= 60 // N秒之内认为活跃
-			isSynced = status.ConfigVersion == int64(node.Version)
-		}
-		if !node.IsUp {
-			n.Status = "健康问题下线"
-		} else if !node.IsOn {
-			n.Status = "未启用"
-		} else if node.IsInstalled {
+	return this.SuccessCount(count)
+}
 
-			if status.IsActive {
-				if isSynced {
-					n.Status = "同步中"
-				} else {
-					n.Status = "运行中"
-				}
-			} else if status.UpdatedAt > 0 {
-				n.Status = "已断开"
-			} else {
-				n.Status = "未连接"
-			}
-		} else {
-			// 安装信息
-			installStatus, err := node.DecodeInstallStatus()
-			if err != nil {
-				return nil, err
-			}
-			if installStatus.IsRunning {
-				n.Status = "安装中"
-			}
-			if installStatus.IsFinished && !installStatus.IsOk {
-				n.Status = "安装错误"
-			} else {
-				n.Status = "未安装"
-			}
-		}
-
-		// 名称
-		n.Name = node.Name
-		// CPU
-		n.CPUUsage = status.CPUUsage
-		// mem
-		n.MemUsage = status.MemoryUsage
-		resp.Nodes = append(resp.Nodes, &n)
+// ListNodeRegionInfo 列出单页节点区域信息
+func (this *NodeService) ListNodeRegionInfo(ctx context.Context, req *pb.ListNodeRegionInfoRequest) (*pb.ListNodeRegionInfoResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return resp, nil
+
+	var tx = this.NullTx()
+	nodes, err := models.SharedNodeDAO.ListNodeRegionInfo(tx, req.NodeRegionId, req.Offset, req.Size)
+	if err != nil {
+		return nil, err
+	}
+
+	var pbInfoList = []*pb.ListNodeRegionInfoResponse_Info{}
+	var cacheMap = utils.NewCacheMap()
+	for _, node := range nodes {
+		// region
+		var pbRegion *pb.NodeRegion
+		if node.RegionId > 0 {
+			region, err := models.SharedNodeRegionDAO.FindEnabledNodeRegion(tx, int64(node.RegionId))
+			if err != nil {
+				return nil, err
+			}
+			if region != nil {
+				pbRegion = &pb.NodeRegion{
+					Id:   int64(region.Id),
+					Name: region.Name,
+					IsOn: region.IsOn,
+				}
+			}
+		}
+
+		// cluster
+		// 要求必须有cluster
+		var pbCluster *pb.NodeCluster
+		if node.ClusterId <= 0 {
+			continue
+		}
+		cluster, err := models.SharedNodeClusterDAO.FindClusterBasicInfo(tx, int64(node.ClusterId), cacheMap)
+		if err != nil {
+			return nil, err
+		}
+		if cluster == nil {
+			continue
+		}
+		pbCluster = &pb.NodeCluster{
+			Id:   int64(cluster.Id),
+			Name: cluster.Name,
+			IsOn: cluster.IsOn,
+		}
+
+		pbInfoList = append(pbInfoList, &pb.ListNodeRegionInfoResponse_Info{
+			Id:          int64(node.Id),
+			Name:        node.Name,
+			NodeRegion:  pbRegion,
+			NodeCluster: pbCluster,
+		})
+	}
+	return &pb.ListNodeRegionInfoResponse{
+		InfoList: pbInfoList,
+	}, nil
+}
+
+// UpdateNodeRegionInfo 修改节点区域信息
+func (this *NodeService) UpdateNodeRegionInfo(ctx context.Context, req *pb.UpdateNodeRegionInfoRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	err = models.SharedNodeDAO.UpdateNodeRegionId(tx, req.NodeId, req.NodeRegionId)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
+}
+
+// FindNodeAPIConfig 查找单个节点的API相关配置
+func (this *NodeService) FindNodeAPIConfig(ctx context.Context, req *pb.FindNodeAPIConfigRequest) (*pb.FindNodeAPIConfigResponse, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	node, err := models.SharedNodeDAO.FindNodeAPIConfig(tx, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return &pb.FindNodeAPIConfigResponse{
+			ApiNodeAddrsJSON: nil,
+		}, nil
+	}
+
+	return &pb.FindNodeAPIConfigResponse{
+		ApiNodeAddrsJSON: node.ApiNodeAddrs,
+	}, nil
+}
+
+// UpdateNodeAPIConfig 修改某个节点的API相关配置
+func (this *NodeService) UpdateNodeAPIConfig(ctx context.Context, req *pb.UpdateNodeAPIConfigRequest) (*pb.RPCSuccess, error) {
+	_, err := this.ValidateAdmin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	var apiNodeAddrs = []*serverconfigs.NetworkAddressConfig{}
+	if len(req.ApiNodeAddrsJSON) > 0 {
+		err = json.Unmarshal(req.ApiNodeAddrsJSON, &apiNodeAddrs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = models.SharedNodeDAO.UpdateNodeAPIConfig(tx, req.NodeId, apiNodeAddrs)
+	if err != nil {
+		return nil, err
+	}
+
+	return this.Success()
 }

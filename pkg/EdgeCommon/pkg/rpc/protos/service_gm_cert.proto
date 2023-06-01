@@ -1,0 +1,99 @@
+syntax = "proto3";
+option go_package = "./pb";
+
+package pb;
+//
+import "models/rpc_messages.proto";
+//import "models/model_gm_cert.proto";
+
+// GM证书管理服务
+service GMCertService {
+  // 创建国密证书
+  rpc createGMCert (CreateGMCertRequest) returns (CreateGMCertResponse);
+  rpc findEnabledGMCertConfig (FindEnabledGMCertConfigRequest) returns (FindEnabledGMCertConfigResponse);
+
+  // 修改证书
+  rpc updateGMCert (UpdateGMCertRequest) returns (RPCSuccess);
+  // 计算匹配的证书数量
+  rpc countGMCerts (CountGMCertRequest) returns (RPCCountResponse);
+  // 删除证书
+  rpc deleteGMCert (DeleteGMCertRequest) returns (RPCSuccess);
+
+  // 列出单页匹配的证书
+  rpc listGMCerts (ListGMCertsRequest) returns (ListGMCertsResponse);
+}
+
+// 创建证书
+message CreateGMCertRequest {
+  bool isOn = 1;
+  int64 userId = 2; // 所属用户，仅管理员才能指定
+  string name = 3;
+  string description = 4;
+  string serverName = 5;
+  bool isCA = 6;
+  bytes signCertData = 7;
+  bytes signKeyData = 8;
+  bytes encCertData = 9;
+  bytes encKeyData = 10;
+  int64 timeBeginAt = 11;
+  int64 timeEndAt = 121;
+  repeated string dnsNames = 13;
+  repeated string commonNames = 14;
+}
+
+message CreateGMCertResponse {
+  int64 gmCertId = 1;
+}
+
+// 查找证书配置
+message FindEnabledGMCertConfigRequest {
+  int64 gmCertId = 1;
+}
+
+message FindEnabledGMCertConfigResponse {
+  bytes gmCertJSON = 1;
+}
+// 计算匹配的证书数量
+message CountGMCertRequest {
+  bool isAvailable = 1; // 是否可用（在有效期内）
+  bool isExpired = 2; // 是否已过期
+  int32 expiringDays = 3; // 离过期日的天数
+  string keyword = 4; // 关键词
+  int64 userId = 5; // 用户ID
+  repeated string domains = 6; // 搜索使用的域名列表
+}
+
+// 列出单页匹配的证书
+message ListGMCertsRequest {
+  bool isAvailable = 1; // 是否可用（在有效期内）
+  bool isExpired = 2; // 是否已过期
+  int32 expiringDays = 3; // 离过期日的天数
+  string keyword = 4; // 关键词
+  int64 userId = 5; // 用户ID
+  repeated string domains = 6; // 搜索使用的域名列表
+  int64 offset = 7; // 读取位置
+  int64 size = 8; // 读取长度
+}
+
+message ListGMCertsResponse {
+  bytes gmCertsJSON = 1;
+}
+// 修改证书
+message UpdateGMCertRequest {
+  int64 gmCertId = 1;
+  bool isOn = 2;
+  string name = 3;
+  string description = 4;
+  string serverName = 5;
+  bytes signCertData = 6;
+  bytes signKeyData = 7;
+  bytes encCertData = 8;
+  bytes encKeyData = 9;
+  int64 timeBeginAt = 10;
+  int64 timeEndAt = 11;
+  repeated string dnsNames = 12;
+  repeated string commonNames = 13;
+}
+message DeleteGMCertRequest{
+  int64 gmCertId = 1;
+}

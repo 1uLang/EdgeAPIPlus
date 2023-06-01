@@ -5,13 +5,16 @@ package nameservers
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/dnsconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeAPI/internal/db/models/clients"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/nameservers"
+	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/dnsconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 	"github.com/iwind/TeaGo/types"
+	"sort"
 )
 
 // NSRouteService 线路相关服务
@@ -37,7 +40,27 @@ func (this *NSRouteService) CreateNSRoute(ctx context.Context, req *pb.CreateNSR
 
 	// TODO 检查线路数限制
 
-	routeId, err := nameservers.SharedNSRouteDAO.CreateRoute(tx, req.NsClusterId, req.NsDomainId, req.UserId, req.Name, req.RangesJSON)
+	// 检查分类是否存在
+	if req.NsRouteCategoryId > 0 {
+		if userId > 0 {
+			err = nameservers.SharedNSRouteCategoryDAO.CheckUserCategory(tx, userId, req.NsRouteCategoryId)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			exists, err := nameservers.SharedNSRouteCategoryDAO.Exist(tx, req.NsRouteCategoryId)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				return nil, errors.New("route category id '" + types.String(req.NsRouteCategoryId) + "' not found")
+			}
+		}
+	} else {
+		req.NsRouteCategoryId = 0
+	}
+
+	routeId, err := nameservers.SharedNSRouteDAO.CreateRoute(tx, req.NsClusterId, req.NsDomainId, req.UserId, req.Name, req.RangesJSON, req.NsRouteCategoryId, req.Priority, req.IsPublic)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +83,27 @@ func (this *NSRouteService) UpdateNSRoute(ctx context.Context, req *pb.UpdateNSR
 		}
 	}
 
-	err = nameservers.SharedNSRouteDAO.UpdateRoute(tx, req.NsRouteId, req.Name, req.RangesJSON)
+	// 检查分类是否存在
+	if req.NsRouteCategoryId > 0 {
+		if userId > 0 {
+			err = nameservers.SharedNSRouteCategoryDAO.CheckUserCategory(tx, userId, req.NsRouteCategoryId)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			exists, err := nameservers.SharedNSRouteCategoryDAO.Exist(tx, req.NsRouteCategoryId)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				return nil, errors.New("route category id '" + types.String(req.NsRouteCategoryId) + "' not found")
+			}
+		}
+	} else {
+		req.NsRouteCategoryId = 0
+	}
+
+	err = nameservers.SharedNSRouteDAO.UpdateRoute(tx, req.NsRouteId, req.Name, req.RangesJSON, req.NsRouteCategoryId, req.Priority, req.IsPublic, req.IsOn)
 	if err != nil {
 		return nil, err
 	}
@@ -148,13 +191,32 @@ func (this *NSRouteService) FindNSRoute(ctx context.Context, req *pb.FindNSRoute
 		}
 	}
 
+	// 分类
+	var pbCategory *pb.NSRouteCategory
+	if route.CategoryId > 0 {
+		category, err := nameservers.SharedNSRouteCategoryDAO.FindCategory(tx, int64(route.CategoryId))
+		if err != nil {
+			return nil, err
+		}
+		if category != nil {
+			pbCategory = &pb.NSRouteCategory{
+				Id:   int64(category.Id),
+				Name: category.Name,
+				IsOn: category.IsOn,
+			}
+		}
+	}
+
 	return &pb.FindNSRouteResponse{NsRoute: &pb.NSRoute{
-		Id:         int64(route.Id),
-		IsOn:       route.IsOn,
-		Name:       route.Name,
-		RangesJSON: route.Ranges,
-		NsCluster:  pbCluster,
-		NsDomain:   pbDomain,
+		Id:              int64(route.Id),
+		IsOn:            route.IsOn,
+		Name:            route.Name,
+		RangesJSON:      route.Ranges,
+		IsPublic:        route.IsPublic,
+		Priority:        types.Int32(route.Priority),
+		NsCluster:       pbCluster,
+		NsDomain:        pbDomain,
+		NsRouteCategory: pbCategory,
 	}}, nil
 }
 
@@ -190,7 +252,7 @@ func (this *NSRouteService) FindAllNSRoutes(ctx context.Context, req *pb.FindAll
 		req.UserId = userId
 	}
 
-	routes, err := nameservers.SharedNSRouteDAO.FindAllEnabledRoutes(tx, req.NsClusterId, req.NsDomainId, req.UserId)
+	routes, err := nameservers.SharedNSRouteDAO.FindAllEnabledRoutes(tx, req.NsClusterId, req.NsDomainId, req.UserId, req.NsRouteCategoryId)
 	if err != nil {
 		return nil, err
 	}
@@ -228,17 +290,170 @@ func (this *NSRouteService) FindAllNSRoutes(ctx context.Context, req *pb.FindAll
 			}
 		}
 
+		// 分类
+		var pbCategory *pb.NSRouteCategory
+		if route.CategoryId > 0 {
+			category, err := nameservers.SharedNSRouteCategoryDAO.FindCategory(tx, int64(route.CategoryId))
+			if err != nil {
+				return nil, err
+			}
+			if category != nil {
+				pbCategory = &pb.NSRouteCategory{
+					Id:    int64(category.Id),
+					Name:  category.Name,
+					IsOn:  category.IsOn,
+					Order: types.Int32(category.Order),
+				}
+			}
+		}
+
 		pbRoutes = append(pbRoutes, &pb.NSRoute{
-			Id:         int64(route.Id),
-			IsOn:       route.IsOn,
-			Code:       "id:" + types.String(route.Id),
-			Name:       route.Name,
-			RangesJSON: route.Ranges,
-			NsCluster:  pbCluster,
-			NsDomain:   pbDomain,
+			Id:              int64(route.Id),
+			IsOn:            route.IsOn,
+			Code:            "id:" + types.String(route.Id),
+			Name:            route.Name,
+			IsPublic:        route.IsPublic,
+			RangesJSON:      route.Ranges,
+			Order:           types.Int32(route.Order),
+			Priority:        types.Int32(route.Priority),
+			NsCluster:       pbCluster,
+			NsDomain:        pbDomain,
+			NsRouteCategory: pbCategory,
 		})
 	}
+
+	// 按照分类排序
+	if len(pbRoutes) > 0 {
+		sort.Slice(pbRoutes, func(i, j int) bool {
+			var route1 = pbRoutes[i]
+			var route2 = pbRoutes[j]
+
+			// route1.category = nil
+			if route1.NsRouteCategory == nil {
+				if route2.NsRouteCategory == nil {
+					if route1.Order == route2.Order {
+						return route1.Id < route2.Id
+					}
+					return route1.Order > route2.Order
+				}
+				return true
+			}
+
+			// route1.category != nil && route2.category = nil
+			if route2.NsRouteCategory == nil {
+				return false
+			}
+
+			// 同一个分类
+			if route1.NsRouteCategory.Id == route2.NsRouteCategory.Id {
+				if route1.Order == route2.Order {
+					return route1.Id < route2.Id
+				}
+				return route1.Order > route2.Order
+			}
+
+			if route1.NsRouteCategory.Order == route2.NsRouteCategory.Order {
+				return route1.NsRouteCategory.Id < route2.NsRouteCategory.Id
+			}
+
+			return route1.NsRouteCategory.Order > route2.NsRouteCategory.Order
+		})
+	}
+
 	return &pb.FindAllNSRoutesResponse{NsRoutes: pbRoutes}, nil
+}
+
+// FindAllPublicNSRoutes 读取所有公用的自定义线路
+// 目前只允许读取系统管理员设置的公用自定义线路
+func (this *NSRouteService) FindAllPublicNSRoutes(ctx context.Context, req *pb.FindAllPublicRoutesRequest) (*pb.FindAllPublicRoutesResponse, error) {
+	_, err := this.ValidateUserNode(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	routes, err := nameservers.SharedNSRouteDAO.FindAllPublicRoutes(tx)
+	if err != nil {
+		return nil, err
+	}
+	var pbRoutes = []*pb.NSRoute{}
+	for _, route := range routes {
+		// 分类
+		var pbCategory *pb.NSRouteCategory
+		if route.CategoryId > 0 {
+			category, err := nameservers.SharedNSRouteCategoryDAO.FindCategory(tx, int64(route.CategoryId))
+			if err != nil {
+				return nil, err
+			}
+			if category != nil {
+				// 如果分类未启用，则当前分类下面的线路也不显示
+				if !category.IsOn {
+					continue
+				}
+
+				pbCategory = &pb.NSRouteCategory{
+					Id:    int64(category.Id),
+					Name:  category.Name,
+					IsOn:  category.IsOn,
+					Order: types.Int32(category.Order),
+				}
+			}
+		}
+
+		pbRoutes = append(pbRoutes, &pb.NSRoute{
+			Id:              int64(route.Id),
+			IsOn:            route.IsOn,
+			Code:            "id:" + types.String(route.Id),
+			Name:            route.Name,
+			IsPublic:        route.IsPublic,
+			RangesJSON:      route.Ranges,
+			Order:           types.Int32(route.Order),
+			Priority:        types.Int32(route.Priority),
+			NsCluster:       nil,
+			NsDomain:        nil,
+			NsRouteCategory: pbCategory,
+		})
+	}
+
+	// 按照分类排序
+	if len(pbRoutes) > 0 {
+		sort.Slice(pbRoutes, func(i, j int) bool {
+			var route1 = pbRoutes[i]
+			var route2 = pbRoutes[j]
+
+			// route1.category = nil
+			if route1.NsRouteCategory == nil {
+				if route2.NsRouteCategory == nil {
+					if route1.Order == route2.Order {
+						return route1.Id < route2.Id
+					}
+					return route1.Order > route2.Order
+				}
+				return true
+			}
+
+			// route1.category != nil && route2.category = nil
+			if route2.NsRouteCategory == nil {
+				return false
+			}
+
+			// 同一个分类
+			if route1.NsRouteCategory.Id == route2.NsRouteCategory.Id {
+				if route1.Order == route2.Order {
+					return route1.Id < route2.Id
+				}
+				return route1.Order > route2.Order
+			}
+
+			if route1.NsRouteCategory.Order == route2.NsRouteCategory.Order {
+				return route1.NsRouteCategory.Id < route2.NsRouteCategory.Id
+			}
+
+			return route1.NsRouteCategory.Order > route2.NsRouteCategory.Order
+		})
+	}
+
+	return &pb.FindAllPublicRoutesResponse{NsRoutes: pbRoutes}, nil
 }
 
 // UpdateNSRouteOrders 设置自定义线路排序
@@ -301,8 +516,10 @@ func (this *NSRouteService) ListNSRoutesAfterVersion(ctx context.Context, req *p
 			Name:       "",
 			RangesJSON: route.Ranges,
 			IsDeleted:  route.State == nameservers.NSRouteStateDisabled,
-			Order:      int64(route.Order),
+			Order:      types.Int32(route.Order),
+			Priority:   types.Int32(route.Priority),
 			Version:    int64(route.Version),
+			UserId:     types.Int64(route.UserId),
 			NsCluster:  pbCluster,
 			NsDomain:   pbDomain,
 		})
@@ -365,4 +582,33 @@ func (this *NSRouteService) FindAllDefaultISPRoutes(ctx context.Context, req *pb
 	return &pb.FindAllDefaultISPRoutesResponse{
 		NsRoutes: pbRoutes,
 	}, nil
+}
+
+// FindAllAgentNSRoutes 查找默认的搜索引擎线路
+func (this *NSRouteService) FindAllAgentNSRoutes(ctx context.Context, req *pb.FindAllAgentNSRoutesRequest) (*pb.FindAllAgentNSRoutesResponse, error) {
+	_, _, err := this.ValidateAdminAndUser(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx = this.NullTx()
+	agents, err := clients.SharedClientAgentDAO.FindAllNSAgents(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	var pbRoutes = []*pb.NSRoute{}
+	for _, agent := range agents {
+		pbRoutes = append(pbRoutes, &pb.NSRoute{
+			Code: agent.NSRouteCode(),
+			Name: agent.Name,
+		})
+	}
+
+	pbRoutes = append(pbRoutes, &pb.NSRoute{
+		Code: "agent",
+		Name: "搜索引擎",
+	})
+
+	return &pb.FindAllAgentNSRoutesResponse{NsRoutes: pbRoutes}, nil
 }

@@ -6,20 +6,24 @@ package nameservers
 import (
 	"context"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
+	"github.com/TeaOSLab/EdgeAPI/internal/db/models/accounts"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/nameservers"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/services"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils/regexputils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/userconfigs"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/lists"
+	"github.com/iwind/TeaGo/maps"
 	"github.com/iwind/TeaGo/types"
-	"regexp"
+	timeutil "github.com/iwind/TeaGo/utils/time"
+	"time"
 )
 
 // NSUserPlanService 用户DNS套餐服务
 type NSUserPlanService struct {
 	services.BaseService
-	pb.UnimplementedNSUserPlanServiceServer
 }
 
 // CreateNSUserPlan 创建用户套餐
@@ -32,11 +36,10 @@ func (this *NSUserPlanService) CreateNSUserPlan(ctx context.Context, req *pb.Cre
 	var dayFrom = req.DayFrom
 	var dayTo = req.DayTo
 
-	var dayReg = regexp.MustCompile(`^\d{8}$`)
-	if !dayReg.MatchString(dayFrom) {
+	if !regexputils.YYYYMMDD.MatchString(dayFrom) {
 		return nil, errors.New("invalid dayFrom: " + dayFrom)
 	}
-	if !dayReg.MatchString(dayTo) {
+	if !regexputils.YYYYMMDD.MatchString(dayTo) {
 		return nil, errors.New("invalid dayTo: " + dayTo)
 	}
 
@@ -93,11 +96,10 @@ func (this *NSUserPlanService) UpdateNSUserPlan(ctx context.Context, req *pb.Upd
 	var dayFrom = req.DayFrom
 	var dayTo = req.DayTo
 
-	var dayReg = regexp.MustCompile(`^\d{8}$`)
-	if !dayReg.MatchString(dayFrom) {
+	if !regexputils.YYYYMMDD.MatchString(dayFrom) {
 		return nil, errors.New("invalid dayFrom: " + dayFrom)
 	}
-	if !dayReg.MatchString(dayTo) {
+	if !regexputils.YYYYMMDD.MatchString(dayTo) {
 		return nil, errors.New("invalid dayTo: " + dayTo)
 	}
 
@@ -281,4 +283,88 @@ func (this *NSUserPlanService) ListNSUserPlans(ctx context.Context, req *pb.List
 	return &pb.ListNSUserPlansResponse{
 		NsUserPlans: pbUserPlans,
 	}, nil
+}
+
+// BuyNSUserPlan 使用余额购买用户套餐
+func (this *NSUserPlanService) BuyNSUserPlan(ctx context.Context, req *pb.BuyNSUserPlanRequest) (*pb.BuyNSUserPlanResponse, error) {
+	_, userId, err := this.ValidateAdminAndUser(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+
+	if userId > 0 {
+		req.UserId = userId
+	}
+
+	userId = req.UserId
+
+	// 查询套餐
+	var tx *dbs.Tx
+	plan, err := nameservers.SharedNSPlanDAO.FindEnabledNSPlan(tx, req.PlanId)
+	if err != nil {
+		return nil, err
+	}
+
+	if plan == nil || !plan.IsOn {
+		return nil, errors.New("could not find plan with id '" + types.String(req.PlanId) + "'")
+	}
+
+	var dayFrom = timeutil.Format("Ymd")
+	var dayTo = ""
+	var price float64
+	switch req.Period {
+	case "yearly":
+		price = plan.YearlyPrice
+		dayTo = timeutil.Format("Ymd", time.Now().AddDate(1, 0, 0))
+	case "monthly":
+		price = plan.MonthlyPrice
+		dayTo = timeutil.Format("Ymd", time.Now().AddDate(0, 1, 0))
+	default:
+		return nil, errors.New("invalid period '" + req.Period + "'")
+	}
+
+	var userPlanId int64
+	err = this.RunTx(func(tx *dbs.Tx) error {
+		// 当前是否有套餐在有效期
+		userPlan, err := nameservers.SharedNSUserPlanDAO.FindUserPlan(tx, userId)
+		if err != nil {
+			return err
+		}
+		if userPlan != nil && userPlan.IsAvailable() {
+			return errors.New("there is an available user plan yet, you can not buy again")
+		}
+
+		// 如果是0价格，则不允许购买
+		if price <= 0 {
+			return errors.New("invalid plan price")
+		}
+
+		// 先减少余额
+		account, err := accounts.SharedUserAccountDAO.FindUserAccountWithUserId(tx, userId)
+		if err != nil {
+			return err
+		}
+		if account == nil || account.Total < price {
+			return errors.New("no enough balance to buy the plan")
+		}
+
+		err = accounts.SharedUserAccountDAO.UpdateUserAccount(tx, int64(account.Id), -price, userconfigs.AccountEventTypeBuyNSPlan, "购买DNS套餐\""+plan.Name+"\"", maps.Map{
+			"nsPlanId": plan.Id,
+		})
+		if err != nil {
+			return err
+		}
+
+		// 创建套餐
+		userPlanId, err = nameservers.SharedNSUserPlanDAO.CreateUserPlan(tx, userId, req.PlanId, dayFrom, dayTo, req.Period)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.BuyNSUserPlanResponse{UserPlanId: userPlanId}, nil
 }

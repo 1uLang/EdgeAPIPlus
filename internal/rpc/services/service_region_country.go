@@ -3,8 +3,8 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/regions"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // RegionCountryService 国家相关服务

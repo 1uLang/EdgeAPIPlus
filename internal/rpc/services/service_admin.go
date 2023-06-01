@@ -3,18 +3,16 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/configutils"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/systemconfigs"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
-	"github.com/TeaOSLab/EdgeAPI/internal/db/models/authority"
-	"github.com/TeaOSLab/EdgeAPI/internal/db/models/regions"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models/stats"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/rpc/tasks"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/configutils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/systemconfigs"
 	timeutil "github.com/iwind/TeaGo/utils/time"
 	"time"
 )
@@ -129,7 +127,7 @@ func (this *AdminService) FindAdminFullname(ctx context.Context, req *pb.FindAdm
 
 // FindEnabledAdmin 获取管理员信息
 func (this *AdminService) FindEnabledAdmin(ctx context.Context, req *pb.FindEnabledAdminRequest) (*pb.FindEnabledAdminResponse, error) {
-	_, err := this.ValidateAdmin(ctx)
+	adminId, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +135,12 @@ func (this *AdminService) FindEnabledAdmin(ctx context.Context, req *pb.FindEnab
 	// TODO 检查权限
 
 	var tx = this.NullTx()
+
+	// 超级管理员才能查看是否为弱密码
+	isSuperAdmin, err := models.SharedAdminDAO.CheckSuperAdmin(tx, adminId)
+	if err != nil {
+		return nil, err
+	}
 
 	admin, err := models.SharedAdminDAO.FindEnabledAdmin(tx, req.AdminId)
 	if err != nil {
@@ -146,7 +150,7 @@ func (this *AdminService) FindEnabledAdmin(ctx context.Context, req *pb.FindEnab
 		return &pb.FindEnabledAdminResponse{Admin: nil}, nil
 	}
 
-	pbModules := []*pb.AdminModule{}
+	var pbModules = []*pb.AdminModule{}
 	modules := []*systemconfigs.AdminModule{}
 	if len(admin.Modules) > 0 {
 		err = json.Unmarshal(admin.Modules, &modules)
@@ -180,14 +184,15 @@ func (this *AdminService) FindEnabledAdmin(ctx context.Context, req *pb.FindEnab
 	}
 
 	result := &pb.Admin{
-		Id:       int64(admin.Id),
-		Fullname: admin.Fullname,
-		Username: admin.Username,
-		IsOn:     admin.IsOn,
-		IsSuper:  admin.IsSuper,
-		Modules:  pbModules,
-		OtpLogin: pbOtpAuth,
-		CanLogin: admin.CanLogin,
+		Id:              int64(admin.Id),
+		Fullname:        admin.Fullname,
+		Username:        admin.Username,
+		IsOn:            admin.IsOn,
+		IsSuper:         admin.IsSuper,
+		Modules:         pbModules,
+		OtpLogin:        pbOtpAuth,
+		CanLogin:        admin.CanLogin,
+		HasWeakPassword: isSuperAdmin && admin.HasWeakPassword(),
 	}
 	return &pb.FindEnabledAdminResponse{Admin: result}, nil
 }
@@ -349,7 +354,7 @@ func (this *AdminService) UpdateAdmin(ctx context.Context, req *pb.UpdateAdminRe
 
 // CountAllEnabledAdmins 计算管理员数量
 func (this *AdminService) CountAllEnabledAdmins(ctx context.Context, req *pb.CountAllEnabledAdminsRequest) (*pb.RPCCountResponse, error) {
-	_, err := this.ValidateAdmin(ctx)
+	adminId, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -358,7 +363,17 @@ func (this *AdminService) CountAllEnabledAdmins(ctx context.Context, req *pb.Cou
 
 	var tx = this.NullTx()
 
-	count, err := models.SharedAdminDAO.CountAllEnabledAdmins(tx)
+	// 超级管理员才能查看是否为弱密码
+	isSuperAdmin, err := models.SharedAdminDAO.CheckSuperAdmin(tx, adminId)
+	if err != nil {
+		return nil, err
+	}
+
+	if !isSuperAdmin && req.HasWeakPassword {
+		return this.SuccessCount(0)
+	}
+
+	count, err := models.SharedAdminDAO.CountAllEnabledAdmins(tx, req.Keyword, req.HasWeakPassword)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +382,7 @@ func (this *AdminService) CountAllEnabledAdmins(ctx context.Context, req *pb.Cou
 
 // ListEnabledAdmins 列出单页的管理员
 func (this *AdminService) ListEnabledAdmins(ctx context.Context, req *pb.ListEnabledAdminsRequest) (*pb.ListEnabledAdminsResponse, error) {
-	_, err := this.ValidateAdmin(ctx)
+	adminId, err := this.ValidateAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -376,12 +391,22 @@ func (this *AdminService) ListEnabledAdmins(ctx context.Context, req *pb.ListEna
 
 	var tx = this.NullTx()
 
-	admins, err := models.SharedAdminDAO.ListEnabledAdmins(tx, req.Offset, req.Size)
+	// 超级管理员才能查看是否为弱密码
+	isSuperAdmin, err := models.SharedAdminDAO.CheckSuperAdmin(tx, adminId)
 	if err != nil {
 		return nil, err
 	}
 
-	result := []*pb.Admin{}
+	if !isSuperAdmin && req.HasWeakPassword {
+		return &pb.ListEnabledAdminsResponse{Admins: nil}, nil
+	}
+
+	admins, err := models.SharedAdminDAO.ListEnabledAdmins(tx, req.Keyword, req.HasWeakPassword, req.Offset, req.Size)
+	if err != nil {
+		return nil, err
+	}
+
+	var result = []*pb.Admin{}
 	for _, admin := range admins {
 		var pbOtpAuth *pb.Login = nil
 		{
@@ -400,14 +425,15 @@ func (this *AdminService) ListEnabledAdmins(ctx context.Context, req *pb.ListEna
 		}
 
 		result = append(result, &pb.Admin{
-			Id:        int64(admin.Id),
-			Fullname:  admin.Fullname,
-			Username:  admin.Username,
-			IsOn:      admin.IsOn,
-			IsSuper:   admin.IsSuper,
-			CreatedAt: int64(admin.CreatedAt),
-			OtpLogin:  pbOtpAuth,
-			CanLogin:  admin.CanLogin,
+			Id:              int64(admin.Id),
+			Fullname:        admin.Fullname,
+			Username:        admin.Username,
+			IsOn:            admin.IsOn,
+			IsSuper:         admin.IsSuper,
+			CreatedAt:       int64(admin.CreatedAt),
+			OtpLogin:        pbOtpAuth,
+			CanLogin:        admin.CanLogin,
+			HasWeakPassword: isSuperAdmin && admin.HasWeakPassword(),
 		})
 	}
 
@@ -427,7 +453,7 @@ func (this *AdminService) DeleteAdmin(ctx context.Context, req *pb.DeleteAdminRe
 
 	// TODO 超级管理员用户是不能删除的，或者要至少留一个超级管理员用户
 
-	_, err = models.SharedAdminDAO.DisableAdmin(tx, req.AdminId)
+	err = models.SharedAdminDAO.DisableAdmin(tx, req.AdminId)
 	if err != nil {
 		return nil, err
 	}
@@ -604,8 +630,8 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 	}
 
 	// 小时流量统计
-	hourFrom := timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
-	hourTo := timeutil.Format("YmdH")
+	var hourFrom = timeutil.Format("YmdH", time.Now().Add(-23*time.Hour))
+	var hourTo = timeutil.Format("YmdH")
 	this.BeginTag(ctx, "SharedTrafficHourlyStatDAO.FindHourlyStats")
 	hourlyTrafficStats, err := stats.SharedTrafficHourlyStatDAO.FindHourlyStats(tx, hourFrom, hourTo)
 	this.EndTag(ctx, "SharedTrafficHourlyStatDAO.FindHourlyStats")
@@ -624,12 +650,6 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		})
 	}
 
-	// 是否是商业版
-	isPlus, err := authority.SharedAuthorityKeyDAO.IsPlus(tx)
-	if err != nil {
-		return nil, err
-	}
-
 	// 边缘节点升级信息
 	{
 		upgradeInfo := &pb.ComposeAdminDashboardResponse_UpgradeInfo{
@@ -643,51 +663,6 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		}
 		upgradeInfo.CountNodes = countNodes
 		result.NodeUpgradeInfo = upgradeInfo
-	}
-
-	// 监控节点升级信息
-	if isPlus {
-		upgradeInfo := &pb.ComposeAdminDashboardResponse_UpgradeInfo{
-			NewVersion: teaconst.MonitorNodeVersion,
-		}
-		this.BeginTag(ctx, "SharedMonitorNodeDAO.CountAllLowerVersionNodes")
-		countNodes, err := models.SharedMonitorNodeDAO.CountAllLowerVersionNodes(tx, upgradeInfo.NewVersion)
-		this.EndTag(ctx, "SharedMonitorNodeDAO.CountAllLowerVersionNodes")
-		if err != nil {
-			return nil, err
-		}
-		upgradeInfo.CountNodes = countNodes
-		result.MonitorNodeUpgradeInfo = upgradeInfo
-	}
-
-	// 认证节点升级信息
-	if isPlus {
-		upgradeInfo := &pb.ComposeAdminDashboardResponse_UpgradeInfo{
-			NewVersion: teaconst.AuthorityNodeVersion,
-		}
-		this.BeginTag(ctx, "SharedAuthorityNodeDAO.CountAllLowerVersionNodes")
-		countNodes, err := authority.SharedAuthorityNodeDAO.CountAllLowerVersionNodes(tx, upgradeInfo.NewVersion)
-		this.EndTag(ctx, "SharedAuthorityNodeDAO.CountAllLowerVersionNodes")
-		if err != nil {
-			return nil, err
-		}
-		upgradeInfo.CountNodes = countNodes
-		result.AuthorityNodeUpgradeInfo = upgradeInfo
-	}
-
-	// 用户节点升级信息
-	if isPlus {
-		upgradeInfo := &pb.ComposeAdminDashboardResponse_UpgradeInfo{
-			NewVersion: teaconst.UserNodeVersion,
-		}
-		this.BeginTag(ctx, "SharedUserNodeDAO.CountAllLowerVersionNodes")
-		countNodes, err := models.SharedUserNodeDAO.CountAllLowerVersionNodes(tx, upgradeInfo.NewVersion)
-		this.EndTag(ctx, "SharedUserNodeDAO.CountAllLowerVersionNodes")
-		if err != nil {
-			return nil, err
-		}
-		upgradeInfo.CountNodes = countNodes
-		result.UserNodeUpgradeInfo = upgradeInfo
 	}
 
 	// API节点升级信息
@@ -709,34 +684,10 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 		result.ApiNodeUpgradeInfo = upgradeInfo
 	}
 
-	// DNS节点升级信息
-	if isPlus {
-		upgradeInfo := &pb.ComposeAdminDashboardResponse_UpgradeInfo{
-			NewVersion: teaconst.DNSNodeVersion,
-		}
-		this.BeginTag(ctx, "SharedNSNodeDAO.CountAllLowerVersionNodes")
-		countNodes, err := models.SharedNSNodeDAO.CountAllLowerVersionNodes(tx, upgradeInfo.NewVersion)
-		this.EndTag(ctx, "SharedNSNodeDAO.CountAllLowerVersionNodes")
-		if err != nil {
-			return nil, err
-		}
-		upgradeInfo.CountNodes = countNodes
-		result.NsNodeUpgradeInfo = upgradeInfo
-	}
-
-	// Report节点升级信息
-	if isPlus {
-		upgradeInfo := &pb.ComposeAdminDashboardResponse_UpgradeInfo{
-			NewVersion: teaconst.ReportNodeVersion,
-		}
-		this.BeginTag(ctx, "SharedReportNodeDAO.CountAllLowerVersionNodes")
-		countNodes, err := models.SharedReportNodeDAO.CountAllLowerVersionNodes(tx, upgradeInfo.NewVersion)
-		this.EndTag(ctx, "SharedReportNodeDAO.CountAllLowerVersionNodes")
-		if err != nil {
-			return nil, err
-		}
-		upgradeInfo.CountNodes = countNodes
-		result.ReportNodeUpgradeInfo = upgradeInfo
+	// 额外的检查节点版本
+	err = this.composeAdminDashboardExt(tx, ctx, result)
+	if err != nil {
+		return nil, err
 	}
 
 	// 域名排行
@@ -757,63 +708,6 @@ func (this *AdminService) ComposeAdminDashboard(ctx context.Context, req *pb.Com
 			CountRequests: int64(stat.CountRequests),
 			Bytes:         int64(stat.Bytes),
 		})
-	}
-
-	// 节点排行
-	if isPlus {
-		this.BeginTag(ctx, "SharedNodeTrafficHourlyStatDAO.FindTopNodeStats")
-		topNodeStats, err := stats.SharedNodeTrafficHourlyStatDAO.FindTopNodeStats(tx, "node", hourFrom, hourTo, 10)
-		this.EndTag(ctx, "SharedNodeTrafficHourlyStatDAO.FindTopNodeStats")
-		if err != nil {
-			return nil, err
-		}
-		for _, stat := range topNodeStats {
-			nodeName, err := models.SharedNodeDAO.FindNodeName(tx, int64(stat.NodeId))
-			if err != nil {
-				return nil, err
-			}
-			if len(nodeName) == 0 {
-				continue
-			}
-			result.TopNodeStats = append(result.TopNodeStats, &pb.ComposeAdminDashboardResponse_NodeStat{
-				NodeId:        int64(stat.NodeId),
-				NodeName:      nodeName,
-				CountRequests: int64(stat.CountRequests),
-				Bytes:         int64(stat.Bytes),
-			})
-		}
-	}
-
-	// 地区流量排行
-	if isPlus {
-		this.BeginTag(ctx, "SharedServerRegionCountryDailyStatDAO.SumDailyTotalBytes")
-		totalCountryBytes, err := stats.SharedServerRegionCountryDailyStatDAO.SumDailyTotalBytes(tx, timeutil.Format("Ymd"))
-		this.EndTag(ctx, "SharedServerRegionCountryDailyStatDAO.SumDailyTotalBytes")
-		if err != nil {
-			return nil, err
-		}
-
-		if totalCountryBytes > 0 {
-			topCountryStats, err := stats.SharedServerRegionCountryDailyStatDAO.ListSumStats(tx, timeutil.Format("Ymd"), "bytes", 0, 100)
-			if err != nil {
-				return nil, err
-			}
-
-			for _, stat := range topCountryStats {
-				countryName, err := regions.SharedRegionCountryDAO.FindRegionCountryName(tx, int64(stat.CountryId))
-				if err != nil {
-					return nil, err
-				}
-				result.TopCountryStats = append(result.TopCountryStats, &pb.ComposeAdminDashboardResponse_CountryStat{
-					CountryName:         countryName,
-					Bytes:               int64(stat.Bytes),
-					CountRequests:       int64(stat.CountRequests),
-					AttackBytes:         int64(stat.AttackBytes),
-					CountAttackRequests: int64(stat.CountAttackRequests),
-					Percent:             float32(stat.Bytes*100) / float32(totalCountryBytes),
-				})
-			}
-		}
 	}
 
 	// 指标数据

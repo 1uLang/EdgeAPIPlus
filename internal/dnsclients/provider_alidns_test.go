@@ -32,6 +32,41 @@ func TestAliDNSProvider_GetRecords(t *testing.T) {
 	logs.PrintAsJSON(records, t)
 }
 
+func TestAliDNSProvider_QueryRecord(t *testing.T) {
+	provider, err := testAliDNSProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	{
+		record, err := provider.QueryRecord("meloy.cn", "www", "A")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Log(record)
+	}
+	{
+		record, err := provider.QueryRecord("meloy.cn", "www1", "A")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Log(record)
+	}
+}
+
+func TestAliDNSProvider_QueryRecords(t *testing.T) {
+	provider, err := testAliDNSProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	{
+		records, err := provider.QueryRecords("meloy.cn", "www", "A")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%+v", records)
+	}
+}
+
 func TestAliDNSProvider_DeleteRecord(t *testing.T) {
 	provider, err := testAliDNSProvider()
 	if err != nil {
@@ -66,17 +101,18 @@ func TestAliDNSProvider_AddRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = provider.AddRecord("meloy.cn", &dnstypes.Record{
+	var record = &dnstypes.Record{
 		Id:    "",
 		Name:  "test",
 		Type:  dnstypes.RecordTypeA,
 		Value: "192.168.1.100",
 		Route: "aliyun_r_cn-beijing",
-	})
+	}
+	err = provider.AddRecord("meloy.cn", record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("ok")
+	t.Log("ok, record id:", record.Id)
 }
 
 func TestAliDNSProvider_UpdateRecord(t *testing.T) {
@@ -99,6 +135,8 @@ func TestAliDNSProvider_UpdateRecord(t *testing.T) {
 }
 
 func testAliDNSProvider() (ProviderInterface, error) {
+	dbs.NotifyReady()
+
 	db, err := dbs.Default()
 	if err != nil {
 		return nil, err
@@ -112,7 +150,9 @@ func testAliDNSProvider() (ProviderInterface, error) {
 	if err != nil {
 		return nil, err
 	}
-	provider := &AliDNSProvider{}
+	provider := &AliDNSProvider{
+		ProviderId: one.GetInt64("id"),
+	}
 	err = provider.Auth(apiParams)
 	if err != nil {
 		return nil, err

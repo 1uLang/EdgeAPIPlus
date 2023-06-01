@@ -2,10 +2,10 @@ package services
 
 import (
 	"context"
-	"github.com/1uLang/EdgeCommon/pkg/iplibrary"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/iplibrary"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
 )
 
 // IPLibraryService IP库服务
@@ -195,6 +195,9 @@ func (this *IPLibraryService) LookupIPRegion(ctx context.Context, req *pb.Lookup
 		Isp:        result.ProviderName(),
 		CountryId:  result.CountryId(),
 		ProvinceId: result.ProvinceId(),
+		CityId:     result.CityId(),
+		TownId:     result.TownId(),
+		ProviderId: result.ProviderId(),
 		Summary:    result.Summary(),
 	}}, nil
 }
@@ -213,12 +216,17 @@ func (this *IPLibraryService) LookupIPRegions(ctx context.Context, req *pb.Looku
 			var info = iplibrary.LookupIP(ip)
 			if info != nil && info.IsOk() {
 				result[ip] = &pb.IPRegion{
-					Country:  info.CountryName(),
-					Region:   "",
-					Province: info.ProvinceName(),
-					City:     info.CityName(),
-					Isp:      info.ProviderName(),
-					Summary:  info.Summary(),
+					Country:    info.CountryName(),
+					Region:     "",
+					Province:   info.ProvinceName(),
+					City:       info.CityName(),
+					Isp:        info.ProviderName(),
+					CountryId:  info.CountryId(),
+					ProvinceId: info.ProvinceId(),
+					CityId:     info.CityId(),
+					TownId:     info.TownId(),
+					ProviderId: info.ProviderId(),
+					Summary:    info.Summary(),
 				}
 			}
 		}

@@ -42,7 +42,6 @@ type HTTPAccessLogOperator struct {
 	Domain              interface{} // 域名
 	RequestBody         interface{} // 请求内容
 	ResponseBody        interface{} // 响应内容
-	Count               interface{} // 条数
 }
 
 func NewHTTPAccessLogOperator() *HTTPAccessLogOperator {

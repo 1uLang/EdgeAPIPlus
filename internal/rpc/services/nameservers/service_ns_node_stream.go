@@ -1,19 +1,23 @@
+//go:build plus
+
 package nameservers
 
 import (
 	"context"
 	"fmt"
-	"github.com/1uLang/EdgeCommon/pkg/messageconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/nodeconfigs"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
 	teaconst "github.com/TeaOSLab/EdgeAPI/internal/const"
 	"github.com/TeaOSLab/EdgeAPI/internal/db/models"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	"github.com/TeaOSLab/EdgeAPI/internal/goman"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
 	rpcutils "github.com/TeaOSLab/EdgeAPI/internal/rpc/utils"
+	"github.com/TeaOSLab/EdgeCommon/pkg/messageconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/nodeconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/iwind/TeaGo/Tea"
 	"github.com/iwind/TeaGo/dbs"
 	"github.com/iwind/TeaGo/logs"
+	"github.com/iwind/TeaGo/types"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -116,11 +120,13 @@ func (this *NSNodeService) NsNodeStream(server pb.NSNodeService_NsNodeStreamServ
 		return err
 	}
 
-	//logs.Println("[RPC]accepted ns node '" + types.String(nodeId) + "' connection")
+	if Tea.IsTesting() {
+		remotelogs.Println("NSNodeService", "accepted ns node '"+types.String(nodeId)+"' connection")
+	}
 
 	var tx = this.NullTx()
 
-	// 标记为活跃状态
+	// 是否发送恢复通知
 	oldIsActive, err := models.SharedNSNodeDAO.FindNodeActive(tx, nodeId)
 	if err != nil {
 		return err
@@ -130,13 +136,14 @@ func (this *NSNodeService) NsNodeStream(server pb.NSNodeService_NsNodeStreamServ
 		if err != nil {
 			return err
 		}
-		if inactiveNotifiedAt > 0 {
-			// 设置为活跃
-			err = models.SharedNSNodeDAO.UpdateNodeActive(tx, nodeId, true)
-			if err != nil {
-				return err
-			}
 
+		// 设置为活跃
+		err = models.SharedNSNodeDAO.UpdateNodeActive(tx, nodeId, true)
+		if err != nil {
+			return err
+		}
+
+		if inactiveNotifiedAt > 0 {
 			// 发送恢复消息
 			clusterId, err := models.SharedNSNodeDAO.FindNodeClusterId(tx, nodeId)
 			if err != nil {
@@ -149,12 +156,6 @@ func (this *NSNodeService) NsNodeStream(server pb.NSNodeService_NsNodeStreamServ
 			subject := "NS节点\"" + nodeName + "\"已经恢复在线"
 			msg := "NS节点\"" + nodeName + "\"已经恢复在线"
 			err = models.SharedMessageDAO.CreateNodeMessage(tx, nodeconfigs.NodeRoleDNS, clusterId, nodeId, models.MessageTypeNSNodeActive, models.MessageLevelSuccess, subject, msg, nil, false)
-			if err != nil {
-				return err
-			}
-		} else {
-			// 设置为活跃
-			err = models.SharedNSNodeDAO.UpdateNodeActive(tx, nodeId, true)
 			if err != nil {
 				return err
 			}

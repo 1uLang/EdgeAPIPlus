@@ -86,6 +86,21 @@ func TestCloudFlareProvider_QueryRecord(t *testing.T) {
 	}
 }
 
+func TestCloudFlareProvider_QueryRecords(t *testing.T) {
+	provider, err := testCloudFlareProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	{
+		t.Log("== www.meloy.cn/A ==")
+		records, err := provider.QueryRecords("meloy.cn", "www", dnstypes.RecordTypeA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logs.PrintAsJSON(records, t)
+	}
+}
+
 func TestCloudFlareProvider_AddRecord(t *testing.T) {
 	provider, err := testCloudFlareProvider()
 	if err != nil {
@@ -156,19 +171,19 @@ func testCloudFlareProvider() (ProviderInterface, error) {
 	if err != nil {
 		return nil, err
 	}
-	one, err := db.FindOne("SELECT * FROM edgeDNSProviders WHERE type='cloudFlare' ORDER BY id DESC")
+	one, err := db.FindOne("SELECT * FROM edgeDNSProviders WHERE type='cloudFlare' AND state=1 ORDER BY id DESC")
 	if err != nil {
 		return nil, err
 	}
 	if one == nil {
 		return nil, errors.New("can not find providers with type 'cloudFlare'")
 	}
-	apiParams := maps.Map{}
+	var apiParams = maps.Map{}
 	err = json.Unmarshal([]byte(one.GetString("apiParams")), &apiParams)
 	if err != nil {
 		return nil, err
 	}
-	provider := &CloudFlareProvider{}
+	var provider = &CloudFlareProvider{}
 	err = provider.Auth(apiParams)
 	if err != nil {
 		return nil, err

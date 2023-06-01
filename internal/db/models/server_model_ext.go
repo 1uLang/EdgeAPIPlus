@@ -2,8 +2,8 @@ package models
 
 import (
 	"encoding/json"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 )
 
 // DecodeGroupIds 解析服务所属分组ID
@@ -42,15 +42,43 @@ func (this *Server) DecodeHTTPPorts() (ports []int) {
 	return
 }
 
+// DecodeHTTPS 解析HTTPS设置
+func (this *Server) DecodeHTTPS() *serverconfigs.HTTPSProtocolConfig {
+	if len(this.Https) == 0 {
+		return nil
+	}
+
+	var config = &serverconfigs.HTTPSProtocolConfig{}
+	err := json.Unmarshal(this.Https, config)
+	if err != nil {
+		remotelogs.Error("Server_DecodeHTTPS", err.Error())
+	}
+	return config
+}
+
+// DecodeTLS 解析TLS设置
+func (this *Server) DecodeTLS() *serverconfigs.TLSProtocolConfig {
+	if len(this.Tls) == 0 {
+		return nil
+	}
+
+	var config = &serverconfigs.TLSProtocolConfig{}
+	err := json.Unmarshal(this.Tls, config)
+	if err != nil {
+		remotelogs.Error("Server_DecodeTLS", err.Error())
+	}
+	return config
+}
+
 // DecodeHTTPSPorts 获取HTTPS所有端口
 func (this *Server) DecodeHTTPSPorts() (ports []int) {
 	if len(this.Https) > 0 {
-		config := &serverconfigs.HTTPSProtocolConfig{}
+		var config = &serverconfigs.HTTPSProtocolConfig{}
 		err := json.Unmarshal(this.Https, config)
 		if err != nil {
 			return nil
 		}
-		err = config.Init()
+		err = config.Init(nil)
 		if err != nil {
 			return nil
 		}
@@ -92,7 +120,7 @@ func (this *Server) DecodeTLSPorts() (ports []int) {
 		if err != nil {
 			return nil
 		}
-		err = config.Init()
+		err = config.Init(nil)
 		if err != nil {
 			return nil
 		}
@@ -124,4 +152,34 @@ func (this *Server) DecodeUDPPorts() (ports []int) {
 		}
 	}
 	return
+}
+
+// DecodeServerNames 获取域名
+func (this *Server) DecodeServerNames() (serverNames []*serverconfigs.ServerNameConfig, count int) {
+	if len(this.ServerNames) == 0 {
+		return nil, 0
+	}
+
+	serverNames = []*serverconfigs.ServerNameConfig{}
+	err := json.Unmarshal(this.ServerNames, &serverNames)
+	if err != nil {
+		remotelogs.Error("Server/DecodeServerNames", "decode server names failed: "+err.Error())
+		return
+	}
+
+	for _, serverName := range serverNames {
+		count += serverName.Count()
+	}
+
+	return
+}
+
+// FirstServerName 获取第一个域名
+func (this *Server) FirstServerName() string {
+	serverNames, _ := this.DecodeServerNames()
+	if len(serverNames) == 0 {
+		return ""
+	}
+
+	return serverNames[0].FirstName()
 }

@@ -1,6 +1,7 @@
 package models
 
 import (
+	dbutils "github.com/TeaOSLab/EdgeAPI/internal/db/utils"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/iwind/TeaGo/Tea"
@@ -44,11 +45,17 @@ func (this *AdminDAO) EnableAdmin(tx *dbs.Tx, id int64) (rowsAffected int64, err
 }
 
 // DisableAdmin 禁用条目
-func (this *AdminDAO) DisableAdmin(tx *dbs.Tx, id int64) (rowsAffected int64, err error) {
-	return this.Query(tx).
-		Pk(id).
+func (this *AdminDAO) DisableAdmin(tx *dbs.Tx, adminId int64) error {
+	err := this.Query(tx).
+		Pk(adminId).
 		Set("state", AdminStateDisabled).
-		Update()
+		UpdateQuickly()
+	if err != nil {
+		return err
+	}
+
+	// 删除AccessTokens
+	return SharedAPIAccessTokenDAO.DeleteAccessTokens(tx, adminId, 0)
 }
 
 // FindEnabledAdmin 查找启用中的条目
@@ -190,7 +197,19 @@ func (this *AdminDAO) UpdateAdmin(tx *dbs.Tx, adminId int64, username string, ca
 	}
 	op.IsOn = isOn
 	err := this.Save(tx, op)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if !isOn {
+		// 删除AccessTokens
+		err = SharedAPIAccessTokenDAO.DeleteAccessTokens(tx, adminId, 0)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // CheckAdminUsername 检查用户名是否存在
@@ -248,17 +267,36 @@ func (this *AdminDAO) FindAllAdminModules(tx *dbs.Tx) (result []*Admin, err erro
 }
 
 // CountAllEnabledAdmins 计算所有管理员数量
-func (this *AdminDAO) CountAllEnabledAdmins(tx *dbs.Tx) (int64, error) {
-	return this.Query(tx).
+func (this *AdminDAO) CountAllEnabledAdmins(tx *dbs.Tx, keyword string, hasWeakPasswords bool) (int64, error) {
+	var query = this.Query(tx)
+	if len(keyword) > 0 {
+		query.Where("(username LIKE :keyword OR fullname LIKE :keyword)")
+		query.Param("keyword", dbutils.QuoteLike(keyword))
+	}
+	if hasWeakPasswords {
+		query.Attr("password", weakPasswords)
+		query.Attr("isOn", true)
+	}
+	return query.
 		State(AdminStateEnabled).
 		Count()
 }
 
 // ListEnabledAdmins 列出单页的管理员
-func (this *AdminDAO) ListEnabledAdmins(tx *dbs.Tx, offset int64, size int64) (result []*Admin, err error) {
-	_, err = this.Query(tx).
+func (this *AdminDAO) ListEnabledAdmins(tx *dbs.Tx, keyword string, hasWeakPasswords bool, offset int64, size int64) (result []*Admin, err error) {
+	var query = this.Query(tx)
+	if len(keyword) > 0 {
+		query.Where("(username LIKE :keyword OR fullname LIKE :keyword)")
+		query.Param("keyword", dbutils.QuoteLike(keyword))
+	}
+	if hasWeakPasswords {
+		query.Attr("password", weakPasswords)
+		query.Attr("isOn", true)
+	}
+
+	_, err = query.
 		State(AdminStateEnabled).
-		Result("id", "isOn", "username", "fullname", "isSuper", "createdAt", "canLogin").
+		Result("id", "isOn", "username", "fullname", "isSuper", "createdAt", "canLogin", "password").
 		Offset(offset).
 		Limit(size).
 		DescPk().
@@ -273,4 +311,16 @@ func (this *AdminDAO) UpdateAdminTheme(tx *dbs.Tx, adminId int64, theme string) 
 		Pk(adminId).
 		Set("theme", theme).
 		UpdateQuickly()
+}
+
+// CheckSuperAdmin 检查管理员是否为超级管理员
+func (this *AdminDAO) CheckSuperAdmin(tx *dbs.Tx, adminId int64) (bool, error) {
+	if adminId <= 0 {
+		return false, nil
+	}
+	return this.Query(tx).
+		Pk(adminId).
+		State(AdminStateEnabled).
+		Attr("isSuper", true).
+		Exist()
 }

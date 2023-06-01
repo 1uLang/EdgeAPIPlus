@@ -1,11 +1,13 @@
+//go:build plus
+
 package accesslogs
 
 import (
 	"bytes"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
 	"github.com/TeaOSLab/EdgeAPI/internal/remotelogs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/iwind/TeaGo/logs"
 	"os/exec"
 	"runtime"
@@ -62,7 +64,7 @@ func (this *SyslogStorage) Write(accessLogs []*pb.HTTPAccessLog) error {
 		return nil
 	}
 
-	args := []string{}
+	var args = []string{}
 	if len(this.config.Tag) > 0 {
 		args = append(args, "-t", this.config.Tag)
 	}

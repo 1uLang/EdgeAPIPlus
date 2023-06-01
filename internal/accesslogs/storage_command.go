@@ -1,13 +1,12 @@
 //go:build plus
-// +build plus
 
 package accesslogs
 
 import (
 	"bytes"
 	"errors"
-	"github.com/1uLang/EdgeCommon/pkg/rpc/pb"
-	"github.com/1uLang/EdgeCommon/pkg/serverconfigs"
+	"github.com/TeaOSLab/EdgeCommon/pkg/rpc/pb"
+	"github.com/TeaOSLab/EdgeCommon/pkg/serverconfigs"
 	"github.com/iwind/TeaGo/logs"
 	"os/exec"
 	"sync"
@@ -47,12 +46,12 @@ func (this *CommandStorage) Write(accessLogs []*pb.HTTPAccessLog) error {
 	this.writeLocker.Lock()
 	defer this.writeLocker.Unlock()
 
-	cmd := exec.Command(this.config.Command, this.config.Args...)
+	var cmd = exec.Command(this.config.Command, this.config.Args...)
 	if len(this.config.Dir) > 0 {
 		cmd.Dir = this.config.Dir
 	}
 
-	stdout := bytes.NewBuffer([]byte{})
+	var stdout = bytes.NewBuffer([]byte{})
 	cmd.Stdout = stdout
 
 	w, err := cmd.StdinPipe()

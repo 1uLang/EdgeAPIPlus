@@ -1,7 +1,9 @@
 package utils
 
 import (
+	"fmt"
 	"github.com/TeaOSLab/EdgeAPI/internal/errors"
+	"github.com/TeaOSLab/EdgeAPI/internal/utils/regexputils"
 	"github.com/iwind/TeaGo/lists"
 	"github.com/iwind/TeaGo/types"
 	timeutil "github.com/iwind/TeaGo/utils/time"
@@ -10,13 +12,13 @@ import (
 )
 
 // 分钟时间点
-type timeMinute struct {
+type timeDayMinute struct {
 	Day    string
 	Minute string
 }
 
 // 分钟时间范围
-type timeMinuteRange struct {
+type timeDayMinuteRange struct {
 	Day        string
 	MinuteFrom string
 	MinuteTo   string
@@ -24,18 +26,12 @@ type timeMinuteRange struct {
 
 // RangeDays 计算日期之间的所有日期，格式为YYYYMMDD
 func RangeDays(dayFrom string, dayTo string) ([]string, error) {
-	ok, err := regexp.MatchString(`^\d{8}$`, dayFrom)
-	if err != nil {
-		return nil, err
-	}
+	var ok = regexputils.YYYYMMDD.MatchString(dayFrom)
 	if !ok {
 		return nil, errors.New("invalid 'dayFrom'")
 	}
 
-	ok, err = regexp.MatchString(`^\d{8}$`, dayTo)
-	if err != nil {
-		return nil, err
-	}
+	ok = regexputils.YYYYMMDD.MatchString(dayTo)
 	if !ok {
 		return nil, errors.New("invalid 'dayTo'")
 	}
@@ -72,18 +68,12 @@ func RangeDays(dayFrom string, dayTo string) ([]string, error) {
 
 // RangeMonths 计算日期之间的所有月份，格式为YYYYMM
 func RangeMonths(dayFrom string, dayTo string) ([]string, error) {
-	ok, err := regexp.MatchString(`^\d{8}$`, dayFrom)
-	if err != nil {
-		return nil, err
-	}
+	var ok = regexputils.YYYYMMDD.MatchString(dayFrom)
 	if !ok {
 		return nil, errors.New("invalid 'dayFrom'")
 	}
 
-	ok, err = regexp.MatchString(`^\d{8}$`, dayTo)
-	if err != nil {
-		return nil, err
-	}
+	ok = regexputils.YYYYMMDD.MatchString(dayTo)
 	if !ok {
 		return nil, errors.New("invalid 'dayTo'")
 	}
@@ -169,20 +159,20 @@ func RangeHours(hourFrom string, hourTo string) ([]string, error) {
 }
 
 // RangeMinutes 计算若干个时间点，返回结果为 [ [day1, minute1], [day2, minute2] ... ]
-func RangeMinutes(toTime time.Time, count int, everyMinutes int64) []timeMinute {
+func RangeMinutes(toTime time.Time, count int, everyMinutes int32) []timeDayMinute {
 	var everySeconds = everyMinutes * 60
 	if everySeconds <= 0 {
 		everySeconds = 300
 	}
-	var result = []timeMinute{}
-	var fromTime = time.Unix(toTime.Unix()-everySeconds*int64(count-1), 0)
+	var result = []timeDayMinute{}
+	var fromTime = time.Unix(toTime.Unix()-int64(everySeconds)*int64(count-1), 0)
 	for {
-		var timestamp = fromTime.Unix() / everySeconds * everySeconds
-		result = append(result, timeMinute{
+		var timestamp = fromTime.Unix() / int64(everySeconds) * int64(everySeconds)
+		result = append(result, timeDayMinute{
 			Day:    timeutil.FormatTime("Ymd", timestamp),
 			Minute: timeutil.FormatTime("Hi", timestamp),
 		})
-		fromTime = time.Unix(fromTime.Unix()+everySeconds, 0)
+		fromTime = time.Unix(fromTime.Unix()+int64(everySeconds), 0)
 
 		count--
 		if count <= 0 {
@@ -194,14 +184,14 @@ func RangeMinutes(toTime time.Time, count int, everyMinutes int64) []timeMinute 
 }
 
 // GroupMinuteRanges 将时间点分组
-func GroupMinuteRanges(minutes []timeMinute) []timeMinuteRange {
-	var result = []*timeMinuteRange{}
+func GroupMinuteRanges(minutes []timeDayMinute) []timeDayMinuteRange {
+	var result = []*timeDayMinuteRange{}
 	var lastDay = ""
-	var lastRange *timeMinuteRange
+	var lastRange *timeDayMinuteRange
 	for _, minute := range minutes {
 		if minute.Day != lastDay {
 			lastDay = minute.Day
-			lastRange = &timeMinuteRange{
+			lastRange = &timeDayMinuteRange{
 				Day:        minute.Day,
 				MinuteFrom: minute.Minute,
 				MinuteTo:   minute.Minute,
@@ -214,9 +204,93 @@ func GroupMinuteRanges(minutes []timeMinute) []timeMinuteRange {
 		}
 	}
 
-	var finalResult = []timeMinuteRange{}
+	var finalResult = []timeDayMinuteRange{}
 	for _, minutePtr := range result {
 		finalResult = append(finalResult, *minutePtr)
 	}
 	return finalResult
+}
+
+// RangeTimes 计算时间点
+func RangeTimes(timeFrom string, timeTo string, everyMinutes int32) (result []string, err error) {
+	if everyMinutes <= 0 {
+		return nil, errors.New("invalid 'everyMinutes'")
+	}
+
+	var reg = regexp.MustCompile(`^\d{4}$`)
+	if !reg.MatchString(timeFrom) {
+		return nil, errors.New("invalid timeFrom '" + timeFrom + "'")
+	}
+	if !reg.MatchString(timeTo) {
+		return nil, errors.New("invalid timeTo '" + timeTo + "'")
+	}
+
+	if timeFrom > timeTo {
+		// swap
+		timeFrom, timeTo = timeTo, timeFrom
+	}
+
+	var everyMinutesInt = int(everyMinutes)
+
+	var fromHour = types.Int(timeFrom[:2])
+	var fromMinute = types.Int(timeFrom[2:])
+	var toHour = types.Int(timeTo[:2])
+	var toMinute = types.Int(timeTo[2:])
+
+	if fromMinute%everyMinutesInt == 0 {
+		result = append(result, timeFrom)
+	}
+
+	for {
+		fromMinute += everyMinutesInt
+		if fromMinute > 59 {
+			fromHour += fromMinute / 60
+			fromMinute = fromMinute % 60
+		}
+		if fromHour > toHour || (fromHour == toHour && fromMinute > toMinute) {
+			break
+		}
+		result = append(result, fmt.Sprintf("%02d%02d", fromHour, fromMinute))
+	}
+
+	return
+}
+
+// Range24HourTimes 计算24小时时间点
+// 从 00:00 - 23:59
+func Range24HourTimes(everyMinutes int32) ([]string, error) {
+	if everyMinutes <= 0 {
+		return nil, errors.New("invalid 'everyMinutes'")
+	}
+
+	return RangeTimes("0000", "2359", everyMinutes)
+}
+
+// LastDayInMonth 某月的最后一天
+// month: YYYYMM
+// 返回 YYYYMMDD
+func LastDayInMonth(month string) (string, error) {
+	if !regexputils.YYYYMM.MatchString(month) {
+		return "", errors.New("invalid month '" + month + "'")
+	}
+
+	var year = types.Int(month[:4])
+	var monthInt = types.Int(month[4:])
+	return month + timeutil.Format("t", time.Date(year, time.Month(monthInt), 1, 0, 0, 0, 0, time.Local)), nil
+}
+
+// FixMonthMaxDay 修正日期最大值
+func FixMonthMaxDay(day string) (string, error) {
+	if !regexputils.YYYYMMDD.MatchString(day) {
+		return "", errors.New("invalid day '" + day + "'")
+	}
+
+	maxDay, err := LastDayInMonth(day[:6])
+	if err != nil {
+		return "", err
+	}
+	if day > maxDay {
+		return maxDay, nil
+	}
+	return day, nil
 }
