@@ -986,7 +986,6 @@ func (UnimplementedServerServiceServer) UpdateServerName(context.Context, *Updat
 func (UnimplementedServerServiceServer) CopyServerConfig(context.Context, *CopyServerConfigRequest) (*RPCSuccess, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CopyServerConfig not implemented")
 }
-func (UnimplementedServerServiceServer) mustEmbedUnimplementedServerServiceServer() {}
 
 func RegisterServerServiceServer(s grpc.ServiceRegistrar, srv ServerServiceServer) {
 	s.RegisterService(&ServerService_ServiceDesc, srv)

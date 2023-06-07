@@ -156,6 +156,7 @@ message DeleteUserRequest {
 message CountAllEnabledUsersRequest {
 	string keyword = 1;
 	bool isVerifying = 2;
+	int64 clusterId = 3;
 }
 
 // 列出单页用户

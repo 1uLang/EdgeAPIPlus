@@ -595,6 +595,7 @@ message CheckServerNameDuplicationInNodeClusterRequest {
 	repeated string serverNames = 2; // 可以同时检查一批域名
 	int64 excludeServerId = 3; // 要排除的服务ID
 	bool supportWildcard = 4;// 支持泛解析
+	bool all = 5;// 检测审核通过与正在审核的所有域名
 }
 
 message CheckServerNameDuplicationInNodeClusterResponse {
