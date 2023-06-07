@@ -1892,10 +1892,15 @@ func (this *ServerService) CheckServerNameDuplicationInNodeCluster(ctx context.C
 	}
 
 	var tx = this.NullTx()
-
+	var checkFunc func(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64, supportWildcard bool) (bool, error)
+	if req.All {
+		checkFunc = models.SharedServerDAO.ExistServerNameInClusterAll
+	} else {
+		checkFunc = models.SharedServerDAO.ExistServerNameInCluster
+	}
 	var duplicatedServerNames = []string{}
 	for _, serverName := range req.ServerNames {
-		exist, err := models.SharedServerDAO.ExistServerNameInCluster(tx, req.NodeClusterId, serverName, req.ExcludeServerId, req.SupportWildcard)
+		exist, err := checkFunc(tx, req.NodeClusterId, serverName, req.ExcludeServerId, req.SupportWildcard)
 		if err != nil {
 			return nil, err
 		}

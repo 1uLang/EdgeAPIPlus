@@ -1963,6 +1963,19 @@ func (this *ServerDAO) CheckPortIsUsing(tx *dbs.Tx, clusterId int64, protocolFam
 		Exist()
 }
 
+// ExistServerNameInClusterAll 检查ServerName是否已存在包含审核通过和正在审核中的
+func (this *ServerDAO) ExistServerNameInClusterAll(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64, supportWildcard bool) (bool, error) {
+	query := this.Query(tx).State(ServerStateEnabled).
+		Attr("clusterId", clusterId).
+		Where("((JSON_CONTAINS(serverNames, :jsonQuery1) OR JSON_CONTAINS(serverNames, :jsonQuery2)) OR ((JSON_CONTAINS(auditingServerNames, :jsonQuery1) OR JSON_CONTAINS(auditingServerNames, :jsonQuery2)) AND isAuditing = 1))").
+		Param("jsonQuery1", maps.Map{"name": serverName}.AsJSON()).
+		Param("jsonQuery2", maps.Map{"subNames": serverName}.AsJSON())
+	if excludeServerId > 0 {
+		query.Neq("id", excludeServerId)
+	}
+	return query.Exist()
+}
+
 // ExistServerNameInCluster 检查ServerName是否已存在
 func (this *ServerDAO) ExistServerNameInCluster(tx *dbs.Tx, clusterId int64, serverName string, excludeServerId int64, supportWildcard bool) (bool, error) {
 	var query = this.Query(tx).
